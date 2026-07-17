@@ -260,7 +260,7 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const PagedSparseMlaIndexerParams& p
       .total_q_tokens = p.q->shape[0],
       .total_k_tokens = p.k->shape[0],
       .batch_size = p.input_length->shape[0],
-      .max_compressed_seq_len = static_cast<int64_t>(p.max_compressed_seq_len_host->template GetPtr<int32_t>()[0]),
+      .max_compressed_seq_len = p.max_compressed_seq_len,
       .stream = context_->device->GetPrimaryComputeStream().Get(),
   };
   Tensor& topk_indices = *output;

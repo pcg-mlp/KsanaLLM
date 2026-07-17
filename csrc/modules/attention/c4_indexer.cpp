@@ -177,6 +177,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
       auto& page_c4_indexer = static_cast<C4IndexerAttentionMeta&>(*model_input->page_metas[i]->GetIndexer());
       const size_t current_tokens = page_c4_indexer.total_dp_input_ids_len;
       const size_t current_kv_tokens = page_c4_indexer.total_dp_compressed_input_ids_len;
+      KLLM_LOG_DEBUG << "page_metas[" << i << "]: max_compressed_seq_len=" << page_c4_indexer.max_compressed_seq_len;
 
       Tensor current_q_indexer = q_indexer_tensors[0].GetView({current_tokens, q_stride}, skip_tokens * q_stride);
       Tensor current_k_indexer = kv_compressed_output.GetView({current_kv_tokens, k_stride}, skip_kv_tokens * k_stride);
@@ -198,7 +199,7 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
           .cu_seq_len_end = &page_c4_indexer.cu_seq_len_end_tensor,
           .layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr,
           .schedule_meta = &page_dsa.paged_schedule_meta,
-          .max_compressed_seq_len_host = &c4_shared_indexer.max_compressed_seq_len_host,
+          .max_compressed_seq_len = static_cast<int64_t>(page_c4_indexer.max_compressed_seq_len),
           .sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0),
       };
       Tensor current_output = topk_indices.GetView({current_tokens, index_topk_}, skip_tokens * index_topk_);

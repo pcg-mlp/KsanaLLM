@@ -220,7 +220,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
       pparams.cu_seq_len_end = &page_indexer.cu_seq_len_end_tensor;
       pparams.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetDSA()->layer_indexer_kv_cache_ptr;
       pparams.schedule_meta = &page_dsa.paged_schedule_meta;
-      pparams.max_compressed_seq_len_host = &shared_indexer.max_compressed_seq_len_host;
+      pparams.max_compressed_seq_len = static_cast<int64_t>(page_indexer.max_compressed_seq_len);
       pparams.sched_meta_initialized = (page_dsa.paged_schedule_meta.shape[2] != 0);
       STATUS_CHECK_RETURN(typed->Forward(pparams, &current_output_tensors[0]));
       page_dsa.paged_schedule_meta.shape[2] = 1;

@@ -35,7 +35,7 @@ class PagedSparseMlaIndexerLayer : public BaseLayer {
     const Tensor* cu_seq_len_end;
     const Tensor* layer_kv_cache_ptr;
     const Tensor* schedule_meta;
-    const Tensor* max_compressed_seq_len_host;
+    int64_t max_compressed_seq_len;  // per-page max(seq_len / compress_ratio), computed in PrepareMaxCompressedSeqLen
     // Scalar formerly encoded in schedule_meta.shape[2]:
     bool sched_meta_initialized;
   };

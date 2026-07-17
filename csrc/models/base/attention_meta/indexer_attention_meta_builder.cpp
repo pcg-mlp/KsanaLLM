@@ -221,9 +221,6 @@ static void PrepareMaxCompressedSeqLen(IndexerAttentionMeta& indexer_meta, Index
   }
   indexer_meta.max_compressed_seq_len = global_max;
 
-  // Write global max to the shared HOST tensor (used by paged layer directly).
-  indexer_shared.max_compressed_seq_len_host.GetPtr<int32_t>()[0] = static_cast<int32_t>(global_max);
-
   if (is_paged) return;
 
   if (indexer_shared.chunk_token_starts_host.shape[0] > 1) {

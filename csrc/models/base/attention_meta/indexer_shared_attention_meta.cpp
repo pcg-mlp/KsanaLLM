@@ -32,7 +32,6 @@ void IndexerSharedAttentionMeta::InitCore(const ModelConfig& model_config, const
   chunk_token_starts_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
   chunk_kv_token_ranges_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size * 2});
   chunk_max_compressed_kv_lens_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size});
-  max_compressed_seq_len_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {1});
 
   cu_seq_len_start_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
   cu_seq_len_end_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});

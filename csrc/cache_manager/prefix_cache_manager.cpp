@@ -1267,21 +1267,41 @@ Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_r
     // The new FA block is being merged into an existing tree node; its SWA block
     // is no longer needed (the existing node's SWA block will be used instead).
     if (swa_cache_manager_ != nullptr) {
-      // 先把当前 req 从源 SWA block 的 active_req_ids 里 erase, 否则下面的
-      // FreeSWABlock 会因检测到非空 active_req_ids 而报 lifecycle warn。
-      swa_cache_manager_->SetReclaimable(cached_request->req_id, cached_block->block_id);
-      swa_cache_manager_->FreeSWABlock(cached_block->block_id);
+      const size_t src_fa_block_id = cached_block->block_id;
+      const size_t dst_fa_block_id = dst_cached_block->block_id;
+      const int dst_mem_id = swa_cache_manager_->GetSWAMemoryBlockId(dst_fa_block_id);
+
       // Replace the old FA block id with the merged block's FA block id in
       // swa_window_fa_block_ids so that the window remains consistent.
       // Locate the entry by searching swa_window_block_idxs for block_index.
       auto& ids = cached_request->swa_window_fa_block_ids;
       const auto& idxs = cached_request->swa_window_block_idxs;
-      for (size_t k = 0; k < idxs.size(); ++k) {
-        if (idxs[k] == block_index) {
-          // Replace in-place: the merged block's SWA block is now used by this request.
-          ids[k] = dst_cached_block->block_id;
-          swa_cache_manager_->ReuseSWABlock(cached_request->req_id, dst_cached_block->block_id);
-          break;
+
+      if (dst_mem_id < 0) {
+        // dst 尚无 SWA 绑定（例如历史节点或 SWA 曾被驱逐）：将 src 的 SWA 内存转交给 dst，
+        // 避免 Free 后 dst 无可用 SWA block。
+        const bool transferred = swa_cache_manager_->Transfer(src_fa_block_id, dst_fa_block_id, block_index);
+        KLLM_CHECK_WITH_INFO(transferred, FormatStr("Transfer SWA block from fa_block_id %zu to %zu failed on merge.",
+                                                    src_fa_block_id, dst_fa_block_id));
+        swa_cache_manager_->SetSWABlockContentFixed(dst_fa_block_id);
+        for (size_t k = 0; k < idxs.size(); ++k) {
+          if (idxs[k] == block_index) {
+            ids[k] = dst_fa_block_id;
+            break;
+          }
+        }
+      } else {
+        // dst 已有 SWA：释放 src 的冗余 SWA，复用 dst 上 content-fixed 的 SWA block。
+        // 先把当前 req 从源 SWA block 的 active_req_ids 里 erase, 否则下面的
+        // FreeSWABlock 会因检测到非空 active_req_ids 而报 lifecycle warn。
+        swa_cache_manager_->SetReclaimable(cached_request->req_id, src_fa_block_id);
+        swa_cache_manager_->FreeSWABlock(src_fa_block_id);
+        for (size_t k = 0; k < idxs.size(); ++k) {
+          if (idxs[k] == block_index) {
+            ids[k] = dst_fa_block_id;
+            swa_cache_manager_->ReuseSWABlock(cached_request->req_id, dst_fa_block_id);
+            break;
+          }
         }
       }
       // If block_index is not found in idxs, the block has already slid out of the window.

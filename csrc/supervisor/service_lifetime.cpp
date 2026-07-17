@@ -8,7 +8,8 @@ namespace ksana_llm {
 
 void KsanaServiceLifetimeManager::ShutdownService() {
   KLLM_LOG_INFO << "ShutdownService invoked.";
-
+  // TODO(winminkong): emporarily force-exit, we’ll follow up to fix the hang when invoking the destructor later.
+  _exit(0);
   std::unique_lock<std::mutex> lock(mutex_);
   if (inference_supervisor_) {
     inference_supervisor_->Destroy();
@@ -18,7 +19,6 @@ void KsanaServiceLifetimeManager::ShutdownService() {
   // Note: The python's uvicorn have no graceful exit meothd, so exit process here.
   // All destructor will be called.
   KLLM_LOG_INFO << "ShutdownService read to exit.";
-  _exit(0);
 }
 
 }  // namespace ksana_llm
