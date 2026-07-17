@@ -38,9 +38,12 @@ const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFp4MoeLayer:
   return &jit_compiler_->GetKernelTable();
 }
 
-// Maximum moe_block_size for workspace pre-allocation (actual value is determined at runtime).
-// Must be >= the largest possible BLOCK_SHAPE_M from the humming heuristic (currently 64).
-static constexpr int64_t kHummingMoeMaxBlockSize = 64;
+// Minimum moe_block_size for workspace pre-allocation (fallback when no JIT kernels compiled).
+// The actual max block_m is determined at runtime by iterating the JIT kernel table in
+// GetWorkspaceSizeT(). On H200 the generic Sm90 heuristic may produce block_m up to 176
+// (vs 64 on H20 where Sm90H20Heuristics is used), so the align buffer must be sized for
+// the actual max block_m rather than a hardcoded constant.
+static constexpr int64_t kHummingMoeMaxBlockSize = 8;
 
 Status HummingFp4MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                                 std::shared_ptr<Context> context, int rank) {
@@ -181,8 +184,23 @@ size_t HummingFp4MoeLayer::GetWorkspaceSizeT() {
 
   // fused_id_buffer: fill_info_vec(4) + sorted_ids + expert_ids + num_tokens_post_pad + cumsum
   size_t numel = m * expert_topk_;
-  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (kHummingMoeMaxBlockSize - 1);
-  size_t max_num_m_blocks = (max_num_tokens_padded + kHummingMoeMaxBlockSize - 1) / kHummingMoeMaxBlockSize;
+
+  // Determine the max BLOCK_SHAPE_M from compiled JIT kernels.
+  // The heuristic may produce block_m values larger than kHummingMoeMaxBlockSize (e.g. up to
+  // 176 on H200 with the generic Sm90 heuristic).  The align buffer must be sized for the
+  // worst-case block_m, otherwise InvokeAlignBlockSize / InvokeSglMoeAlignBlockSize will
+  // overflow the pre-allocated buffer at runtime, causing an illegal memory access.
+  int64_t max_block_m = kHummingMoeMaxBlockSize;
+  if (jit_compiler_) {
+    for (const auto& meta : jit_compiler_->GetKernelTable()) {
+      if (meta.compute_dtype != humming_compute_dtype_) continue;
+      if (meta.gemm_type != llm_kernels::nvidia::humming::GemmType::INDEXED) continue;
+      max_block_m = std::max(max_block_m, static_cast<int64_t>(meta.block_m));
+    }
+  }
+
+  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (max_block_m - 1);
+  size_t max_num_m_blocks = (max_num_tokens_padded + max_block_m - 1) / max_block_m;
   // fill_info(4) + sorted_ids(max_num_tokens_padded) + expert_ids(max_num_m_blocks) + num_tokens_post_pad(1) +
   // cumsum(expert_num_per_node+1)
   ws_.align_gemm1.total_size =
@@ -190,7 +208,7 @@ size_t HummingFp4MoeLayer::GetWorkspaceSizeT() {
                   sizeof(int32_t),
               256);
 
-  // GEMM2 fused_id_buffer: same sizing as GEMM1 (worst case block_m=64)
+  // GEMM2 fused_id_buffer: same sizing as GEMM1 (max_block_m covers both GEMMs)
   ws_.align_gemm2.total_size = ws_.align_gemm1.total_size;
 
   // Intermediate caches

@@ -317,6 +317,43 @@ def _normalize_config(cfg: Dict, min_m: int, max_m: int) -> Dict:
     }
 
 
+def _fix_block_k_divisibility(cfg: Dict, size_k: int, compute_dtype: int) -> Optional[Dict]:
+    """Ensure block_k divides size_k, fixing the config in-place if needed.
+
+    This is a fallback (兜底) for heuristic configs whose block_k does not divide
+    size_k.  The generic Sm90Heuristics.get_config1 (used on H200, where the
+    "H20"-specific heuristic is not selected) lacks a K-divisibility while-loop
+    in its N>4096 branch, so for FP8 small-K large-N shapes (e.g. K=384) it can
+    produce block_k=256 even though 384 % 256 != 0.  Such kernels are unusable
+    (the WGMMA loop iterates block_k/warp_k times assuming K is a multiple of
+    block_k) and fail to compile, leaving no valid kernel for the affected
+    M-range at runtime.
+
+    Fix strategy (mirrors Sm90H20Heuristics' while-loop at sm90_h20.py:196-199):
+      - Halve block_k until size_k % block_k == 0.
+      - Set warp_shape[2] to 512 // a_num_bits if it no longer divides block_k.
+      - If block_k cannot be made to divide size_k (would drop below min warp_k),
+        return None to signal the caller to drop this config.
+    """
+    a_num_bits = 8 if compute_dtype == 1 else 16
+    min_warp_k = 512 // a_num_bits
+    bk = cfg["block_k"]
+    if size_k % bk == 0:
+        return cfg
+    new_bk = bk
+    while size_k % new_bk != 0:
+        new_bk = new_bk // 2
+        if new_bk < min_warp_k:
+            return None  # cannot fix; caller should drop this config
+    cfg = dict(cfg)
+    cfg["block_k"] = new_bk
+    wk = cfg["warp_shape"][2]
+    if new_bk % wk != 0:
+        wk = min_warp_k
+        cfg["warp_shape"] = [cfg["warp_shape"][0], cfg["warp_shape"][1], wk]
+    return cfg
+
+
 def _apply_override(base: Dict, stream_k_override=None, block_n_override=None,
                     stages_override=None, block_k_override=None,
                     num_ctas_per_sm_override=None) -> Dict:
@@ -539,9 +576,29 @@ def _cmd_query_configs(args):
         heuristic_configs = _inject_gemm2_configs(
             heuristic_configs, args.size_n, args.size_k, args.compute_dtype, args.num_experts)
 
+        # 2.5. Fix block_k divisibility (兜底): the generic Sm90 heuristic (used on
+        # H200) may produce block_k values that do not divide size_k (e.g. FP8
+        # K=384 with block_k=256).  Fix or drop such configs before variants are
+        # generated from them, so variants inherit valid block_k.
+        fixed_heuristic = []
+        for c in heuristic_configs:
+            fixed = _fix_block_k_divisibility(c, args.size_k, args.compute_dtype)
+            if fixed is not None:
+                fixed_heuristic.append(fixed)
+        heuristic_configs = fixed_heuristic
+
         # 3. Variant generation (migrated from C++)
         extend_configs = _generate_variants(
             heuristic_configs, args.size_n, args.size_k, args.compute_dtype)
+
+        # 3.5. Fix block_k divisibility for variants too (block_k_override may
+        # introduce values that don't divide size_k for some K).
+        fixed_extend = []
+        for c in extend_configs:
+            fixed = _fix_block_k_divisibility(c, args.size_k, args.compute_dtype)
+            if fixed is not None:
+                fixed_extend.append(fixed)
+        extend_configs = fixed_extend
 
         # 4. Validate extend configs (construct HummingKernel under monkey-patch)
         valid_extend = []
