@@ -483,16 +483,28 @@ python ../python/serving_server.py \
 ```bash
 cd ${GIT_PROJECT_REPO_ROOT}
 
-# for distribute wheel
+# 打包 wheel
+# 默认使用固定基版本 "0.0.0" 加上最新的短 git commit id 作为 PEP 440 local version
+# （例如 0.0.0+g26efdb17），不依赖 git tag，因此打包机上过时的 tag 不会导致版本号错误。
+# local version 不影响安装和依赖解析，但可以通过 `pip show ksana_llm` 看到具体 commit 号。
 python setup.py bdist_wheel
 
-# or build with other cmake args
+# 与默认行为等价：固定基版本 + commit id（不使用 git tag）
+python setup.py bdist_wheel --with-commit-id
+
+# 只使用 git tag 版本号，不带 commit id（例如 v0.8.1.post3）
+python setup.py bdist_wheel --with-tag
+
+# 指定 CUDA 目标架构（默认为 80,86,89,90a）
+python setup.py bdist_wheel --with-sm 90a,89
+
+# 也可以带上其他 cmake 参数进行编译
 export CMAKE_ARGS="
   -DWITH_CUDA=ON
   -DWITH_ACL=OFF
 " && python setup.py bdist_wheel
 
-# install wheel
+# 安装 wheel
 pip install dist/ksana_llm-0.1-*-linux_x86_64.whl
 
 # check install success

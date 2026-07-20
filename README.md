@@ -505,7 +505,21 @@ python ../python/serving_server.py \
 cd ${GIT_PROJECT_REPO_ROOT}
 
 # for distribute wheel
+# By default the wheel version is a fixed base "0.0.0" plus the latest short git
+# commit id as a PEP 440 local version (e.g. 0.0.0+g26efdb17). It does NOT derive
+# from git tags, so a stale tag set on the build machine can never leak a wrong
+# version. The local version does not affect installation or dependency
+# resolution, but keeps the exact commit visible via `pip show ksana_llm`.
 python setup.py bdist_wheel
+
+# equivalent to the default: fixed base version + commit id (no git tag)
+python setup.py bdist_wheel --with-commit-id
+
+# use the git tag version only, without the commit id (e.g. v0.8.1.post3)
+python setup.py bdist_wheel --with-tag
+
+# override the CUDA target architectures (defaults to 80,86,89,90a)
+python setup.py bdist_wheel --with-sm 90a,89
 
 # or build with other cmake args
 export CMAKE_ARGS="

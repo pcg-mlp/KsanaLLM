@@ -8,27 +8,128 @@ import shlex
 import shutil
 import re
 import subprocess
+import sys
 from distutils.file_util import copy_file
 
 from setuptools import setup, Extension
 from setuptools.command.build_ext import build_ext as build_ext_orig
 
 
-# Retrieve the version from Git tags
-def get_version():
-    if 'CUSTOM_KSANA_VERSION' in os.environ:
-        custom_ksana_version = os.environ['CUSTOM_KSANA_VERSION']
-        return custom_ksana_version
+# Custom flags recognized by this setup script (consumed here and stripped from
+# sys.argv so setuptools does not treat them as unknown options):
+#   --with-commit-id : use DEFAULT_BASE_VERSION + the latest short commit id as a
+#                      PEP 440 local version (e.g. 0.0.0+g<sha>), without the git
+#                      tag. This is the default.
+#   --with-tag       : use the git tag version only (e.g. v0.8.1.post3).
+#   --with-sm <val>  : override the CUDA target architectures (e.g. "90a,89").
+#                      Defaults to DEFAULT_SM_ARCHS when not provided.
+def pop_version_flags():
+    with_tag = False
+    with_commit_id = False
+    remaining = []
+    for arg in sys.argv:
+        if arg == "--with-tag":
+            with_tag = True
+        elif arg == "--with-commit-id":
+            with_commit_id = True
+        else:
+            remaining.append(arg)
+    sys.argv[:] = remaining
+    # Default behaviour is --with-commit-id. Only --with-tag (without an explicit
+    # --with-commit-id) falls back to the tag-only version.
+    return not (with_tag and not with_commit_id)
+
+
+# Default GPU architectures used when --with-sm is not provided.
+DEFAULT_SM_ARCHS = "80,86,89,90a"
+
+
+# Parse the optional "--with-sm" flag (e.g. "--with-sm 90a,89" or
+# "--with-sm=90a,89") that overrides the CUDA target architectures. The flag is
+# consumed here and stripped from sys.argv so setuptools does not treat it as an
+# unknown option. Returns the SM value, falling back to DEFAULT_SM_ARCHS.
+def pop_sm_arch():
+    sm = None
+    remaining = []
+    args = list(sys.argv)
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--with-sm":
+            if i + 1 < len(args):
+                sm = args[i + 1]
+                i += 2
+                continue
+            i += 1
+            continue
+        if arg.startswith("--with-sm="):
+            sm = arg[len("--with-sm="):]
+            i += 1
+            continue
+        remaining.append(arg)
+        i += 1
+    sys.argv[:] = remaining
+    sm = sm.strip() if sm else ""
+    return sm or DEFAULT_SM_ARCHS
+
+
+APPEND_COMMIT_ID = pop_version_flags()
+SM_ARCHS = pop_sm_arch()
+
+
+# Retrieve the short commit id of the latest commit (empty string on failure).
+def get_git_short_commit():
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except OSError:
+        pass
+    return ""
+
+
+# Fixed base version used by the default (--with-commit-id) mode. It intentionally
+# does NOT derive from git tags, so an outdated tag set on the build machine can
+# never leak a misleading version number into the wheel.
+DEFAULT_BASE_VERSION = "0.0.0"
+
+
+# Resolve the version from the git tag reachable from HEAD (git describe).
+def get_tag_version():
     git_describe_output = subprocess.run(
         ["git", "describe", "--tags", "--always"],
         stdout=subprocess.PIPE,
         text=True).stdout.strip()
-    match = re.match(r'^(v[\d\.]+(?:[-\.]?(?:rc|post|beta|alpha)[-\.\d]*)?)', git_describe_output)
+    match = re.match(r'^(v[\d\.]+(?:[-\.]?(?:rc|post|beta|alpha)\d*)?)', git_describe_output)
     print(match)
     if match:
         return match.group(1)
-    else:
-        return git_describe_output
+    return git_describe_output
+
+
+# Build the distribution version.
+#   - CUSTOM_KSANA_VERSION env var: used verbatim as a full override.
+#   - --with-tag: use the git tag version only (e.g. v0.8.1.post3).
+#   - default / --with-commit-id: use DEFAULT_BASE_VERSION plus the latest short
+#     commit id as a PEP 440 local version (e.g. 0.0.0+g26efdb17). The tag is not
+#     used at all. Local versions do not affect installation or dependency
+#     resolution, but keep the exact commit visible via `pip show ksana_llm` /
+#     `ksana_llm.__version__`.
+def get_version():
+    if 'CUSTOM_KSANA_VERSION' in os.environ:
+        return os.environ['CUSTOM_KSANA_VERSION']
+
+    if not APPEND_COMMIT_ID:
+        return get_tag_version()
+
+    short_commit = get_git_short_commit()
+    if short_commit:
+        return f"{DEFAULT_BASE_VERSION}+g{short_commit}"
+    return DEFAULT_BASE_VERSION
 
 
 class CMakeExtension(Extension):
@@ -106,7 +207,7 @@ class BuildExt(build_ext_orig):
             # CUDA device specific options
             cmake_options.update({
                 "WITH_CUDA": "ON",
-                "SM": "80,86,89,90a",  # Specify the supported GPU architectures
+                "SM": SM_ARCHS,  # Supported GPU architectures (override via --with-sm)
             })
 
         # Dictionary to track the status (enabled/disabled) of each endpoint
@@ -265,6 +366,13 @@ class BuildExt(build_ext_orig):
             dst_dir = extdir.parent / "ksana_llm"
             copy_file(str(src_file), str(dst_dir))
 
+        # Default YAML config + env-override helper (also under utilize/ via need_dirs)
+        package_root = extdir.parent / "ksana_llm"
+        src_yaml = cwd / "examples" / "ksana_llm.yaml"
+        copy_file(str(src_yaml), str(package_root / "ksana_llm.yaml"))
+        src_env_override = cwd / "python" / "utilize" / "yaml_env_override.py"
+        copy_file(str(src_env_override), str(package_root / "yaml_env_override.py"))
+
         # Copy trt deepgemm package
         src_dir = (cwd / "3rdparty" / "LLM_kernels" / "csrc" / "kernels" / "nvidia" /
                    "others" / "tensorrt-llm" / "dev" / "deep_gemm")
@@ -311,11 +419,15 @@ setup(
             'libtorch_serving.so',
             'lib*.so*',
             'lib/*.so*',
+            'ksana_llm.yaml',
+            'yaml_env_override.py',
+            'utilize/**/*',
             'triton_kernel_files/**/*',
             'rpc_config/**/*',
             'triton_backend/**/*',
         ],
     },
+
     include_package_data=True,
     ext_modules=[CMakeExtension("ksana_llm")],
     python_requires=">=3",
