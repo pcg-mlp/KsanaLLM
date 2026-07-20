@@ -7,6 +7,7 @@
 #include "configure/json_config_utils.h"
 #include "kernels/trans_layout.h"
 #include "model_loader/model_loader_utils.h"
+#include "utils/indexer_skip_config.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
 #include "utils/string_utils.h"
@@ -46,11 +47,18 @@ Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
       "V4: pipeline config: lower_layer_idx={}, upper_layer_idx={}, lower_nextn_layer_idx={}, upper_nextn_layer_idx={}",
       lower_layer_idx, upper_layer_idx, lower_nextn_layer_idx, upper_nextn_layer_idx);
 
+  const std::unordered_set<int> indexer_skip_layers =
+      GetIndexerSkipLayers(deepseek_v4_config_->num_layer, deepseek_v4_config_->num_nextn_predict_layers,
+                           deepseek_v4_config_->dsa_config, deepseek_v4_config_->dsv4_attn_config);
+
+  // NOTE: Weight names are not mapped yet
   for (auto it = weight_names.begin(); it != weight_names.end();) {
     if (CheckWeightNameMatched(*it, skip_list, false)) {
       it = weight_names.erase(it);
       continue;
     }
+
+    const int raw_layer_idx = GetLayerIdxFromName(*it);
 
     // Skip some layers in distributed mode.
     //
@@ -59,7 +67,6 @@ Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
     // 原始 layers.N (主干) 会因为 layer_idx 落入 nextn range 而被错误保留, 最终与 mtp.K
     // (rename 后 effective_idx == N) 冲突。
     if (lower_layer_idx >= 0 && upper_layer_idx >= 0) {
-      const int raw_layer_idx = GetLayerIdxFromName(*it);
       if (raw_layer_idx >= 0) {
         const bool is_mtp_weight = IsRawMtpWeightName(*it);
 
@@ -89,19 +96,28 @@ Status DeepSeekV4WeightLoader::FilterWeightNames(std::vector<std::string>& weigh
       }
     }
 
+    // Skip the weights of unused c4 indexers
+    if (raw_layer_idx >= 0 && indexer_skip_layers.count(raw_layer_idx) &&
+        CheckWeightNameMatched(*it, {fmt::format("layers.{}.attn.indexer.", raw_layer_idx)}, MatchMode::PartialMatch)) {
+      KLLM_LOG_DEBUG << fmt::format("V4: indexer skip, layer {}: {}", raw_layer_idx, *it);
+      it = weight_names.erase(it);
+      continue;
+    }
+
     if (!context_->global->IsStandalone()) {
       // Skip embedding if not master mode.
       if (context_->global->IsDistributedWorker() &&
           !(context_->global->IsSamplingNode() && runtime_config_.mtp_step_num > 0)) {
-        if (CheckWeightNameMatched(*it, {"model.embed_tokens.weight"}, false)) {
+        if (CheckWeightNameMatched(*it, {"embed.weight"}, true)) {
           it = weight_names.erase(it);
           continue;
         }
       }
 
-      // Skip lm_head if not tail mode.
+      // Skip lm_head/hc_head/final_norm if not tail mode.
       if (!context_->global->IsDistributedLastWorker()) {
-        if (CheckWeightNameMatched(*it, {"lm_head.weight"}, false)) {
+        if (CheckWeightNameMatched(*it, {"head.weight"}, true) || CheckWeightNameMatched(*it, {"hc_head_"}, false) ||
+            CheckWeightNameMatched(*it, {"norm.weight"}, true)) {
           it = weight_names.erase(it);
           continue;
         }
@@ -752,7 +768,7 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
           dst[i] = static_cast<int32_t>(src[i]);
         }
         CopyToDevice(host_i32, dev_tensor, context_);
-        KLLM_LOG_INFO << fmt::format("V4: tid2eid narrowed int64 -> int32 at load ({} elements)", n);
+        KLLM_LOG_DEBUG << fmt::format("V4: tid2eid narrowed int64 -> int32 at load ({} elements)", n);
       } else {
         CopyToDevice(host_weight_tensor, dev_tensor, context_);
       }
@@ -889,8 +905,8 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       weight_impl_->PermuteWeight(dev_tensor, {1, 0}, dev_rank);
       device_model_weights[file_weight_name] = dev_tensor;
       KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark confidence_head] stored: {}, shape: {}, dtype: {}",
-                                    dev_rank, file_weight_name,
-                                    Vector2Str(std::vector<size_t>(dev_tensor.shape)), dev_tensor.dtype);
+                                    dev_rank, file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
+                                    dev_tensor.dtype);
       continue;
     }
 

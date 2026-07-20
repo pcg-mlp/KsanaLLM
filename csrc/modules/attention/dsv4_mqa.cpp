@@ -12,6 +12,7 @@
 #include "models/base/attention_meta/attention_meta.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "profiler/profile_event.h"
+#include "utils/indexer_skip_config.h"
 #include "utils/memory_utils.h"
 
 namespace ksana_llm {
@@ -154,7 +155,12 @@ Dsv4Mqa::Dsv4Mqa(int layer_idx, bool is_neox, bool add_qkv_bias, bool use_qk_nor
         std::make_unique<Compressor>(layer_idx_, /*is_in_indexer=*/false, creation_context, model_creation_config);
   }
   if (compress_ratio_ == 4) {
-    c4_indexer_ = std::make_unique<C4Indexer>(layer_idx_, creation_context, model_creation_config);
+    const std::unordered_set<int> indexer_skip_layers =
+        GetIndexerSkipLayers(attn_config.model_config.num_layer, attn_config.model_config.num_nextn_predict_layers,
+                             attn_config.model_config.dsa_config, attn_config.model_config.dsv4_attn_config);
+    if (!indexer_skip_layers.count(layer_idx_)) {
+      c4_indexer_ = std::make_unique<C4Indexer>(layer_idx_, creation_context, model_creation_config);
+    }
   }
 
   // Save the finalised local layer index (attn_config.idx is fully resolved by now).
