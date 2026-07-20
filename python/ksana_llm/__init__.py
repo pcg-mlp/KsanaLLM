@@ -5,6 +5,22 @@
 import os
 import sys
 
+# When installed from a wheel (detected via distribution metadata), auto-point
+# the kernel-data env vars at the bundled copies inside the package directory.
+# Source-tree dev (cmake/make build + `python python/serving_server.py`) has no
+# distribution metadata, so this block is skipped and the existing env/compile-time
+# /__FILE__ resolution paths apply. setdefault preserves any explicit user override.
+try:
+    import importlib.metadata
+    importlib.metadata.distribution("ksana_llm")
+    _pkg_dir = os.path.dirname(os.path.abspath(__file__))
+    print(f"[ksana_llm] wheel install detected, setting kernel data env vars to {_pkg_dir}", flush=True)
+    for _var in ("KSANA_TRITON_KERNEL_PATH", "DEEPGEMM_INCLUDE_DIR",
+                 "KSANA_HUMMING_BASE_DIR", "HUMMING_INCLUDE_DIR"):
+        os.environ.setdefault(_var, _pkg_dir)
+except importlib.metadata.PackageNotFoundError:
+    pass
+
 # Load library path.
 sys.path.append(os.path.abspath("./lib"))
 

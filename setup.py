@@ -132,8 +132,20 @@ class BuildExt(build_ext_orig):
 
         # Build arguments for 'cmake --build'
         build_args = ["--config", config]
-        # Use all available CPU cores for parallel build
-        build_args += ["--", f"-j{os.cpu_count()}"]
+
+        # Only build the targets that actually get packaged. torch_serving pulls
+        # in all static libs + loguru + tbb transitively; endpoint .so's are
+        # dlopen'd at runtime so they must be listed explicitly.
+        build_targets = ["torch_serving"]
+        for endpoint in implemented_endpoints:
+            if endpoint_status[endpoint] and endpoint != "triton":
+                build_targets.append(f"{endpoint}_endpoint")
+        for target in build_targets:
+            build_args += ["--target", target]
+
+        # Use all available CPU cores for parallel build (override via BUILD_JOBS env var)
+        build_jobs = os.environ.get("BUILD_JOBS", str(os.cpu_count()))
+        build_args += ["--", f"-j{build_jobs}"]
 
         # Change to the build temporary directory and run CMake configuration
         os.chdir(build_temp)
