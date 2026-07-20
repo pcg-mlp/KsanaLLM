@@ -413,9 +413,15 @@ python ${GIT_PROJECT_REPO_ROOT}/benchmarks/benchmark_throughput.py \
 在 examples/ksana_llm.yaml 的配置文件中 ```endpoint_type: python``` 之后加入下面内容：
 - 注意```connector``` 和 ```endpoint_type``` 对齐
 - 注意按照服务角色修改 ```group_role``` 为 ```decode``` 或 ```prefill```
+- 注意，需要关闭 ```chunk prefill``` 也就是设置 (split_fuse_token_num: 0)
 
 
 **decode配置参考**
+```
+# 关闭 chunk prefill 
+split_fuse_token_num: 0
+```
+
 ```
 connector:
     backend: "v2"      # 标明是v2版本的pd分离
@@ -427,6 +433,11 @@ connector:
 ```
 
 **Prefill配置参考**
+```
+# 关闭 chunk prefill 
+split_fuse_token_num: 0
+```
+
 ```
 connector:
     backend: "v2"      # 标明是v2版本的pd分离
@@ -459,7 +470,7 @@ python ../python/serving_server.py \
 # 使用Mooncake Transfer Engine Next 版本
 export MC_USE_TENT=1
 # 同机器启动双角色节点需要为每个节点的Mooncake设置不同的 rpc 地址
-export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17072}'
 # 服务启动命令，注意指向不同角色的配置文件
 python ../python/serving_server.py \
   --config_file ksana_llm_prefill.yaml \

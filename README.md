@@ -435,8 +435,14 @@ python ${GIT_PROJECT_REPO_ROOT}/benchmarks/benchmark_throughput.py \
 Add the following content after ```endpoint_type: python``` in the `examples/ksana_llm.yaml` configuration file:
 - Make sure ```connector``` is aligned with ```endpoint_type```
 - Set ```group_role``` to ```decode``` or ```prefill``` according to the service role
+- Note: chunk prefill must be disabled, i.e. set (split_fuse_token_num: 0)
 
 **Decode configuration example**
+```
+# Disable chunk prefill
+split_fuse_token_num: 0
+```
+
 ```
 connector:
     backend: "v2"      # Indicates the v2 version of PD disaggregation
@@ -448,6 +454,11 @@ connector:
 ```
 
 **Prefill configuration example**
+```
+# Disable chunk prefill
+split_fuse_token_num: 0
+```
+
 ```
 connector:
     backend: "v2"      # Indicates the v2 version of PD disaggregation
@@ -480,7 +491,7 @@ python ../python/serving_server.py \
 # Use the Mooncake Transfer Engine Next version
 export MC_USE_TENT=1
 # When starting both roles on the same machine, set a different Mooncake RPC address for each node
-export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17071}'
+export MC_TENT_CONF='{"rpc_server_hostname": "127.0.0.1", "rpc_server_port":17072}'
 # Service startup command. Make sure it points to the configuration file for the corresponding role
 python ../python/serving_server.py \
   --config_file ksana_llm_prefill.yaml \
