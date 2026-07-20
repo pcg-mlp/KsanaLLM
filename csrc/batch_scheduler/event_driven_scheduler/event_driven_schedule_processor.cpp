@@ -182,6 +182,10 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
     dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
   }
   req->kv_cache_blocks.clear();
+  req->accepted_tokens.clear();
+  req->generated_tokens.clear();
+  req->draft_tokens.clear();
+  req->forwarding_tokens.clear();
 
   // pd_v2 Decode reqs 都是 kv_from_remote, 走上面的 HandlePdV2DecodeRestart, 不会到这里;
   // 此处仅为防御性保持 in-flight 集合一致 (非 pd_v2 路径 defer_admission_on_block_full_=false,

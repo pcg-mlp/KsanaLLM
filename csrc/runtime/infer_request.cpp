@@ -318,6 +318,7 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
   // If task is prefill task and not the last step, drop draft_tokens.
   // generated_tokens should be empty.
   if (IsSplitPrefillStep()) {
+    accepted_tokens.clear();
     generated_tokens.clear();
     draft_tokens.clear();
   } else {

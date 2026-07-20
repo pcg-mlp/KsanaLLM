@@ -197,6 +197,10 @@ void ContinuousBatchingStrategy::SyncRecomputeRequest(std::shared_ptr<InferReque
 
   // Add request to the beginning of waiting queue.
   req->kv_cache_blocks.clear();
+  req->accepted_tokens.clear();
+  req->generated_tokens.clear();
+  req->draft_tokens.clear();
+  req->forwarding_tokens.clear();
   req->ResetPrefillingTokens();
 
   // Record recomputed req_id
@@ -566,7 +570,7 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
     // No more blocks, skip waiting_req launch.
     batch_state_->step_sched_finish = true;
 
-    // decoding request can not run due to block limitation, disable split fuse to free some blocks
+    // decoding request can not run due to block limitation, try to free some blocks
     size_t recomputing_waiting_task_num = 0;
     if (!batch_state_->waiting_queue.empty() && batch_scheduler_config_.split_fuse_token_num > 0) {
       std::vector<std::shared_ptr<InferRequest>> recomputing_reqs;
