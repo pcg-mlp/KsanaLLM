@@ -154,6 +154,22 @@ Status FlashAttention::AddAttentionPrefixCache(std::vector<Tensor>& hidden_buffe
   const size_t dtype_size = GetTypeSize(mmha_origin_input.dtype);
   const size_t size_per_token = mmha_origin_input.shape[1] * dtype_size;
   for (size_t idx = 0; idx < model_input->dp_batch_size; ++idx) {
+    // The single token is located in the latter half; copy it all at once and then exit.
+    // This check must precede the prefix_length calculation (dp_input_prefix_list_uint64[idx+1])
+    // because the prefix list only contains entries for multi-token requests.
+    if (idx >= model_input->dp_multi_token_request_num && model_input->dp_single_token_request_num > 0) {
+      const size_t input_offset = model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx];
+      const size_t prefix_offset = model_input->dp_input_prefix_list_uint64[idx];
+      const size_t src_offset = (input_offset - prefix_offset) * size_per_token;
+      const size_t remaining_bytes = mmha_origin_input.GetTotalBytes() - src_offset;
+      MemcpyAsync(shared_buffer_tensors[0].template GetPtr<void>(),
+                  mmha_origin_input.template GetPtr<void>() + src_offset, remaining_bytes, MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetPrimaryComputeStream());
+      shared_buffer_tensors[0].shape = {remaining_bytes / dtype_size / model_input->dp_single_token_request_num,
+                                        model_input->dp_single_token_request_num};
+      total_token_num += model_input->dp_single_token_request_num;
+      break;
+    }
     const size_t input_offset = model_input->dp_input_offset_uint64_host.GetPtr<size_t>()[idx];
     const size_t prefix_offset = model_input->dp_input_prefix_list_uint64[idx];
     const size_t src_offset = (input_offset - prefix_offset) * size_per_token;
@@ -161,16 +177,6 @@ Status FlashAttention::AddAttentionPrefixCache(std::vector<Tensor>& hidden_buffe
     const size_t prefix_length = model_input->dp_input_prefix_list_uint64[idx + 1] - prefix_offset;
     const size_t copy_size = (input_length - prefix_length) * size_per_token;
     const size_t dst_offset = (input_offset + prefix_length) * size_per_token;
-    // The single token is located in the latter half; copy it all at once and then exit
-    if (idx >= model_input->dp_multi_token_request_num && model_input->dp_single_token_request_num > 0) {
-      MemcpyAsync(shared_buffer_tensors[0].template GetPtr<void>(),
-                  mmha_origin_input.template GetPtr<void>() + src_offset,
-                  copy_size * model_input->dp_single_token_request_num, MEMCPY_DEVICE_TO_DEVICE,
-                  context_->device->GetPrimaryComputeStream());
-      shared_buffer_tensors[0].shape = {copy_size / dtype_size, model_input->dp_single_token_request_num};
-      total_token_num += model_input->dp_single_token_request_num;
-      break;
-    }
     // Copy multi tokens
     MemcpyAsync(mmha_prefix_input.template GetPtr<void>() + dst_offset,
                 mmha_origin_input.template GetPtr<void>() + src_offset, copy_size, MEMCPY_DEVICE_TO_DEVICE,
