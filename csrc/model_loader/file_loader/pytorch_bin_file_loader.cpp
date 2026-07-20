@@ -25,7 +25,15 @@ namespace ksana_llm {
 
 PytorchBinFileLoader::PytorchBinFileLoader(const std::string& filename) : filename_(filename) {}
 
-PytorchBinFileLoader::~PytorchBinFileLoader() { loaded_ = false; }
+PytorchBinFileLoader::~PytorchBinFileLoader() {
+  loaded_ = false;
+  // py_model_/state_dict_ hold Python references. Their dec_ref runs during member destruction, which may
+  // happen on a worker thread that does not hold the GIL. Release them explicitly while holding the GIL so
+  // the (now null) members are safe to destroy afterwards.
+  py::gil_scoped_acquire acquire;
+  py_model_ = py::object();
+  state_dict_ = py::object();
+}
 
 // Convert torch dtype to ksana dtype.
 DataType GetTensorDataType(c10::ScalarType dtype) {
@@ -51,13 +59,15 @@ DataType GetTensorDataType(c10::ScalarType dtype) {
 
 Status PytorchBinFileLoader::LoadPytorchModelModelState() {
   if (!loaded_) {
+    // This may run on a worker thread that does not hold the GIL; acquire it before any CPython call.
+    py::gil_scoped_acquire acquire;
+
     py::module torch = py::module::import("torch");
 
     try {
       py_model_ = torch.attr("load")(filename_, "cpu");
     } catch (const py::error_already_set& e) {
       PyErr_Clear();
-      py::finalize_interpreter();
       return Status(RET_RUNTIME_FAILED, FormatStr("Failed to load file %s.", filename_.c_str()));
     }
 
@@ -78,7 +88,9 @@ Status PytorchBinFileLoader::LoadWeightNames(std::vector<std::string>& weight_na
     return status;
   }
 
-  for (auto& item : state_dict_) {
+  py::gil_scoped_acquire acquire;
+  py::dict state_dict = py::reinterpret_borrow<py::dict>(state_dict_);
+  for (auto& item : state_dict) {
     std::string weight_name = py::str(item.first);
     weight_names.push_back(weight_name);
   }
@@ -93,8 +105,10 @@ Status PytorchBinFileLoader::LoadModelWeights(const std::vector<std::string>& we
     return status;
   }
 
+  py::gil_scoped_acquire acquire;
   std::unordered_set<std::string> weight_name_set(weight_names.begin(), weight_names.end());
-  for (auto& item : state_dict_) {
+  py::dict state_dict = py::reinterpret_borrow<py::dict>(state_dict_);
+  for (auto& item : state_dict) {
     std::string weight_name = py::str(item.first);
     if (weight_name_set.find(weight_name) == weight_name_set.end()) {
       KLLM_LOG_DEBUG << "Skip weight tensor name " << weight_name;

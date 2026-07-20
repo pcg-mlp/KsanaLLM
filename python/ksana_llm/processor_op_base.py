@@ -82,9 +82,12 @@ class TokenizerProcessorOpBase:
                 generation_config_json_content = orjson.loads(generation_config_file.read())
                 eos_token_id_obj = generation_config_json_content.get('eos_token_id')
                 if isinstance(eos_token_id_obj, list):
-                    self.eos_token_id = eos_token_id_obj
-                else:
+                    # Filter out None entries so stop_token_ids stays list[int].
+                    self.eos_token_id = [tid for tid in eos_token_id_obj if tid is not None]
+                elif eos_token_id_obj is not None:
                     self.eos_token_id = [eos_token_id_obj]
+                else:
+                    self.eos_token_id = []
 
         self.tokenizer = self.__load_tokenizer(tokenizer_path)
         if tokenization is not None:

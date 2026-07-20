@@ -43,7 +43,9 @@ class PytorchBinFileLoader : public BaseFileLoader {
   std::string filename_;
 
   py::object py_model_;
-  py::dict state_dict_;
+  // Stored as py::object (not py::dict) so the default-constructed member does not call PyDict_New(),
+  // which would crash when this loader is constructed on a worker thread that does not hold the GIL.
+  py::object state_dict_;
 
   // Whether the file have been loaded.
   bool loaded_ = false;

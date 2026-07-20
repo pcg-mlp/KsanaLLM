@@ -281,6 +281,10 @@ class KsanaLLMEngine:
                 if eos_token_id not in stop_token_ids:
                     stop_token_ids.append(eos_token_id)
 
+        # Ensure stop_token_ids is a clean list[int]; drop any None entries that
+        # may come from an incomplete generation_config.json (e.g. some VL models).
+        stop_token_ids = [tid for tid in stop_token_ids if tid is not None]
+
         generation_config = GenerationConfig(
             top_k=_get_sampling_value(sampling_config, "topk", 1),
             do_sample=_get_sampling_value(sampling_config, "do_sample", None),

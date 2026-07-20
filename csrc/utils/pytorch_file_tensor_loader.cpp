@@ -18,6 +18,11 @@ PytorchFileTensorLoader::PytorchFileTensorLoader(const std::string& file_name, c
 
 // Function to load the PyTorch binary file
 void PytorchFileTensorLoader::LoadPytorchBin() {
+  // IPC weight-load runs on a raw std::thread that has no Python thread state.
+  // Acquire the GIL (PyGILState_Ensure creates a tstate if missing) before any
+  // CPython call; otherwise PyImport_Import dereferences a NULL tstate and
+  // segfaults. Re-entrant/no-op when the caller (e.g. main thread) already holds it.
+  py::gil_scoped_acquire acquire;
   py::module torch = py::module::import("torch");
   try {
     model_ = torch.attr("load")(file_name_, "cpu");
@@ -43,6 +48,11 @@ void PytorchFileTensorLoader::LoadPytorchBin() {
     py::object value_obj = py::reinterpret_borrow<py::object>(item.second);
     pytorch_tensor_map_[tensor_name] = THPVariable_Unpack(value_obj.ptr());
   }
+
+  // Drop the retained Python object under the GIL so the member's later
+  // destruction (loader may be freed on a non-GIL IPC thread) is a no-op.
+  // The unpacked at::Tensors keep their storage alive via their own C++ refcounts.
+  model_ = py::object();
 }
 
 DataType PytorchFileTensorLoader::GetTensorDataType(const std::string& tensor_name) {
