@@ -40,6 +40,10 @@ class TritonWrapper {
 
   void SetKernelsDir(const std::string& kernels_dir);
 
+  // The directory chosen by InitKernelsDir() (or overridden by SetKernelsDir()).
+  // Exposed primarily so the directory-resolution priority can be unit tested.
+  const std::string& GetKernelsDir() const { return kernels_dir_; }
+
   template <typename T>
   void InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scale, void* b_scale, void* topk_weights,
                             void* sorted_token_ids, void* expert_ids, void* num_tokens_post_padded, int n, int k,
@@ -164,6 +168,8 @@ class TritonWrapper {
 
   std::unordered_map<std::string, std::vector<std::string>> kernel_key_map_;
 
+  // The single directory chosen once by InitKernelsDir() (by priority) from
+  // which all triton kernel json/cubin files are loaded.
   std::string kernels_dir_;
 };
 

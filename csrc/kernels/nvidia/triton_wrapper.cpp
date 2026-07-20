@@ -104,20 +104,30 @@ TritonWrapper::TritonWrapper() {
 }
 
 void TritonWrapper::InitKernelsDir() {
-  // If KSANA_TRITON_KERNEL_PATH is set, KsanaLLM will load the kernel from
-  // ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files. Otherwise, it will load the kernel from the default path
-  // ${HOME}/.cache/KsanaLLM/triton_kernel_files, or from the relative path ./triton_kernel_files.
+  // Pick a single kernel directory by priority. We intentionally select ONE
+  // directory (never a union across directories) so that all kernels come from
+  // the same build, avoiding an inconsistent mix.
+  //
+  // Priority:
+  //   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (explicit override; for an
+  //      installed wheel python __init__ defaults this to the bundled kernel dir,
+  //      so this level also covers "prefer the python install dir")
+  //   2. ${HOME}/.cache/KsanaLLM/triton_kernel_files      (dev / freshly generated)
+  //   3. ./triton_kernel_files                            (relative fallback)
   const char* env_path = std::getenv("KSANA_TRITON_KERNEL_PATH");
   if (env_path != nullptr) {
-    kernels_dir_ = fmt::format("{}/triton_kernel_files/", env_path);
+    kernels_dir_ = fmt::format("{}/triton_kernel_files", env_path);
+    KLLM_LOG_INFO << "Using triton kernel dir from KSANA_TRITON_KERNEL_PATH: " << kernels_dir_;
+    return;
+  }
+
+  const char* home_dir = std::getenv("HOME");
+  if (home_dir != nullptr) {
+    kernels_dir_ = std::string(home_dir) + "/.cache/KsanaLLM/triton_kernel_files";
+    KLLM_LOG_INFO << "Using triton kernel dir from HOME cache: " << kernels_dir_;
   } else {
-    const char* home_dir = std::getenv("HOME");
-    if (home_dir != nullptr) {
-      kernels_dir_ = std::string(home_dir) + "/.cache/KsanaLLM/triton_kernel_files";
-    } else {
-      kernels_dir_ = "./triton_kernel_files";
-      KLLM_LOG_WARNING << "Cannot get HOME environment variable, using relative path: " << kernels_dir_;
-    }
+    kernels_dir_ = "./triton_kernel_files";
+    KLLM_LOG_WARNING << "Cannot get HOME environment variable, using relative path: " << kernels_dir_;
   }
 }
 
@@ -195,6 +205,10 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
   const std::string kernel_stream_name = fmt::format("{}_Stream_{}", *kernel_name, *reinterpret_cast<int64_t*>(stream));
   std::shared_ptr<TritonKernel> kernel;
   if (kernel_map_.find(kernel_stream_name) == kernel_map_.end()) {
+    // All kernels are loaded from a single directory (kernels_dir_, chosen once
+    // in InitKernelsDir by priority). We deliberately do NOT search across
+    // directories per-file: mixing kernels built at different times / versions
+    // could yield an inconsistent set and subtle correctness bugs.
     std::string config_path = fmt::format("{}/{}.json", kernels_dir_, *kernel_name);
     auto triton_kernel = LoadTritonKernelJsonFile(config_path, kernel_base_name);
     if (!triton_kernel) {
@@ -203,8 +217,9 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
       // 改为直接 throw，让缺失 cubin/json 的配置在第一次触发时就明确暴露。
       KLLM_THROW(
           fmt::format("Failed to load triton kernel json file: {}. The triton kernel for "
-                      "this configuration was not pre-generated; please re-run the kernel "
-                      "creator.sh / re-configure cmake to produce the missing artifact.",
+                      "this configuration was not pre-generated in the selected kernel "
+                      "directory; please re-run the kernel creator.sh / re-configure cmake "
+                      "to produce the missing artifact.",
                       config_path));
     }
 

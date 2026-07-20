@@ -47,6 +47,10 @@ set(FUSED_MOE_TUNED_CONFIG_TEST_SRCS fused_moe_tuned_config_test.cpp)
 cc_test(fused_moe_tuned_config_test SRCS ${FUSED_MOE_TUNED_CONFIG_TEST_SRCS} DEPS
     llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
+set(TRITON_WRAPPER_TEST_SRCS triton_wrapper_test.cpp)
+cc_test(triton_wrapper_test SRCS ${TRITON_WRAPPER_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+
 if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
     file(GLOB_RECURSE DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS deepseek_deepgemm_wrapper_test.cpp)
     cc_test(deepseek_deepgemm_wrapper_test SRCS ${DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS} DEPS
