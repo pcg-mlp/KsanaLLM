@@ -8,7 +8,9 @@
 #include <random>
 
 #include "cache_manager/block_allocator/block_allocator_manager.h"
+#include "cache_manager/cache_manager_interface.h"
 #include "cache_manager/prefix_cache_manager.h"
+#include "profiler/timer.h"
 #include "transfer/transfer_engine.h"
 #include "utils/memory_allocator.h"
 #include "utils/singleton.h"
@@ -17,6 +19,48 @@
 #include "test.h"
 
 using namespace ksana_llm;
+
+// Minimal cache manager: UpdateRequestTokens / DestroyFinishedRequest succeed so
+// UpdateRunningRequests can reach the finish-metrics path.
+class FinishPathCacheManager : public CacheManagerInterface {
+ public:
+  void InitializeCachedBlocks() override {}
+  std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const override { return nullptr; }
+  size_t GetUsableBlockNumber() override { return 0; }
+  size_t GetHostFreeBlockNumber() override { return 0; }
+  size_t GetUsedBlockNumber() override { return 0; }
+  size_t GetRequestStepBlockNumber(int64_t, size_t, size_t) override { return 0; }
+  size_t GetRequestStepBlockNumberForOneNextToken(int64_t) override { return 0; }
+  size_t GetRequestUsableBlockNumber(int64_t) override { return 0; }
+  Status GetRequestPrefixBlockNumber(int64_t, const std::vector<int>&, size_t, size_t&, size_t&, size_t&) override {
+    return Status();
+  }
+  Status GetRequestPrefixBlockNumberBeforeRemoteCacheLoading(int64_t, const std::vector<int>&, size_t, size_t&, size_t&,
+                                                             size_t&, size_t&, size_t&, size_t&) override {
+    return Status();
+  }
+  Status AllocateBlocksForRemoteCache(int64_t, std::vector<int>&, size_t, size_t, std::vector<int>&,
+                                      std::vector<int>&) override {
+    return Status();
+  }
+  Status ConfirmRemoteCacheLoadingResult(int64_t, const std::vector<int>&, size_t,
+                                         const std::vector<size_t>&) override {
+    return Status();
+  }
+  Status AllocateRequestBlocks(int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&) override {
+    return Status();
+  }
+  void UpdateFlexibleCache(int64_t, const std::vector<int>&, int, std::vector<FlexibleCachedCopyTask>&,
+                           size_t&) override {}
+  Status UpdateRequestTokens(int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
+                             std::vector<size_t>&) override {
+    return Status();
+  }
+  void DestroyFinishedRequest(int64_t req_id) override { destroyed.push_back(req_id); }
+  bool IsPrefixCachingEnabled() override { return false; }
+
+  std::vector<int64_t> destroyed;
+};
 
 class ContinuousBatchingStrategyTest : public ContinuousBatchingStrategy {
  public:
@@ -563,4 +607,57 @@ TEST_F(ContinuousBatchingTest, EmptyRequestAbortTest) {
 
   // The request should be marked as finished with error.
   ASSERT_TRUE(req->finished);
+}
+
+// Cover waiting_latency_us / ttft_us / tpot_us reporting in UpdateRunningRequests.
+TEST_F(ContinuousBatchingTest, UpdateRunningRequestsReportsAccessLogLatencyMetrics) {
+  continuous_batching_strategy_->SetConnectorRole(GroupRole::NONE);
+  auto cache = std::make_shared<FinishPathCacheManager>();
+  continuous_batching_strategy_->SetCacheManager(cache);
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->req_id = 4242;
+  req->block_token_num = 16;
+  req->attn_dp_group_id = 0;
+  req->input_tokens = {1, 2, 3};
+  req->output_tokens = {1, 2, 3, 10, 11};  // 2 generated tokens
+  req->sampling_config.max_new_tokens = 2;
+  req->finish_status = Status(RET_SUCCESS);
+  req->ResetPrefillingTokens();
+
+  // Prefill already done: remaining prefill=0 so IsRequestFinished can return true.
+  ScheduleTaskWorkload remain;
+  remain.prefill_token_num = 0;
+  remain.prefill_start_offset = req->output_tokens.size();
+  req->SetRemainingWorkload(remain);
+
+  // One decode inflight so UpdateRunningRequests can retire it.
+  req->forwarding_tokens = {1, 2, 3, 10};
+  req->SetKvCachedTokenNum(3);
+  req->generated_tokens = {11};
+  ScheduleTaskWorkload plan;
+  plan.generated_token_num = 1;
+  plan.sampling_token_num = 1;
+  req->SetPlanningWorkload(plan);
+  req->SetPlanningTask();
+  req->LaunchPlanningTask();
+
+  const uint64_t arrive = req->timestamp_in_us;
+  ASSERT_GT(arrive, 0u);
+  req->scheduled_time_us.store(arrive + 100);
+  req->first_token_time_us.store(arrive + 200);
+  // finish_time_us is read before StopRequest stamps it; seed it for tpot_us.
+  req->finish_time_us.store(arrive + 500);
+
+  continuous_batching_strategy_->batch_state_->decoding_queue.push_back(req);
+
+  continuous_batching_strategy_->UpdateRunningRequests({req});
+
+  EXPECT_TRUE(req->finished);
+  EXPECT_TRUE(continuous_batching_strategy_->batch_state_->decoding_queue.empty());
+  ASSERT_EQ(cache->destroyed.size(), 1u);
+  EXPECT_EQ(cache->destroyed[0], 4242);
 }

@@ -478,6 +478,21 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
         REPORT_METRIC("total_latency_us", duration);
         REPORT_METRIC("output_token_len", output_token_num);
         REPORT_METRIC("input_token_len", req->input_tokens.size());
+        // Access-log latency metrics. Timestamps share the ProfileTimer monotonic clock with
+        // timestamp_in_us (arrive); 0 means the hook never stamped it, so skip to avoid bogus deltas.
+        const uint64_t arrive = req->timestamp_in_us;
+        const uint64_t scheduled = req->scheduled_time_us.load();
+        const uint64_t first_token = req->first_token_time_us.load();
+        const uint64_t finish = req->finish_time_us.load();
+        if (scheduled >= arrive && arrive > 0) {
+          REPORT_METRIC("waiting_latency_us", scheduled - arrive);
+        }
+        if (first_token >= arrive && arrive > 0) {
+          REPORT_METRIC("ttft_us", first_token - arrive);
+        }
+        if (output_token_num > 1 && first_token > 0 && finish >= first_token) {
+          REPORT_METRIC("tpot_us", (finish - first_token) / (output_token_num - 1));
+        }
       } else {
         REPORT_METRIC("forward_req_error_num", req->finish_status.GetCode());
       }

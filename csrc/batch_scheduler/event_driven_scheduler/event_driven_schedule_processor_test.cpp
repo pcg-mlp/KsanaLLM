@@ -362,6 +362,100 @@ TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestDeferredByPutTrack
   EXPECT_TRUE(tracker->HasDeferredRequests());
 }
 
+// Access-log / pd_v2 phase metrics in HandleStopRequest. REPORT_METRIC is a no-op
+// without a process profiler; these tests exercise every guarded branch so the
+// new lines stay covered under gcov.
+TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestReportsAccessLogAndPdV2Metrics) {
+  auto req = MakeReq(1, /*token_num=*/4);  // 4 output tokens, empty input -> output_token_num=4
+  RegisterReq(req);
+
+  // Monotonic timeline (arrive is stamped in InferRequest ctor).
+  const uint64_t arrive = req->timestamp_in_us;
+  ASSERT_GT(arrive, 0u);
+  req->scheduled_time_us.store(arrive + 300);
+  req->first_token_time_us.store(arrive + 200);  // first token before decode schedule -> decode_queue
+  // finish_time_us is StampOnce'd inside HandleStopRequest.
+
+  // Remote Prefill path: dispatched > 0 enables the pd_v2 block.
+  req->pd_v2.prefill_dispatched_time_us.store(arrive + 50);
+  req->pd_v2.blocks_allocated_time_us.store(arrive + 40);   // admit_us
+  req->pd_v2.prefill_complete_time_us.store(arrive + 180);  // remote_rtt
+  req->pd_v2.pf_queue_us.store(20);
+  req->pd_v2.pf_compute_us.store(30);
+  req->pd_v2.pf_send_us.store(10);  // pf_total=60 < remote_rtt=130 -> kv_transfer
+
+  HandleStop(req, Status(RET_SUCCESS), 0);
+
+  EXPECT_TRUE(req->finished);
+  EXPECT_GT(req->finish_time_us.load(), 0u);
+  EXPECT_EQ(cache_->destroyed.size(), 1u);
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestPdV2SkipsKvTransferWhenPfExceedsRtt) {
+  auto req = MakeReq(2, /*token_num=*/3);
+  RegisterReq(req);
+
+  const uint64_t arrive = req->timestamp_in_us;
+  req->scheduled_time_us.store(arrive + 10);
+  req->first_token_time_us.store(arrive + 20);  // scheduled < first_token -> skip decode_queue
+  req->pd_v2.prefill_dispatched_time_us.store(arrive + 5);
+  req->pd_v2.blocks_allocated_time_us.store(0);            // skip admit (blocks_alloc < arrive)
+  req->pd_v2.prefill_complete_time_us.store(arrive + 15);  // remote_rtt = 10
+  req->pd_v2.pf_queue_us.store(100);                       // pf_total > remote_rtt -> skip kv_transfer
+  req->pd_v2.pf_compute_us.store(0);
+  req->pd_v2.pf_send_us.store(0);
+
+  HandleStop(req, Status(RET_SUCCESS), 0);
+  EXPECT_TRUE(req->finished);
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestSkipsMetricsForPrefillDecodeTargets) {
+  auto req = MakeReq(3, /*token_num=*/4);
+  RegisterReq(req);
+  // Prefill-side requests carry decode_targets; metrics gate requires empty.
+  req->pd_v2.decode_targets.push_back(pd_v2::DecodeTargetLite{});
+  req->pd_v2.prefill_dispatched_time_us.store(12345);
+
+  HandleStop(req, Status(RET_SUCCESS), 0);
+  EXPECT_TRUE(req->finished);
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestSkipsMetricsOnErrorOrNoOutput) {
+  // Error status: skip the whole metrics block.
+  {
+    auto req = MakeReq(4, /*token_num=*/4);
+    RegisterReq(req);
+    req->pd_v2.prefill_dispatched_time_us.store(1);
+    HandleStop(req, Status(RET_RUNTIME_FAILED, "boom"), 0);
+    EXPECT_TRUE(req->finished);
+  }
+  // output_token_num == 0 (output_tokens == input_tokens): also skip.
+  {
+    auto req = MakeReq(5, /*token_num=*/0);
+    req->input_tokens = {1, 2, 3};
+    req->output_tokens = req->input_tokens;
+    RegisterReq(req);
+    req->pd_v2.prefill_dispatched_time_us.store(1);
+    HandleStop(req, Status(RET_SUCCESS), 0);
+    EXPECT_TRUE(req->finished);
+  }
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestPdV2SkipsRemoteWhenCompleteBeforeDispatch) {
+  auto req = MakeReq(6, /*token_num=*/2);
+  RegisterReq(req);
+
+  const uint64_t arrive = req->timestamp_in_us;
+  req->scheduled_time_us.store(arrive + 50);
+  req->first_token_time_us.store(arrive + 40);
+  req->pd_v2.prefill_dispatched_time_us.store(arrive + 100);
+  req->pd_v2.blocks_allocated_time_us.store(arrive + 10);
+  req->pd_v2.prefill_complete_time_us.store(arrive + 50);  // complete < dispatched -> skip rtt block
+
+  HandleStop(req, Status(RET_SUCCESS), 0);
+  EXPECT_TRUE(req->finished);
+}
+
 // ========================= HandleHookFailAndEnd =========================
 
 TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleHookFailAndEndNullAndStopped) {

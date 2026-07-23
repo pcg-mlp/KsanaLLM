@@ -11,6 +11,7 @@
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
 #include "configure/environment.h"
 #include "profiler/profile_event.h"
+#include "profiler/reporter.h"
 #include "profiler/timer.h"
 #include "runtime/schedule_output.h"
 #include "utils/logger.h"
@@ -68,6 +69,66 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   req->finished = true;
   req->finish_status = ret_status;
   StampOnce(req->finish_time_us);
+
+  // Access-log latency + pd_v2 phase metrics (same derivations as the Python access log)
+  const size_t output_token_num =
+      req->output_tokens.size() > req->input_tokens.size() ? req->output_tokens.size() - req->input_tokens.size() : 0;
+  if (ret_status.OK() && output_token_num > 0 && req->pd_v2.decode_targets.empty()) {
+    const uint64_t arrive = req->timestamp_in_us;
+    const uint64_t scheduled = req->scheduled_time_us.load();
+    const uint64_t first_token = req->first_token_time_us.load();
+    const uint64_t finish = req->finish_time_us.load();
+
+    if (finish >= arrive && arrive > 0) {
+      REPORT_METRIC("total_latency_us", finish - arrive);
+    }
+    REPORT_METRIC("output_token_len", output_token_num);
+    REPORT_METRIC("input_token_len", req->input_tokens.size());
+    if (scheduled >= arrive && arrive > 0) {
+      REPORT_METRIC("waiting_latency_us", scheduled - arrive);
+    }
+    if (first_token >= arrive && arrive > 0) {
+      REPORT_METRIC("ttft_us", first_token - arrive);
+    }
+    if (output_token_num > 1 && first_token > 0 && finish >= first_token) {
+      REPORT_METRIC("tpot_us", (finish - first_token) / (output_token_num - 1));
+    }
+
+    // pd_v2 Decode-side phase metrics; only for requests that actually went through a remote
+    // Prefill (dispatched > 0). Aggregate / non-pd_v2 requests skip these.
+    const uint64_t dispatched = req->pd_v2.prefill_dispatched_time_us.load();
+    if (dispatched > 0) {
+      const uint64_t blocks_alloc = req->pd_v2.blocks_allocated_time_us.load();
+      const uint64_t complete = req->pd_v2.prefill_complete_time_us.load();
+
+      // Decode admission / KV-pool wait: arrive -> KV blocks allocated.
+      if (blocks_alloc >= arrive && arrive > 0) {
+        REPORT_METRIC("pd_v2_admit_us", blocks_alloc - arrive);
+      }
+      // Full remote round trip (decode clock) + the peer-Prefill's own-clock segments, which
+      // arrive together on PrefillComplete. kv_transfer is the network + KV-transfer residual.
+      if (complete >= dispatched) {
+        const uint64_t remote_rtt = complete - dispatched;
+        const uint64_t pf_queue = req->pd_v2.pf_queue_us.load();
+        const uint64_t pf_compute = req->pd_v2.pf_compute_us.load();
+        const uint64_t pf_send = req->pd_v2.pf_send_us.load();
+        REPORT_METRIC("pd_v2_remote_rtt_us", remote_rtt);
+        REPORT_METRIC("pd_v2_pf_queue_us", pf_queue);
+        REPORT_METRIC("pd_v2_pf_compute_us", pf_compute);
+        REPORT_METRIC("pd_v2_pf_send_us", pf_send);
+        const uint64_t pf_total = pf_queue + pf_compute + pf_send;
+        if (remote_rtt >= pf_total) {
+          REPORT_METRIC("pd_v2_kv_transfer_us", remote_rtt - pf_total);
+        }
+      }
+      // Stall after first token: the first token came from the remote Prefill, but the request
+      // still waited in the decode queue for a running-batch slot before token #2.
+      if (scheduled >= first_token && first_token > 0) {
+        REPORT_METRIC("pd_v2_decode_queue_us", scheduled - first_token);
+      }
+    }
+  }
+
   if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
     dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
   }
@@ -831,8 +892,7 @@ void EventDrivenScheduleProcessor::ReportEventDrivenState(const char* phase) con
       // guarantees dp_idx is within bounds.
       const DpBatch& dp_batch = planning_batch.dp_batches[dp_idx];
       KLLM_LOG_SCHEDULER << "EventDrivenState[" << phase << "]: multi_batch_id=" << multi_batch_id
-                         << ", dp_idx=" << dp_idx
-                         << ", preprocessing_reqs=" << dp_state.preprocessing_reqs.size()
+                         << ", dp_idx=" << dp_idx << ", preprocessing_reqs=" << dp_state.preprocessing_reqs.size()
                          << ", prefilling_reqs=" << dp_state.prefilling_reqs.size()
                          << ", decoding_reqs=" << dp_state.decoding_reqs.size()
                          << ", planning_running_reqs=" << dp_batch.running_reqs.size()
@@ -840,8 +900,7 @@ void EventDrivenScheduleProcessor::ReportEventDrivenState(const char* phase) con
                          << ", planning_step_logits_num=" << dp_batch.running_step_logits_num
                          << ", max_batch_size=" << config.max_batch_size
                          << ", max_step_token_num=" << config.max_step_token_num
-                         << ", max_waiting_queue_len=" << config.max_waiting_queue_len
-                         << ", launchable=" << launchable;
+                         << ", max_waiting_queue_len=" << config.max_waiting_queue_len << ", launchable=" << launchable;
 
       total_preprocessing_reqs += dp_state.preprocessing_reqs.size();
       total_prefilling_reqs += dp_state.prefilling_reqs.size();
@@ -852,9 +911,8 @@ void EventDrivenScheduleProcessor::ReportEventDrivenState(const char* phase) con
     }
   }
 
-  KLLM_LOG_SCHEDULER << "EventDrivenStateSummary[" << phase << "]: preprocessing_reqs="
-                     << total_preprocessing_reqs << ", prefilling_reqs=" << total_prefilling_reqs
-                     << ", decoding_reqs=" << total_decoding_reqs
+  KLLM_LOG_SCHEDULER << "EventDrivenStateSummary[" << phase << "]: preprocessing_reqs=" << total_preprocessing_reqs
+                     << ", prefilling_reqs=" << total_prefilling_reqs << ", decoding_reqs=" << total_decoding_reqs
                      << ", planning_running_reqs=" << total_planning_running_reqs
                      << ", planning_step_token_num=" << total_planning_step_token_num
                      << ", planning_step_logits_num=" << total_planning_step_logits_num
