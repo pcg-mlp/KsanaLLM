@@ -6,7 +6,9 @@
 #include "batch_scheduler/event_driven_scheduler/event_driven_schedule_processor.h"
 
 #include <algorithm>
+#include <memory>
 #include <unordered_set>
+#include <vector>
 
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
 #include "configure/environment.h"
@@ -486,6 +488,47 @@ void EventDrivenScheduleProcessor::Initialize(std::shared_ptr<BatchSchedulerInte
 }
 
 Status EventDrivenScheduleProcessor::AddInferRequest(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
+  KLLM_CHECK(backend_ != nullptr);
+
+  // Mirror BatchScheduler::AddInferRequest: the first request in the group
+  // acts as the representative for length validation.
+  std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
+
+  const Status finish_status = backend_->CheckRequestAdmission(infer_request);
+  if (!finish_status.OK()) {
+    KLLM_LOG_ERROR << "req_id: " << infer_request->req_id
+                   << " request admission failed: " << finish_status.GetMessage();
+
+    // Mark every member finished before any notification so that
+    // beam-group Notify() observes a consistent finished state.
+    std::unordered_set<const std::shared_ptr<Waiter>*> notified_request_keys;
+    std::vector<std::shared_ptr<InferRequest>> notify_reqs;
+
+    for (auto& req : infer_request_group) {
+      req->finish_status = finish_status;
+      StampOnce(req->finish_time_us);
+      req->finished = true;
+
+      // InferRequest::waiter is a reference to Request::waiter.
+      // Its storage address identifies the underlying logical Request:
+      // - beam members share one Request::waiter slot;
+      // - ModelPerf requests have distinct slots, even though they point
+      //   to the same batch_waiter.
+      const auto* request_key = std::addressof(req->waiter);
+      if (notified_request_keys.insert(request_key).second) {
+        notify_reqs.push_back(req);
+      }
+    }
+
+    // Notify only after all request state and notification targets are prepared.
+    // Notify() may clear req_group and wake the owner of the Request. Calling
+    // only group[0]->Notify() would leave a ModelPerf batch_waiter blocked forever.
+    for (auto& req : notify_reqs) {
+      req->Notify();
+    }
+
+    return finish_status;
+  }
   // Maintain global req_id -> req_ptr index as early as possible.
   // This is required because async hook next_steps may only contain req_id.
   {

@@ -69,9 +69,6 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Add infer requests to waiting buffer queue, and reject requests if the queue is full.
   Status EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
 
-  // True if request length exceed the max input length.
-  inline bool CheckRequestExceedLength(const std::shared_ptr<InferRequest> req);
-
   // balance waiting reqs to dp_waiting_reqs_ by batch_state_
   // the output is dp_waiting_reqs_
   void BalanceWaitingReqs();

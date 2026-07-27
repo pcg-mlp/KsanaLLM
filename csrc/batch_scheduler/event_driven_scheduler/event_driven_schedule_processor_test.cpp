@@ -1158,11 +1158,92 @@ TEST_F(EventDrivenScheduleProcessorWhiteBox, LockUnlock) {
   SUCCEED();
 }
 
-TEST_F(EventDrivenScheduleProcessorWhiteBox, AddInferRequestSkipsNull) {
-  std::vector<std::shared_ptr<InferRequest>> group{nullptr, MakeReq(1)};
-  EXPECT_TRUE(proc_->AddInferRequest(group).OK());  // null entry skipped in the index loop
-  // Index populated for the non-null request only.
-  EXPECT_EQ(proc_->GetScheduleState()->req_id_to_req_ptr.count(1), 1u);
+TEST_F(EventDrivenScheduleProcessorWhiteBox, AddInferRequestRejectsOverlengthInput) {
+  auto req = MakeReq(1);
+  req->input_tokens.resize(cfg_.max_token_len + 1);
+
+  std::vector<std::shared_ptr<InferRequest>> group{req};
+  Status status = proc_->AddInferRequest(group);
+
+  EXPECT_EQ(status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+  EXPECT_EQ(req->finish_status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+  EXPECT_TRUE(req->finished);
+  EXPECT_GT(req->finish_time_us.load(), 0u);
+  EXPECT_EQ(proc_->GetScheduleState()->req_id_to_req_ptr.count(req->req_id), 0u);
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, AddInferRequestAcceptsInputAtMaxLength) {
+  auto req = MakeReq(1);
+  req->input_tokens.resize(cfg_.max_token_len);
+
+  std::vector<std::shared_ptr<InferRequest>> group{req};
+  Status status = proc_->AddInferRequest(group);
+
+  EXPECT_TRUE(status.OK());
+  EXPECT_FALSE(req->finished);
+  EXPECT_EQ(proc_->GetScheduleState()->req_id_to_req_ptr.count(req->req_id), 1u);
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, AddInferRequestRejectNotifiesEachIndependentRequest) {
+  auto batch_waiter = std::make_shared<Waiter>(3);
+  std::vector<std::shared_ptr<InferRequest>> batch;
+
+  for (int64_t req_id = 1; req_id <= 3; ++req_id) {
+    auto req = MakeReq(req_id);
+    req->input_tokens.resize(cfg_.max_token_len + 1);
+    req->waiter = batch_waiter;
+
+    // Match ModelPerfBackend: every independent Request is a singleton
+    // InferRequest group, while all Requests share one batch waiter.
+    std::vector<std::shared_ptr<InferRequest>> singleton_group{req};
+    req->SetReqGroup(singleton_group);
+    batch.push_back(req);
+  }
+
+  Status status = proc_->AddInferRequest(batch);
+
+  EXPECT_EQ(status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+  EXPECT_EQ(batch_waiter->Cnt(), 0);
+  for (const auto& req : batch) {
+    EXPECT_TRUE(req->finished);
+    EXPECT_EQ(req->finish_status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+    EXPECT_GT(req->finish_time_us.load(), 0u);
+    EXPECT_EQ(proc_->GetScheduleState()->req_id_to_req_ptr.count(req->req_id), 0u);
+  }
+}
+
+TEST_F(EventDrivenScheduleProcessorWhiteBox, AddInferRequestRejectNotifiesBeamGroupOnce) {
+  constexpr size_t kBeamNum = 3;
+  auto input = std::make_shared<KsanaPythonInput>();
+  input->sampling_config.num_beams = kBeamNum;
+  input->input_tokens.resize(cfg_.max_token_len + 1);
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(input, req_ctx);
+  auto request_waiter = std::make_shared<Waiter>(1);
+  request->waiter = request_waiter;
+  g_alive_requests.push_back(request);
+
+  std::vector<std::shared_ptr<InferRequest>> beam_group;
+  for (size_t beam_idx = 0; beam_idx < request->output_group.size(); ++beam_idx) {
+    beam_group.push_back(std::make_shared<InferRequest>(request, beam_idx));
+  }
+  ASSERT_EQ(beam_group.size(), kBeamNum);
+  for (auto& req : beam_group) {
+    req->SetReqGroup(beam_group);
+  }
+
+  Status status = proc_->AddInferRequest(beam_group);
+
+  EXPECT_EQ(status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+  // A beam group represents one underlying Request, so its Waiter(1) must
+  // reach exactly zero rather than being notified once per beam.
+  EXPECT_EQ(request_waiter->Cnt(), 0);
+  for (const auto& req : beam_group) {
+    EXPECT_TRUE(req->finished);
+    EXPECT_EQ(req->finish_status.GetCode(), RET_INPUT_LENGTH_EXCEEDED);
+    EXPECT_GT(req->finish_time_us.load(), 0u);
+    EXPECT_EQ(proc_->GetScheduleState()->req_id_to_req_ptr.count(req->req_id), 0u);
+  }
 }
 
 }  // namespace ksana_llm

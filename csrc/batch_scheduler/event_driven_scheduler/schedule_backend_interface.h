@@ -16,6 +16,7 @@
 #include "configure/schedule_config_parser.h"
 #include "runtime/infer_request.h"
 #include "runtime/schedule_output.h"
+#include "utils/status.h"
 
 namespace ksana_llm {
 
@@ -75,6 +76,10 @@ class ScheduleBackendInterface {
   }
 
   const BatchSchedulerConfig& GetBatchSchedulerConfig() const { return batch_scheduler_config_; }
+
+  // Keep admission policy behind the backend boundary so the processor does
+  // not depend on individual BatchSchedulerConfig fields.
+  Status CheckRequestAdmission(const std::shared_ptr<InferRequest>& req) const;
 
   virtual void Stop() = 0;
 

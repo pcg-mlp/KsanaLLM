@@ -7,10 +7,15 @@
 
 #include <unordered_set>
 
+#include "batch_scheduler/request_admission.h"
 #include "profiler/reporter.h"
 #include "profiler/timer.h"
 
 namespace ksana_llm {
+
+Status ScheduleBackendInterface::CheckRequestAdmission(const std::shared_ptr<InferRequest>& req) const {
+  return ValidateRequestAdmission(req, batch_scheduler_config_);
+}
 
 void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
                                            const std::vector<std::shared_ptr<PlanningBatch>>& planning_batches,

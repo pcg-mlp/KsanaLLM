@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "batch_scheduler/global_cache_put_tracker.h"
+#include "batch_scheduler/request_admission.h"
 #include "batch_scheduler/strategy/continuous_batching.h"
 #include "profiler/reporter.h"
 #include "profiler/sched_event_tracer.h"
@@ -126,12 +127,11 @@ Status BatchScheduler::AddInferRequest(std::vector<std::shared_ptr<InferRequest>
   KLLM_LOG_DEBUG << "batch scheduler add infer req " << infer_request->req_id << ", max_new_tokens "
                  << infer_request->sampling_config.max_new_tokens;
 
-  if (CheckRequestExceedLength(infer_request)) {
+  const Status finish_status = ValidateRequestAdmission(infer_request, batch_scheduler_config_);
+  if (!finish_status.OK()) {
     KLLM_LOG_ERROR << "req_id: " << infer_request->req_id
-                   << " input len or logits_custom_length is too long inference failed.";
+                   << " request admission failed: " << finish_status.GetMessage();
 
-    const auto finish_status =
-        Status(RET_INPUT_LENGTH_EXCEEDED, "input length or logits_custom_length exceeds the limit.");
     infer_request->finish_status = finish_status;
     StampOnce(infer_request->finish_time_us);
     for (auto& infer_request : infer_request_group) {
@@ -209,11 +209,6 @@ Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<Inf
     waiting_reqs_.push_back(infer_request);
   }
   return Status();
-}
-
-inline bool BatchScheduler::CheckRequestExceedLength(const std::shared_ptr<InferRequest> req) {
-  return req->input_tokens.size() > batch_scheduler_config_.max_token_len ||
-         req->logits_custom_length > std::min(req->input_tokens.size(), batch_scheduler_config_.max_batch_size);
 }
 
 void BatchScheduler::BalanceWaitingReqs() {
