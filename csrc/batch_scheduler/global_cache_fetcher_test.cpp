@@ -160,6 +160,22 @@ TEST_F(FetcherSyncTest, TakeRejectedEmpty) {
   EXPECT_TRUE(rejected.empty());
 }
 
+// ==================== Prefill 角色测试 ====================
+
+TEST(FetcherPrefillRole, SetsMaxNewTokensToOne) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "prefill");
+  fetcher->Start();
+
+  auto req = MakeFetcherTestRequest(500, InferStage::kContext);
+  req->sampling_config.max_new_tokens = 100;
+  fetcher->SubmitRequest(req);
+
+  auto completed = fetcher->TakeCompletedRequests();
+  ASSERT_EQ(completed.size(), 1u);
+  EXPECT_EQ(completed[0]->sampling_config.max_new_tokens, 1u);
+  fetcher->Stop();
+}
+
 // ==================== OnDeviceComplete 测试 ====================
 
 class FetcherAsyncSimTest : public ::testing::Test {
@@ -307,7 +323,7 @@ class UpdateWorkloadTest : public ::testing::Test {
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(UpdateWorkloadTest, ZeroCachedLenNoOp) {
+TEST_F(UpdateWorkloadTest, ZeroCachedLenNonDecodeNoOp) {
   auto req = MakeFetcherTestRequest(1000, InferStage::kContext, 20);
   auto workload_before = req->GetPlanningWorkload();
   CallUpdate(req, 0);
@@ -328,15 +344,42 @@ TEST_F(UpdateWorkloadTest, PartialHitUpdatesWorkload) {
   EXPECT_EQ(remaining.prefill_token_num, 10u);
 }
 
-TEST_F(UpdateWorkloadTest, FullHitWithoutTokensSwitchesToDecode) {
+TEST_F(UpdateWorkloadTest, FullHitWithoutTokensCapsToSeqMinusOne) {
   auto req = MakeFetcherTestRequest(1200, InferStage::kContext, 20);
   CallUpdate(req, 20);
 
-  EXPECT_EQ(req->infer_stage, InferStage::kDecode);
+  // 无 tokens：命中硬上限 seq-1，不 flip decode。
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
   auto planning = req->GetPlanningWorkload();
-  // full hit without tokens: prefill 最后 1 个 token
   EXPECT_EQ(planning.prefill_start_offset, 19u);
   EXPECT_EQ(planning.prefill_token_num, 1u);
+}
+
+TEST_F(UpdateWorkloadTest, SwaFullHitWithoutTokensBlockAligns) {
+  // SWA + GlobalCache 全覆盖无 tokens：seq-1 后再按 block 下取整（同旧 FullHit）。
+  auto req = MakeFetcherTestRequest(1201, InferStage::kContext, 20);
+  req->swa_kv_cache_blocks = {1};  // 非空即视为 SWA
+  req->block_token_num = 16;
+  CallUpdate(req, 20);
+
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
+  auto planning = req->GetPlanningWorkload();
+  // usable = min(20, 19) = 19 → floor(19/16)*16 = 16
+  EXPECT_EQ(planning.prefill_start_offset, 16u);
+  EXPECT_EQ(planning.prefill_token_num, 4u);
+}
+
+TEST_F(UpdateWorkloadTest, SwaFullHitAlignedLeavesOneBlock) {
+  auto req = MakeFetcherTestRequest(1202, InferStage::kContext, 16);
+  req->swa_kv_cache_blocks = {1};
+  req->block_token_num = 16;
+  CallUpdate(req, 16);
+
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
+  // usable = 15 → floor = 0，不更新 workload（仍为初始全量 prefill）
+  auto planning = req->GetPlanningWorkload();
+  EXPECT_EQ(planning.prefill_start_offset, 0u);
+  EXPECT_EQ(planning.prefill_token_num, 16u);
 }
 
 TEST_F(UpdateWorkloadTest, FullHitWithTokensAppends) {
@@ -351,7 +394,7 @@ TEST_F(UpdateWorkloadTest, FullHitWithTokensAppends) {
   EXPECT_EQ(planning.prefill_token_num, 2u);
 }
 
-// ==================== PD-disagg Prefill full-hit 测试 ====================
+// ==================== PD-disagg Prefill（seq-1 硬上限，不 flip kDecode）====================
 
 class PdDisaggPrefillUpdateWorkloadTest : public ::testing::Test {
  protected:
@@ -365,7 +408,7 @@ class PdDisaggPrefillUpdateWorkloadTest : public ::testing::Test {
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(PdDisaggPrefillUpdateWorkloadTest, FullHitStaysContextAndRetainsLastToken) {
+TEST_F(PdDisaggPrefillUpdateWorkloadTest, RemoteFullCoverStaysContextCapsToSeqMinusOne) {
   auto req = MakeFetcherTestRequest(1400, InferStage::kContext, 20);
   CallUpdate(req, 20, {42, 43}, true);
 
@@ -374,6 +417,48 @@ TEST_F(PdDisaggPrefillUpdateWorkloadTest, FullHitStaysContextAndRetainsLastToken
   EXPECT_EQ(planning.prefill_start_offset, 19u);
   EXPECT_EQ(planning.prefill_token_num, 1u);
   EXPECT_EQ(req->output_tokens.size(), 20u);
+}
+
+// ==================== Decode 角色 Reject 测试 ====================
+
+TEST(FetcherDecodeRole, RejectsWhenNotFullHit) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
+  fetcher->Start();
+
+  auto req = MakeFetcherTestRequest(1400, InferStage::kContext, 20);
+  fetcher->SubmitRequest(req);
+
+  auto completed = fetcher->TakeCompletedRequests();
+  EXPECT_TRUE(completed.empty());
+
+  auto rejected = fetcher->TakeRejectedRequests();
+  ASSERT_EQ(rejected.size(), 1u);
+  EXPECT_TRUE(rejected[0]->finished);
+  fetcher->Stop();
+}
+
+TEST(FetcherDecodeRole, RejectsFullHitWithoutTokens) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
+  auto req = MakeFetcherTestRequest(1500, InferStage::kContext, 10);
+
+  // 手动插入 pending 并模拟全命中但无 tokens
+  GlobalCacheFetcher::PendingRequest pending;
+  pending.req = req;
+  pending.devices_completed = 0;
+  pending.total_devices = 1;
+  fetcher->pending_requests_[1500] = std::move(pending);
+
+  GlobalCacheQueryResult r0;
+  r0.req_id = 1500;
+  r0.device_id = 0;
+  r0.success = true;
+  r0.matched_ranges = {0, 9};
+  r0.has_cached_tokens = false;
+  fetcher->OnDeviceComplete(r0);
+
+  auto rejected = fetcher->TakeRejectedRequests();
+  ASSERT_EQ(rejected.size(), 1u);
+  EXPECT_TRUE(rejected[0]->finished);
 }
 
 // ==================== AppendCachedTokens 测试 ====================
@@ -425,11 +510,15 @@ TEST(WorkloadSetterTest, SetRemainingWorkload) {
   EXPECT_EQ(got.prefill_token_num, 7u);
 }
 
-// ==================== Legacy full-hit（非 PD-disagg Prefill）====================
+// ==================== Decode 角色 UpdateRequestWorkload 成功路径 ====================
+// 已有测试覆盖了 decode 角色的两种拒绝场景，此处补充全命中成功的路径。
 
-class LegacyFullHitUpdateWorkloadTest : public ::testing::Test {
+class DecodeRoleUpdateWorkloadTest : public ::testing::Test {
  protected:
-  void SetUp() override { fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr, /*role=*/""); }
+  void SetUp() override {
+    // decode 角色，无 IPC（同步模式）
+    fetcher_ = std::make_unique<GlobalCacheFetcher>(1, nullptr, "decode");
+  }
 
   void CallUpdate(std::shared_ptr<InferRequest>& req, size_t new_cached_len, const std::vector<int>& cached_tokens = {},
                   bool has_cached_tokens = false) {
@@ -439,8 +528,8 @@ class LegacyFullHitUpdateWorkloadTest : public ::testing::Test {
   std::unique_ptr<GlobalCacheFetcher> fetcher_;
 };
 
-TEST_F(LegacyFullHitUpdateWorkloadTest, FullHitWithTokensSwitchesToDecode) {
-  // 全命中 + tokens 就绪 → 切换 kDecode，workload 正确
+TEST_F(DecodeRoleUpdateWorkloadTest, FullHitWithTokensSwitchesToDecode) {
+  // 远端覆盖满 seq + tokens 就绪 → 切换 kDecode（短路，本地不算 Q）
   auto req = MakeFetcherTestRequest(2000, InferStage::kContext, 10);
   CallUpdate(req, /*new_cached_len=*/10, /*cached_tokens=*/{42, 43}, /*has_cached_tokens=*/true);
 
@@ -451,13 +540,8 @@ TEST_F(LegacyFullHitUpdateWorkloadTest, FullHitWithTokensSwitchesToDecode) {
   EXPECT_EQ(planning.prefill_token_num, 2u);
 }
 
-TEST_F(LegacyFullHitUpdateWorkloadTest, FullHitWithoutTokensSwitchesToDecode) {
-  auto req = MakeFetcherTestRequest(2001, InferStage::kContext, 10);
-  CallUpdate(req, /*new_cached_len=*/10, /*cached_tokens=*/{}, /*has_cached_tokens=*/false);
-
-  EXPECT_FALSE(req->finished);
-  EXPECT_EQ(req->infer_stage, InferStage::kDecode);
-}
+// 无 tokens 的 seq-1 上限已由 UpdateWorkloadTest::FullHitWithoutTokensCapsToSeqMinusOne 覆盖；
+// decode 角色无 tokens 的 reject 已由 FetcherDecodeRole::RejectsFullHitWithoutTokens 覆盖。
 
 }  // namespace
 }  // namespace ksana_llm

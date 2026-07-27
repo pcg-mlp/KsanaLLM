@@ -14,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/request_finish_checker.h"
 #include "configure/schedule_config_parser.h"
@@ -512,15 +511,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       }
       agg.has_scheduled_req = true;
 
-      if (shared_token_num >= seq_token_num) {
-        // pd_v2 Prefill 节点全命中绝不能 flip 到 kDecode: 带 decode_targets 的请求必须保持
-        // kContext 走完整 prefill 流程 (回退 1 token 算 logits) 并把 KV RDMA 给 decode 对端;
-        // 一旦 flip 成 kDecode, 请求会在本地连续 decode、KvDispatcher 因 step!=0 跳过 KV 分发,
-        // barrier 永不上报 → 对端 decode 永久挂起 (见 full_cache_hit_handler.h 注释)。
-        // 与 GlobalCacheQueryHook / GlobalCacheFetcher 的 is_pd_v2_prefill 分支对齐。
-        HandleFullPrefixCacheHit(req, planning_workload, seq_token_num,
-                                 /*flip_to_decode_stage=*/req->pd_v2.decode_targets.empty());
-      } else if (shared_token_num > 0) {
+      // Prefix/flexible 命中硬上限 seq-1，shared_token_num 恒小于 seq_token_num，不再走 FullHit 回退。
+      if (shared_token_num > 0) {
         size_t planning_prefill_token_num =
             planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
         planning_workload.prefill_start_offset = shared_token_num;

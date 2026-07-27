@@ -167,6 +167,15 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
   //   → last_swa_valid_idx = 6
 
   const size_t block_token_num = cache_manager_config_.block_token_num;
+  // 查询上限：match_token_num = check_token_num - 1，再按 block 下取整。
+  // 效果：至少留 1 个 token（最多少匹配 1 整块）参与 prefill 算 Q/logits，无需查询侧全命中回退。
+  // 当 check_token_num 为 block_token_num 整数倍时，实际少匹配一个完整 block。
+  const size_t match_token_num = (check_token_num > 0) ? (check_token_num - 1) : 0;
+  const size_t max_match_blocks = match_token_num / block_token_num;
+  // 硬上限：已有匹配块也不能超过 match_token_num。
+  if (request->cached_blocks.size() > max_match_blocks) {
+    request->cached_blocks.resize(max_match_blocks);
+  }
 
   // sliding_window_blocks: number of blocks in the SWA window (0 = SWA disabled).
   size_t sliding_window_blocks = 0;
@@ -217,7 +226,7 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
   }
 
   PrefixCachedBlock* cur_block = request->cached_blocks.empty() ? root_cached_block_ : request->cached_blocks.back();
-  for (size_t i = request->cached_blocks.size(); i < check_token_num / block_token_num; ++i) {
+  for (size_t i = request->cached_blocks.size(); i < max_match_blocks; ++i) {
     cur_block = FindChildCacheBlock(cur_block, input_token_ids.data() + (i * block_token_num), block_token_num);
     if (cur_block == nullptr) {
       break;
@@ -235,11 +244,6 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
     //   - If the new block has a valid SWA entry, extend the streak.
     //   - Otherwise the streak is broken; reset to 0.
     if (swa_cache_manager_->IsSWABlockValid(cur_block->block_id)) {
-      // SWA 场景下 prefix cache 全命中存在已知缺陷；已覆盖全部待查 token 时提前结束，规避该路径。
-      if ((i + 1) * block_token_num >= check_token_num) {
-        KLLM_LOG_DEBUG << " full hit detected, break";
-        break;
-      }
       ++swa_valid_in_window;
     } else {
       swa_valid_in_window = 0;
@@ -294,11 +298,9 @@ Status PrefixCacheManager::GetRequestPrefixBlockNumberInternal(
     request->swa_window_fa_block_ids.clear();
     request->swa_window_block_idxs.clear();
     if (last_swa_valid_idx > 0) {
-      // When full cache hit occurs, HandleFullPrefixCacheHit may rollback one block for
-      // extend recomputation, extend the window by 1 to cover it.
-      const bool is_full_hit = (last_swa_valid_idx * block_token_num >= check_token_num);
-      const size_t window_cover = sliding_window_blocks + (is_full_hit ? 1 : 0);
-      const size_t win_start = (last_swa_valid_idx >= window_cover) ? last_swa_valid_idx - window_cover : 0;
+      // 查询已硬上限 match_token_num=check-1，无需为全命中回退额外扩展窗口。
+      const size_t win_start =
+          (last_swa_valid_idx >= sliding_window_blocks) ? last_swa_valid_idx - sliding_window_blocks : 0;
       for (size_t i = win_start; i < last_swa_valid_idx; ++i) {
         const size_t fa_id = request->cached_blocks[i]->block_id;
         request->swa_window_fa_block_ids.push_back(fa_id);
@@ -456,8 +458,13 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   size_t flexible_cache_len = 0;
   size_t flexible_cache_begin = 0;
   auto& block_token_num = cache_manager_config_.block_token_num;
+  // 硬上限：prefix+flexible 合计最多覆盖 seq-1，至少留 1 个 token 参与 Q/logits。
+  const size_t max_hit_end = token_ids.empty() ? 0 : (token_ids.size() - 1);
+  if (static_cast<size_t>(shared_token_num) >= max_hit_end) {
+    return;
+  }
   // Check if there are enough tokens for flexible caching
-  if (shared_token_num + min_flexible_cache_num + block_token_num * 2 > token_ids.size() || shared_token_num == 0) {
+  if (shared_token_num + min_flexible_cache_num + block_token_num * 2 > max_hit_end || shared_token_num == 0) {
     return;
   }
   auto it = cached_requests_.find(req_id);
@@ -473,6 +480,10 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
   if (shared_token_num > 0) {
     PrefixCachedBlock* last_block = cached_request->cached_blocks[shared_token_num / block_token_num - 1];
     QueryIncompleteBlock(last_block, token_ids, shared_token_num, prefix_append_block, prefix_append_len);
+    // prefix_append 也不能把命中推过 max_hit_end。
+    if (shared_token_num + prefix_append_len > max_hit_end) {
+      prefix_append_len = max_hit_end - shared_token_num;
+    }
   }
 
   // Update shared_token_num with the length of the prefix append block
@@ -480,7 +491,11 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
 
   // Iterate through the token_ids to find the best matching block for flexible caching
   for (uint32_t offset = new_shared_token_num; offset < new_shared_token_num + block_token_num; offset++) {
-    if (min_flexible_cache_num + offset > token_ids.size()) {
+    if (min_flexible_cache_num + offset > max_hit_end) {
+      break;
+    }
+    // 需要完整 block 才能查 flexible_cache_map，但命中终点仍受 max_hit_end 约束。
+    if (offset + block_token_num > token_ids.size()) {
       break;
     }
     PrefixCachedBlock* cached_block = nullptr;
@@ -511,7 +526,8 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
         }
         new_cached_blocks.push_back(cached_block);
         bool partial_match = false;
-        for (; offset + hit_num + block_token_num < token_ids.size(); hit_num += block_token_num) {
+        // 扩展时终点不超过 max_hit_end。
+        for (; offset + hit_num + block_token_num <= max_hit_end; hit_num += block_token_num) {
           std::memcpy(dst_token_ids.data(), token_ids.data() + offset + hit_num, block_token_num * sizeof(int));
           auto it = cached_block->children.find(dst_token_ids);
           if (it != cached_block->children.end()) {
@@ -531,6 +547,10 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
             new_cached_blocks.push_back(flexible_append_block);
           }
         }
+        // 截断到 max_hit_end：offset + hit_num 不得超过 max_hit_end。
+        if (offset + hit_num > max_hit_end) {
+          hit_num = max_hit_end - offset;
+        }
 
         if (hit_num >= min_flexible_cache_num && hit_num > flexible_cache_len) {
           cached_blocks = new_cached_blocks;
@@ -548,11 +568,16 @@ void PrefixCacheManager::UpdateFlexibleCache(int64_t req_id, const std::vector<i
 
   // Calculate the number of flexible cached tokens to resize the tasks vector
   size_t new_flexible_cached_tokens = flexible_cache_len + prefix_append_len;
+  // 硬上限：shared + flexible 合计不超过 max_hit_end。
+  if (shared_token_num + new_flexible_cached_tokens > max_hit_end) {
+    new_flexible_cached_tokens = max_hit_end - shared_token_num;
+  }
   flexible_cached_copy_tasks.resize(new_flexible_cached_tokens);
   size_t idx = 0;
   int src_shared_token_num = GetPrefixLen(prefix_append_block);
   // Copy the prefix append block tokens to the flexible cache tasks
-  for (; idx < prefix_append_len; idx++) {
+  const size_t capped_prefix_append_len = std::min(prefix_append_len, new_flexible_cached_tokens);
+  for (; idx < capped_prefix_append_len; idx++) {
     flexible_cached_copy_tasks[idx].Update(
         shared_token_num + idx, src_shared_token_num + idx,
         cached_request->cached_blocks[shared_token_num / block_token_num]->memory_block_id,

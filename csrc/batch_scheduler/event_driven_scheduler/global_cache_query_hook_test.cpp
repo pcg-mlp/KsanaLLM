@@ -310,21 +310,8 @@ TEST_F(QueryHookPdDisaggPrefillTest, LocalFullPrefixHitStaysContext) {
 }
 
 // ==================== Local full prefix-cache hit (standalone) ====================
-
-TEST_F(QueryHookTest, LocalFullPrefixHitFlipsToDecode) {
-  ON_CALL(*mock_cm_,
-          GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([](int64_t, const std::vector<int>&, size_t seq, size_t& shared_block_num,
-                        size_t& req_step_block_num, size_t& shared_token_num) {
-        shared_block_num = 2;
-        req_step_block_num = 1;
-        shared_token_num = seq;  // full hit on full sequence
-        return Status();
-      });
-  auto req = MakeHookTestRequest(900, 12);
-  hook_->Process({req}, context_);
-  EXPECT_EQ(req->infer_stage, InferStage::kDecode);  // non-pd_v2 full hit flips to decode
-}
+// LocalFullPrefixHitFlipsToDecode 已删除：prefix 查询硬上限 seq-1，不再 FullHit flip decode。
+// 覆盖见文件末尾 LocalPrefixHitUsesPartialWorkload。
 
 // ==================== pd_v2 Decode admission-gate (defer mode) ====================
 
@@ -472,6 +459,25 @@ TEST_F(QueryHookDeferTest, AllocFailureDefersInDeferMode) {
 TEST_F(QueryHookTest, OnRequestExitedNoopWhenNotDeferMode) {
   hook_->OnEvent(HookEvent(HookEventType::kRequestExited, 12345));  // defer_admission_on_block_full_ == false
   SUCCEED();
+}
+
+// ==================== Local prefix-cache hit (standalone) ====================
+
+TEST_F(QueryHookTest, LocalPrefixHitUsesPartialWorkload) {
+  ON_CALL(*mock_cm_,
+          GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([](int64_t, const std::vector<int>&, size_t seq, size_t& shared_block_num,
+                        size_t& req_step_block_num, size_t& shared_token_num) {
+        shared_block_num = 2;
+        req_step_block_num = 1;
+        shared_token_num = seq > 0 ? seq - 1 : 0;  // 硬上限 seq-1，不再 FullHit flip decode
+        return Status();
+      });
+  auto req = MakeHookTestRequest(910, 12);
+  hook_->Process({req}, context_);
+  EXPECT_EQ(req->infer_stage, InferStage::kContext);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 11u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_token_num, 1u);
 }
 
 }  // namespace

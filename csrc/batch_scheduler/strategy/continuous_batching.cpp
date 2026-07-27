@@ -12,7 +12,6 @@
 #include "fmt/format.h"
 
 #include "base_strategy.h"
-#include "batch_scheduler/full_cache_hit_handler.h"
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/request_finish_checker.h"
@@ -815,28 +814,21 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       if (status.OK()) {
         step_not_kv_cached_token_num += seq_token_num - shared_token_num;
 
-        if (shared_token_num >= seq_token_num) {
-          REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
-          // pd_v2 Prefill 全命中不能 flip kDecode (带 decode_targets 的请求必须留在 prefill
-          // 流程发 KV, 否则对端 decode 永久挂起)。与 EDS backend / hook / fetcher 分支对齐。
-          HandleFullPrefixCacheHit(req, planning_workload, seq_token_num,
-                                   /*flip_to_decode_stage=*/req->pd_v2.decode_targets.empty());
-        } else {
-          KLLM_LOG_SCHEDULER << "shared token not equal forwarding size, " << req->ScheduleStateToStr();
-          assert(seq_token_num > shared_token_num);
-          if (shared_token_num > 0) {
-            size_t planning_prefill_token_num =
-                planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
-            planning_workload.prefill_start_offset = shared_token_num;
-            planning_workload.prefill_token_num = planning_prefill_token_num - shared_token_num;
-            req->SetPlanningWorkload(planning_workload);
+        // Prefix/flexible 命中硬上限 seq-1，shared_token_num 恒小于 seq_token_num，不再走 FullHit 回退。
+        KLLM_LOG_SCHEDULER << "shared token not equal forwarding size, " << req->ScheduleStateToStr();
+        assert(seq_token_num > shared_token_num);
+        if (shared_token_num > 0) {
+          size_t planning_prefill_token_num =
+              planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
+          planning_workload.prefill_start_offset = shared_token_num;
+          planning_workload.prefill_token_num = planning_prefill_token_num - shared_token_num;
+          req->SetPlanningWorkload(planning_workload);
 
-            ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
-            size_t prefill_token_num = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
-            remaining_workload.prefill_start_offset = shared_token_num;
-            remaining_workload.prefill_token_num = prefill_token_num - shared_token_num;
-            req->SetRemainingWorkload(remaining_workload);
-          }
+          ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
+          size_t prefill_token_num = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
+          remaining_workload.prefill_start_offset = shared_token_num;
+          remaining_workload.prefill_token_num = prefill_token_num - shared_token_num;
+          req->SetRemainingWorkload(remaining_workload);
         }
         if (connector_config_.group_role == GroupRole::DECODE) {
           batch_state_->transfer_queue.emplace_back(req);

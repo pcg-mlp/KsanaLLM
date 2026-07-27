@@ -4,9 +4,9 @@
 
 #include "batch_scheduler/global_cache_fetcher.h"
 
+#include <algorithm>
 #include <climits>
 
-#include "batch_scheduler/full_cache_hit_handler.h"
 #include "configure/environment.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "profiler/reporter.h"
@@ -26,16 +26,6 @@ GlobalCacheFetcher::GlobalCacheFetcher(int device_count, std::shared_ptr<IpcFunc
 
 GlobalCacheFetcher::~GlobalCacheFetcher() { Stop(); }
 
-void GlobalCacheFetcher::ApplyPrefixStyleFullHitWorkload(const std::shared_ptr<InferRequest>& req,
-                                                         size_t seq_token_num) {
-  KLLM_CHECK_WITH_INFO(seq_token_num >= kStepGenerateTokenNum,
-                       FormatStr("req_id=%ld seq_token_num(%zu) < kStepGenerateTokenNum", req->req_id, seq_token_num));
-  ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
-  planning_workload.prefill_start_offset = seq_token_num - kStepGenerateTokenNum;
-  planning_workload.prefill_token_num = kStepGenerateTokenNum;
-  req->SetPlanningWorkload(planning_workload);
-  req->SetRemainingWorkload(planning_workload);
-}
 
 void GlobalCacheFetcher::Start() {
   terminated_ = false;
@@ -262,105 +252,96 @@ size_t GlobalCacheFetcher::GetAllDevicesContiguousPrefixLen(const std::vector<st
 
 void GlobalCacheFetcher::UpdateRequestWorkload(std::shared_ptr<InferRequest>& req, size_t new_cached_len,
                                                const std::vector<int>& cached_tokens, bool has_cached_tokens) {
-  // V1 decode 角色无论命中与否都要走完判定逻辑 (未全命中需要 reject); 其它角色无命中直接返回.
-  if (new_cached_len == 0 && role_ != "decode") return;
+  // V1 decode 角色无论命中与否都要走完判定逻辑 (未全覆盖+tokens 需要 reject); 其它角色无命中直接返回.
+  if (new_cached_len == 0 && role_ != "decode") {
+    return;
+  }
 
   size_t seq_token_num = req->GetPlanningSequenceLen();
-  // pd_v2_decode 在 fetcher 里像 standalone 一样处理: full hit flip kDecode (后续
-  // PdV2DecodeHook 入口的 infer_stage=kDecode 旁路会跳过 peer Prefill); partial hit
-  // 走 partial 分支但不 reject (peer Prefill 通过 RDMA 兜底).
+  // pd_v2_decode 像 standalone：无 reject，partial 由 peer Prefill 兜底.
   bool is_decode_role = (role_ == "decode");
   bool is_pd_v2_prefill = (role_ == "pd_v2_prefill");
-  bool full_hit = (new_cached_len >= seq_token_num);
+  // 远端已覆盖完整 prompt（用于 V1 decode 准入 / tokens_ready 短路）；本地算 Q 的命中仍硬上限 seq-1。
+  bool remote_covers_full_seq = (new_cached_len >= seq_token_num);
   bool tokens_ready = has_cached_tokens && !cached_tokens.empty();
+  const size_t max_cached_len = (seq_token_num > 0) ? (seq_token_num - 1) : 0;
+  size_t usable_cached_len = std::min(new_cached_len, max_cached_len);
+  // SWA：prefill_start_offset 须按 block 下取整（与旧 HandleFullPrefixCacheHit 一致），否则窗口错位。
+  if (!req->swa_kv_cache_blocks.empty() && req->block_token_num > 0) {
+    usable_cached_len = (usable_cached_len / req->block_token_num) * req->block_token_num;
+  }
 
-  KLLM_LOG_DEBUG << "GlobalCacheFetcher::UpdateRequestWorkload: req_id=" << req->req_id
+  KLLM_LOG_DEBUG << "UpdateRequestWorkload: req_id=" << req->req_id
                  << ", role=" << (role_.empty() ? "standalone" : role_) << ", new_cached_len=" << new_cached_len
-                 << ", seq_token_num=" << seq_token_num << ", full_hit=" << full_hit
-                 << ", tokens_ready=" << tokens_ready << ", cached_token_count=" << cached_tokens.size()
+                 << ", usable_cached_len=" << usable_cached_len << ", seq_token_num=" << seq_token_num
+                 << ", remote_covers_full_seq=" << remote_covers_full_seq << ", tokens_ready=" << tokens_ready
+                 << ", cached_token_count=" << cached_tokens.size()
                  << ", infer_stage=" << static_cast<int>(req->infer_stage);
 
-  // V1 decode 角色: 必须 KV 全命中 + token(s) 就绪, 否则拒绝 (V1 Decode 节点无法 prefill).
+  // V1 decode 角色: 必须 KV 覆盖满 seq + token(s) 就绪, 否则拒绝 (V1 Decode 节点无法 prefill).
   // pd_v2_decode 用独立 role 字符串走过这条守卫 (peer Prefill 通过 RDMA 兜底 partial hit).
-  if (is_decode_role && !(full_hit && tokens_ready)) {
-    KLLM_LOG_WARNING << "GlobalCacheFetcher: req_id=" << req->req_id << " decode role reject: full_hit=" << full_hit
-                     << ", tokens_ready=" << tokens_ready << ", cached=" << new_cached_len << ", seq=" << seq_token_num;
+  if (is_decode_role && !(remote_covers_full_seq && tokens_ready)) {
+    KLLM_LOG_WARNING << "decode role reject: remote_covers_full_seq=" << remote_covers_full_seq
+                     << ", tokens_ready=" << tokens_ready << ", cached=" << new_cached_len << ", seq=" << seq_token_num
+                     << ", req_id=" << req->req_id;
     REPORT_COUNTER("decode_role_reject_req_num", static_cast<size_t>(1));
 
     req->finish_status =
         Status(RET_RUNTIME_FAILED, "Decode node failed to fetch complete KV cache and tokens from global cache.");
     req->finished = true;
-    StampOnce(req->finish_time_us);
     req->Notify();
     return;
   }
 
-  if (new_cached_len == 0) return;
-
-  if (full_hit) {
-    if (is_pd_v2_prefill) {
-      // pd_v2 PD-disagg Prefill: 与本地 prefix cache 全命中行为对齐 — 保持 kContext, 保留
-      // 最后 1 token 走 prefill (忽略 cached_tokens 短路, 让 EDS 路由到 prefilling_reqs
-      // 而不是 decoding_reqs). pd_v2 Prefill 节点本身不能 flip 到 decode.
-      KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << req->req_id
-                         << " full cache hit on pd_v2 Prefill, retain last " << kStepGenerateTokenNum
-                         << " token(s) for prefill (cached=" << new_cached_len << ", seq=" << seq_token_num << ")";
-      REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
-      ApplyPrefixStyleFullHitWorkload(req, seq_token_num);
-      return;
-    }
-
-    // V1 standalone / V1 prefill / V1 decode (已通过上面的命中判定): flip kDecode.
-    KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << req->req_id << " full cache hit (cached=" << new_cached_len
-                       << ", seq=" << seq_token_num << ", has_cached_tokens=" << has_cached_tokens
-                       << ", cached_token_count=" << cached_tokens.size() << "), switch to decode";
+  // 远端已算完 prompt 并带出 generated tokens：本地不再算 Q，直接 decode 短路。
+  // pd_v2 Prefill 不能 flip kDecode，仍走下方 seq-1 partial。
+  if (remote_covers_full_seq && tokens_ready && !is_pd_v2_prefill) {
+    KLLM_LOG_SCHEDULER << "req_id=" << req->req_id
+                       << " remote full cover with cached_tokens(count=" << cached_tokens.size()
+                       << "), switch to decode";
     REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
+    REPORT_COUNTER("first_token_cache_hit_req_num", static_cast<size_t>(1));
 
     req->infer_stage = InferStage::kDecode;
+    req->AppendCachedTokens(cached_tokens);
+    req->NotifyStep();
 
-    if (tokens_ready) {
-      REPORT_COUNTER("first_token_cache_hit_req_num", static_cast<size_t>(1));
-
-      req->AppendCachedTokens(cached_tokens);
-      req->NotifyStep();
-
-      KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << req->req_id
-                         << " cached_tokens(count=" << cached_tokens.size() << ") appended, notify step";
-
-      ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
-      planning_workload.prefill_start_offset = seq_token_num;
-      planning_workload.prefill_token_num = static_cast<int>(cached_tokens.size());
-      req->SetPlanningWorkload(planning_workload);
-      req->SetRemainingWorkload(planning_workload);
-
-      KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req->req_id
-                     << " workload set (tokens_ready): prefill_start_offset=" << planning_workload.prefill_start_offset
-                     << ", prefill_token_num=" << planning_workload.prefill_token_num;
-    } else {
-      ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
-      HandleFullPrefixCacheHit(req, planning_workload, seq_token_num);
-
-      KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req->req_id
-                     << " workload set (no tokens): prefill_start_offset=" << planning_workload.prefill_start_offset
-                     << ", prefill_token_num=" << planning_workload.prefill_token_num;
-    }
-  } else {
     ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
-    size_t old_total = planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
-    planning_workload.prefill_start_offset = new_cached_len;
-    planning_workload.prefill_token_num = old_total - new_cached_len;
+    planning_workload.prefill_start_offset = seq_token_num;
+    planning_workload.prefill_token_num = static_cast<int>(cached_tokens.size());
     req->SetPlanningWorkload(planning_workload);
-
-    ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
-    size_t remaining_total = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
-    remaining_workload.prefill_start_offset = new_cached_len;
-    remaining_workload.prefill_token_num = remaining_total - new_cached_len;
-    req->SetRemainingWorkload(remaining_workload);
-
-    KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req->req_id
-                   << " workload set (partial hit): prefill_start_offset=" << planning_workload.prefill_start_offset
-                   << ", prefill_token_num=" << planning_workload.prefill_token_num;
+    req->SetRemainingWorkload(planning_workload);
+    return;
   }
+  if (remote_covers_full_seq && tokens_ready && is_pd_v2_prefill) {
+    // pd_v2_prefill 自行算 Q/写 KV，不消费远端 generated tokens；丢弃是刻意行为。
+    KLLM_LOG_DEBUG << "req_id=" << req->req_id << " pd_v2_prefill: discarding " << cached_tokens.size()
+                   << " remote tokens, will prefill locally from offset " << usable_cached_len;
+  }
+
+  // 命中硬上限 seq-1：无 tokens 的「假全命中」与 partial 统一走此路径，不再 FullHit 回退。
+  if (usable_cached_len == 0) {
+    return;
+  }
+  if (remote_covers_full_seq) {
+    REPORT_COUNTER("full_prompt_matched_req_num", static_cast<size_t>(1));
+  }
+
+  ScheduleTaskWorkload planning_workload = req->GetPlanningWorkload();
+  size_t old_total = planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
+  planning_workload.prefill_start_offset = usable_cached_len;
+  planning_workload.prefill_token_num = old_total - usable_cached_len;
+  req->SetPlanningWorkload(planning_workload);
+
+  ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
+  size_t remaining_total = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
+  remaining_workload.prefill_start_offset = usable_cached_len;
+  remaining_workload.prefill_token_num = remaining_total - usable_cached_len;
+  req->SetRemainingWorkload(remaining_workload);
+
+  KLLM_LOG_DEBUG << "workload set (capped hit): req_id=" << req->req_id
+                 << ", prefill_start_offset=" << planning_workload.prefill_start_offset
+                 << ", prefill_token_num=" << planning_workload.prefill_token_num;
 }
 
 std::vector<std::shared_ptr<InferRequest>> GlobalCacheFetcher::TakeCompletedRequests() {

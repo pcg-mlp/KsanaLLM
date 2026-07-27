@@ -5,9 +5,6 @@
 
 #include "batch_scheduler/event_driven_scheduler/global_cache_query_hook.h"
 
-#include <algorithm>
-
-#include "batch_scheduler/full_cache_hit_handler.h"
 #include "configure/environment.h"
 #include "profiler/reporter.h"
 #include "utils/logger.h"
@@ -221,33 +218,23 @@ bool GlobalCacheQueryHook::PrepareRequest(InferRequestPtr& req, std::shared_ptr<
     KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: local cache match for req_id=" << req->req_id
                        << ", shared_token_num=" << shared_token_num << ", seq_token_num=" << seq_token_num;
 
-    if (shared_token_num >= seq_token_num) {
-      // pd_v2 Prefill 节点 (role="pd_v2_prefill") 全命中时绝不能 flip kDecode: 该节点只负责
-      // 计算 prefill, 一旦 req->infer_stage 被置 kDecode, prefilling 调度路由器就再也不会
-      // 调度/launch 它, req 永久滞留 → 对端 decode 永远等不到 PREFILL_RETURN (见 project
-      // memory: prefill tail-hang)。与 GlobalCacheFetcher::UpdateRequestWorkload 的
-      // is_pd_v2_prefill 分支 (ApplyPrefixStyleFullHitWorkload) 行为对齐。
-      const bool is_pd_v2_prefill = (fetcher_->GetRole() == "pd_v2_prefill");
-      HandleFullPrefixCacheHit(req, planning_workload, seq_token_num, /*flip_to_decode_stage=*/!is_pd_v2_prefill);
-    } else {
-      // 部分命中：调整 offset
-      size_t planning_prefill_token_num = planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
-      KLLM_CHECK_WITH_INFO(planning_prefill_token_num >= shared_token_num,
-                           FormatStr("req_id=%ld planning_total(%zu) < shared(%zu)", req->req_id,
-                                     planning_prefill_token_num, shared_token_num));
-      planning_workload.prefill_start_offset = shared_token_num;
-      planning_workload.prefill_token_num = planning_prefill_token_num - shared_token_num;
-      req->SetPlanningWorkload(planning_workload);
+    // Prefix 查询硬上限 seq-1，shared_token_num 恒小于 seq_token_num，不再走 FullHit 回退。
+    size_t planning_prefill_token_num = planning_workload.prefill_token_num + planning_workload.prefill_start_offset;
+    KLLM_CHECK_WITH_INFO(planning_prefill_token_num >= shared_token_num,
+                         FormatStr("req_id=%ld planning_total(%zu) < shared(%zu)", req->req_id,
+                                   planning_prefill_token_num, shared_token_num));
+    planning_workload.prefill_start_offset = shared_token_num;
+    planning_workload.prefill_token_num = planning_prefill_token_num - shared_token_num;
+    req->SetPlanningWorkload(planning_workload);
 
-      ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
-      size_t prefill_token_num = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
-      KLLM_CHECK_WITH_INFO(
-          prefill_token_num >= shared_token_num,
-          FormatStr("req_id=%ld remaining_total(%zu) < shared(%zu)", req->req_id, prefill_token_num, shared_token_num));
-      remaining_workload.prefill_start_offset = shared_token_num;
-      remaining_workload.prefill_token_num = prefill_token_num - shared_token_num;
-      req->SetRemainingWorkload(remaining_workload);
-    }
+    ScheduleTaskWorkload remaining_workload = req->GetRemainingWorkload();
+    size_t prefill_token_num = remaining_workload.prefill_token_num + remaining_workload.prefill_start_offset;
+    KLLM_CHECK_WITH_INFO(
+        prefill_token_num >= shared_token_num,
+        FormatStr("req_id=%ld remaining_total(%zu) < shared(%zu)", req->req_id, prefill_token_num, shared_token_num));
+    remaining_workload.prefill_start_offset = shared_token_num;
+    remaining_workload.prefill_token_num = prefill_token_num - shared_token_num;
+    req->SetRemainingWorkload(remaining_workload);
   }
 
   // 注意：FlexibleCache 更新由 backend 的 ProcessPrefillingQueue 统一完成，

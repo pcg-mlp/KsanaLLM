@@ -41,9 +41,9 @@ class GlobalCacheFetcher {
  public:
   // role:
   //   ""               standalone (无 PD 分离)
-  //   "prefill"        V1 PD Prefill 节点 (max_new_tokens=1 + 标准全命中 flip)
-  //   "decode"         V1 PD Decode 节点 (未全命中 + tokens 则 reject)
-  //   "pd_v2_prefill"  pd_v2 Prefill (全命中保留 1 token, 不 flip kDecode)
+  //   "prefill"        V1 PD Prefill 节点 (max_new_tokens=1)
+  //   "decode"         V1 PD Decode 节点 (未覆盖满 seq + tokens 则 reject)
+  //   "pd_v2_prefill"  pd_v2 Prefill (命中硬上限 seq-1，不 flip kDecode)
   //   "pd_v2_decode"   pd_v2 Decode (无 reject, 部分命中由 peer Prefill 兜底)
   GlobalCacheFetcher(int device_count, std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper, const std::string& role = "");
   ~GlobalCacheFetcher();
@@ -70,11 +70,10 @@ class GlobalCacheFetcher {
   bool IsAsync() const;
 
   // PD role ("" / "prefill" / "decode" / "pd_v2_prefill" / "pd_v2_decode")。
-  // 供 GlobalCacheQueryHook 在全命中路径上判定是否允许 flip kDecode。
   const std::string& GetRole() const { return role_; }
 
   // 请求完成时的回调类型：参数为 (req_id, success)
-  // success=false 表示请求被拒绝（如 V1 decode 角色未全命中）
+  // success=false 表示请求被拒绝（如 V1 decode 角色未覆盖满 seq + tokens）
   using CompletionCallback = std::function<void(int64_t req_id, bool success)>;
 
   // 设置请求完成时的回调（由 GlobalCacheQueryHook 调用，用于驱动事件驱动调度器）
@@ -114,8 +113,6 @@ class GlobalCacheFetcher {
   std::vector<std::shared_ptr<InferRequest>> completed_requests_;
   std::vector<std::shared_ptr<InferRequest>> rejected_requests_;
 
-  // Match GlobalCacheQueryHook / ContinuousBatchingBackend on full local prefix hit.
-  static void ApplyPrefixStyleFullHitWorkload(const std::shared_ptr<InferRequest>& req, size_t seq_token_num);
 
   int device_count_ = 1;
   std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper_;
