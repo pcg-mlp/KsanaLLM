@@ -25,10 +25,14 @@ class ContinuousBatchingBackend : public ScheduleBackendInterface {
   void Stop() override;
 
  private:
+  // Collects DPs whose Decode candidates could not be scheduled this step (batch
+  // step_sched_finish style). Prefill for those DPs is skipped in the same Schedule().
   void ProcessDecodingQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
+                            std::unordered_set<size_t>& blocked_prefill_dps,
                             std::vector<ScheduleBackendEvent>& events,
                             std::unordered_set<uint64_t>& emitted_event_keys);
   void ProcessPrefillingQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
+                              const std::unordered_set<size_t>& blocked_prefill_dps,
                               std::vector<ScheduleBackendEvent>& events,
                               std::unordered_set<uint64_t>& emitted_event_keys);
 

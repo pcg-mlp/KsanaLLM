@@ -80,8 +80,9 @@ void ContinuousBatchingBackend::Schedule(const ScheduleContext& context,
   std::unordered_set<uint64_t> emitted_event_keys;
   // pd_v2: scan preprocessing_reqs for client abort (defer stop when awaiting prefill).
   ScanAbortedPreprocessingReqs(context, planning_batch, events, emitted_event_keys);
-  ProcessDecodingQueue(context, planning_batch, events, emitted_event_keys);
-  ProcessPrefillingQueue(context, planning_batch, events, emitted_event_keys);
+  std::unordered_set<size_t> blocked_prefill_dps;
+  ProcessDecodingQueue(context, planning_batch, blocked_prefill_dps, events, emitted_event_keys);
+  ProcessPrefillingQueue(context, planning_batch, blocked_prefill_dps, events, emitted_event_keys);
 }
 
 void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id,
@@ -168,12 +169,16 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
 void ContinuousBatchingBackend::Stop() { stopped_.store(true); }
 
 void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
+                                                     std::unordered_set<size_t>& blocked_prefill_dps,
                                                      std::vector<ScheduleBackendEvent>& events,
                                                      std::unordered_set<uint64_t>& emitted_event_keys) {
+  blocked_prefill_dps.clear();
   // NOTE:
   // - For decoding stage, allocation failure is handled in a dp-level manner.
   // - If *all* allocatable requests in a dp fail to allocate blocks and no running requests in the dp, it indicates OOM
   //   pressure. The scheduler should trigger a recompute event to release memory.
+  // - Keep split_fuse enabled: reclaim KV via recompute, and skip Prefill on blocked DPs
+  //   (same role as BatchScheduler step_sched_finish) instead of disabling fuse.
   const std::vector<WorkloadQuota> dp_scheduling_order =
       workload_balancer_->GetDpSchedulingOrderAndQuota(planning_batch, context, InferStage::kDecode);
 
@@ -290,11 +295,15 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
 
   // 同一 dp 的所有 quota 都处理完后再触发 recompute/swapout，避免跳过 round-2 fallback。
   // 优先 recompute 已持有 KV block 的 prefilling 请求，否则选择一个 decoding 请求。
+  // Do not disable split_fuse: keep chunking and skip Prefill on unresolved Decode DPs.
   for (size_t dp_idx : dp_first_seen_order) {
     const DecodeDpAggregate& agg = agg_by_dp.at(dp_idx);
     if (!agg.has_schedulable_req || agg.has_scheduled_req) {
       continue;
     }
+    // Decode candidates existed but none were scheduled: block Prefill on this DP for
+    // the rest of this Schedule() (Apply may free KV later; next PP / retry can proceed).
+    blocked_prefill_dps.insert(dp_idx);
     const DpScheduleState& dp_state = context.GetDpScheduleState(context.GetCurrentMultiBatchId(), dp_idx);
     DpScheduleOpsInPlan& in_plan_ops = context.GetMutableInPlanScheduleOps(context.GetCurrentMultiBatchId(), dp_idx);
     auto& dp_batch = planning_batch.dp_batches[dp_idx];
@@ -323,9 +332,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       }
       if (!prefill_req->kv_cache_blocks.empty()) {
         recompute_candidate = prefill_req;
-        batch_scheduler_config_.split_fuse_token_num = 0;
-        KLLM_LOG_INFO << "Split fuse disabled due to allocation failure. Recompute prefilling request req_id="
-                      << prefill_req->req_id << ", dp_idx=" << dp_idx;
+        KLLM_LOG_INFO << "Recompute prefilling request for blocked Decode. req_id=" << prefill_req->req_id
+                      << ", dp_idx=" << dp_idx
+                      << ", kv_cache_blocks=" << prefill_req->kv_cache_blocks.size();
         break;
       }
     }
@@ -333,6 +342,8 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       recompute_candidate = agg.decoding_recompute_candidate;
     }
     if (recompute_candidate == nullptr) {
+      KLLM_LOG_SCHEDULER << "Decode blocked with no recompute victim; skip Prefill on this DP. dp_idx=" << dp_idx
+                         << ", multi_batch_id=" << context.GetCurrentMultiBatchId();
       continue;
     }
     // The kv_from_remote branch is handled downstream in HandleRecomputeRequest.
@@ -343,6 +354,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
 }
 
 void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& context, PlanningBatch& planning_batch,
+                                                       const std::unordered_set<size_t>& blocked_prefill_dps,
                                                        std::vector<ScheduleBackendEvent>& events,
                                                        std::unordered_set<uint64_t>& emitted_event_keys) {
   const std::vector<WorkloadQuota> dp_scheduling_order =
@@ -369,6 +381,13 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
   for (const WorkloadQuota& quota : dp_scheduling_order) {
     const size_t dp_idx = quota.dp_idx;
     KLLM_CHECK(dp_idx < planning_batch.dp_batches.size());
+    // Mirror BatchScheduler step_sched_finish: do not admit Prefill on DPs whose
+    // Decode could not schedule any candidate this step.
+    if (blocked_prefill_dps.count(dp_idx) != 0) {
+      KLLM_LOG_SCHEDULER << "Skip Prefill on Decode-blocked DP. dp_idx=" << dp_idx
+                         << ", multi_batch_id=" << context.GetCurrentMultiBatchId();
+      continue;
+    }
     const DpScheduleState& dp_state = context.GetDpScheduleState(context.GetCurrentMultiBatchId(), dp_idx);
 
     auto& dp_batch = planning_batch.dp_batches[dp_idx];
@@ -454,7 +473,7 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
                            << ", adjust current planning workload " << planning_workload.ToString();
         is_last_prefill_step = false;
         planning_workload.prefill_token_num -= (req_step_token_num - batch_scheduler_config_.split_fuse_token_num);
-        req_step_token_num = planning_workload.prefill_token_num;
+        req_step_token_num = batch_scheduler_config_.split_fuse_token_num;
         req->SetPlanningWorkload(planning_workload);
         seq_token_num = req->GetPlanningSequenceLen();
       }
@@ -472,8 +491,10 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       // per-dp quota 检查用 req_step_token_num (本步实际新算的 token): 它与 dp_batch
       // .running_step_token_num 累加的 per-step query 同单位, 也不会让 prefix 命中的请求被
       // per-dp 份额误拒 (见 IsRequestAcceptable 的 dp 空豁免)。
+      // 首步全局 max_step 检查也按 uncached query (req_step_token_num) 计费，避免 prefix
+      // cache 命中时整条 seq 反复撞 max_step_token_num 被拒 (影响 IsRequestAcceptable)。
       const size_t req_total_token_num =
-          is_split_fuse_continuation ? req_step_token_num : seq_token_num;
+          (is_first_prefill_step || is_split_fuse_continuation) ? req_step_token_num : seq_token_num;
       const bool request_acceptable =
           workload_balancer_->IsRequestAcceptable(req, planning_batch, quota, req_total_token_num, req_step_token_num);
       if (!request_acceptable) {
@@ -553,8 +574,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
   }
 
   // 同一 dp 的所有 quota 都处理完后再触发 recompute，避免跳过 round-2 large_quota fallback。
-  // 若该 dp 有可调度 prefill 请求但分配全部失败，且没有运行中的请求，则 recompute 一个
-  // chunk-prefilled 请求释放内存。
+  // 若该 dp 有可调度 prefill 请求但分配全部失败，且没有运行中的请求，则保留 KV 最多的
+  // Prefill（survivor），优先 recompute 其他持有 KV 的 Prefill；若仅 survivor 有 KV，则
+  // self-recompute survivor 破局（仍不关 fuse），避免 free=0 时永久 wait。
   for (size_t dp_idx : dp_first_seen_order) {
     const PrefillDpAggregate& agg = agg_by_dp.at(dp_idx);
     if (!agg.has_schedulable_req || agg.has_scheduled_req) {
@@ -567,23 +589,50 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         !in_plan_ops.recompute_req_ids.empty()) {
       continue;
     }
-    std::shared_ptr<InferRequest> recompute_candidate = nullptr;
+    // Prefer keeping the Prefill with the most KV progress (survivor), and only
+    // recompute another holder. Recomputing the first non-empty request in queue
+    // order causes round-robin churn among partial Prefills under split-fuse.
+    std::shared_ptr<InferRequest> survivor = nullptr;
+    size_t survivor_blocks = 0;
     for (const auto& prefill_req : dp_state.prefilling_reqs) {
-      if (prefill_req == nullptr || prefill_req->IsStopped()) {
+      if (prefill_req == nullptr || prefill_req->IsStopped() || prefill_req->kv_cache_blocks.empty()) {
         continue;
       }
-      if (!prefill_req->kv_cache_blocks.empty()) {
-        recompute_candidate = prefill_req;
-        batch_scheduler_config_.split_fuse_token_num = 0;
-        KLLM_LOG_INFO << "Split fuse disabled due to allocation failure. Recompute prefilling request req_id="
-                      << prefill_req->req_id << ", dp_idx=" << dp_idx;
-        break;
+      const size_t blocks = prefill_req->kv_cache_blocks.size();
+      if (survivor == nullptr || blocks > survivor_blocks ||
+          (blocks == survivor_blocks && prefill_req->req_id < survivor->req_id)) {
+        survivor = prefill_req;
+        survivor_blocks = blocks;
       }
     }
-    if (recompute_candidate == nullptr) {
+    if (survivor == nullptr) {
       continue;
     }
+
+    std::shared_ptr<InferRequest> recompute_candidate = nullptr;
+    for (const auto& prefill_req : dp_state.prefilling_reqs) {
+      if (prefill_req == nullptr || prefill_req->IsStopped() || prefill_req->kv_cache_blocks.empty()) {
+        continue;
+      }
+      if (prefill_req->req_id == survivor->req_id) {
+        continue;
+      }
+      recompute_candidate = prefill_req;
+      break;
+    }
+    const bool self_recompute = (recompute_candidate == nullptr);
+    if (self_recompute) {
+      // Last resort: free the only KV holder so the step can make progress.
+      recompute_candidate = survivor;
+    }
+
     // Recompute only. Swapout is not supported for chunk-prefilled requests.
+    KLLM_LOG_INFO << "Recompute prefilling request for blocked Prefill. req_id=" << recompute_candidate->req_id
+                  << ", survivor_req_id=" << survivor->req_id
+                  << ", self_recompute=" << (self_recompute ? "true" : "false")
+                  << ", recompute_blocks=" << recompute_candidate->kv_cache_blocks.size()
+                  << ", survivor_blocks=" << survivor_blocks << ", dp_idx=" << dp_idx
+                  << ", multi_batch_id=" << context.GetCurrentMultiBatchId();
     EmitEventOnce(ScheduleBackendEventType::kRecomputeRequest, dp_idx, recompute_candidate, agg.last_failed_status,
                   events, emitted_event_keys);
     in_plan_ops.recompute_req_ids.insert(recompute_candidate->req_id);
