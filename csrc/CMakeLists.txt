@@ -145,3 +145,13 @@ target_link_libraries(ksana_llm_libs INTERFACE
 )
 
 add_subdirectory(torch_op)
+
+# LLM_kernels 远程缓存 upload：挂到 torch_serving，使 make torch_serving 也会上传
+if(LLM_KERNELS_REMOTE_CACHE_UPLOAD_ENABLED AND TARGET llm_kernels_remote_cache_upload AND TARGET torch_serving)
+  add_dependencies(torch_serving llm_kernels_remote_cache_upload)
+endif()
+
+# HIT 替换：先 stub 出 .a，再 apply_prebuilt 覆盖；链接必须等覆盖完成
+if(TARGET llm_kernels_cache_apply_prebuilt AND TARGET torch_serving)
+  add_dependencies(torch_serving llm_kernels_cache_apply_prebuilt)
+endif()
