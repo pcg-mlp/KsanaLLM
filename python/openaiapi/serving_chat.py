@@ -164,6 +164,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         converter = RequestConverter(self.config, self.tokenizer)
         
+        # NOTE(jinxcwu) 序列化有warning
         request_dict = request.model_dump(by_alias=True)
         
         # Handle Extra body

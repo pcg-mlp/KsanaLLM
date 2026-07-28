@@ -110,13 +110,20 @@ __attribute__((unused)) static std::string GetLinearComputeBackendString(LinearC
  * - CUTLASS_MOE_BACKEND:
  *     DeepSeek-only backend that implements a group-GEMM strategy (using CUTLASS).
  *     Only supports the w4afp8 weight format.
+ * - HUMMING_W4A16_MOE_BACKEND:
+ *     DeepSeek-only Humming backend for FP4 expert weights dequantized to FP16/BF16
+ *     activation (W4A16). Uses fused-MoE JIT-compiled kernels with EPLB-aware scheduling.
+ * - HUMMING_W4A8_MOE_BACKEND:
+ *     DeepSeek-only Humming backend for FP4 expert weights dequantized to FP8 activation
+ *     (W4A8). Same fused-MoE JIT path as W4A16, but with FP8 intermediate activation.
  */
 enum MoeComputeBackend {
   DEFAULT_MOE_BACKEND,
   CUTLASS_MOE_BACKEND,
   MARLIN_MOE_BACKEND,
   TRITON_MOE_BACKEND,
-  HUMMING_MOE_BACKEND
+  HUMMING_W4A16_MOE_BACKEND,
+  HUMMING_W4A8_MOE_BACKEND
 };
 
 __attribute__((unused)) static std::string GetMoeComputeBackendString(MoeComputeBackend moe_compute_backend) {
@@ -125,7 +132,8 @@ __attribute__((unused)) static std::string GetMoeComputeBackendString(MoeCompute
       {CUTLASS_MOE_BACKEND, "cutlass_moe"},
       {MARLIN_MOE_BACKEND, "marlin_moe"},
       {TRITON_MOE_BACKEND, "triton_moe"},
-      {HUMMING_MOE_BACKEND, "humming_moe"}};
+      {HUMMING_W4A16_MOE_BACKEND, "humming_w4a16_moe"},
+      {HUMMING_W4A8_MOE_BACKEND, "humming_w4a8_moe"}};
   return moe_compute_backend_map.count(moe_compute_backend) ? moe_compute_backend_map.at(moe_compute_backend)
                                                             : "Unknown";
 }

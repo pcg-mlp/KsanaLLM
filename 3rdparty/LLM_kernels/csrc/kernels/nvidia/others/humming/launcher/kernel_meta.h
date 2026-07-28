@@ -9,6 +9,7 @@
 #include <cuda.h>
 #include <climits>
 #include <cstdint>
+#include <sstream>
 #include <string>
 
 namespace llm_kernels {
@@ -51,6 +52,19 @@ struct KernelMeta {
   int64_t min_shape_m = 1;
   int64_t max_shape_m = INT64_MAX;
 };
+
+// Human-readable summary of a KernelMeta, matching the format used by the test
+// driver's PrintSelectedKernels table: "8x128x256 S3 C1 [SK]".
+// Appended " [SK]" only when use_stream_k is true. Intended for logs and test
+// output; not used on any hot path.
+inline std::string FormatKernelMeta(const KernelMeta& m) {
+  std::ostringstream oss;
+  oss << m.block_m << "x" << m.block_n << "x" << m.block_k << " S" << m.num_stages << " C" << m.num_ctas_per_sm;
+  if (m.use_stream_k) {
+    oss << " [SK]";
+  }
+  return oss.str();
+}
 
 }  // namespace humming
 }  // namespace nvidia

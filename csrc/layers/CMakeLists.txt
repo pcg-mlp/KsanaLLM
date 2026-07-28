@@ -85,7 +85,7 @@ cpp_test(misc_layers_test
   DEPS ${layers_test_common_DEPS})
 
 cpp_test(fp4_moe_layers_test
-  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/fp4_moe_layer_test.cpp
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/tests/fp4_moe_layer_test.cpp
   DEPS ${layers_test_common_DEPS})
 
 cpp_test(topk_layers_test

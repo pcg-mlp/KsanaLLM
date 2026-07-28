@@ -153,6 +153,11 @@ class TritonWrapper {
   void InvokeHummingFusedSiluAndMulFp8Quant(const T* input, float* scale, void* output, int inter_size, int num_tokens,
                                             float swiglu_limit, cudaStream_t stream);
 
+  // EP variant: passes topk_ids for -1 skip (invalid expert rows).
+  template <typename T>
+  void InvokeHummingFusedSiluAndMulFp8QuantEp(const T* input, float* scale, void* output, const int32_t* topk_ids,
+                                              int inter_size, int num_tokens, float swiglu_limit, cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);

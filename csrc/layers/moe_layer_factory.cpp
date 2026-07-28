@@ -9,9 +9,10 @@
 #include "layers/cutlass_moe_layer.h"
 #include "layers/fp8_matmul_layer.h"
 #include "layers/fp8_moe_layer.h"
-#include "layers/humming_fp4_moe_layer.h"
+#include "layers/humming_fused_fp4_a16_moe_layer.h"
+#include "layers/humming_fused_fp4_a8_moe_layer.h"
 #include "layers/machete_matmul_layer.h"
-#include "layers/marlin_fp4_moe_layer.h"
+#include "layers/marlin_fused_fp4_a16_moe_layer.h"
 #include "layers/marlin_matmul_layer.h"
 #include "layers/marlin_moe_layer.h"
 #include "layers/matmul_layer.h"
@@ -83,15 +84,21 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
 
   // for deepseek v4 FP4 MoE experts — Marlin W4A16 path
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<MarlinFp4MoeLayer>;
+      &MoeLayerFactory::BuildLayer<MarlinFusedFp4A16MoeLayer>;
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<MarlinFp4MoeLayer>;
+      &MoeLayerFactory::BuildLayer<MarlinFusedFp4A16MoeLayer>;
 
-  // for deepseek v4 FP4 MoE experts — Humming W4A16/W4A8 path
-  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFp4MoeLayer>;
-  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFp4MoeLayer>;
+  // for deepseek v4 FP4 MoE experts — Humming W4A16 path
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_W4A16_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFusedFp4A16MoeLayer>;
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_W4A16_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFusedFp4A16MoeLayer>;
+
+  // for deepseek v4 FP4 MoE experts — Humming W4A8 path
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_W4A8_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFusedFp4A8MoeLayer>;
+  builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_W4A8_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<HummingFusedFp4A8MoeLayer>;
 #  endif
 #endif
 }
@@ -238,9 +245,12 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   if (enable_moe_fp4) {
     if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4Marlin) {
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND);
-    } else if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A16 ||
-               runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A8) {
-      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, HUMMING_MOE_BACKEND);
+    } else if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A16) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ,
+                         HUMMING_W4A16_MOE_BACKEND);
+    } else if (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A8) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ,
+                         HUMMING_W4A8_MOE_BACKEND);
     }
     return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);
   }

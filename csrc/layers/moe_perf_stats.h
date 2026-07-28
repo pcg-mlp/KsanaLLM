@@ -27,7 +27,7 @@ namespace ksana_llm {
 // hierarchy.  It is only included in *_test.cpp and in the concrete MoE layer
 // headers that opt into profiling support.
 //
-// Fields marked "humming-only" are left at 0/nullptr by MarlinFp4MoeLayer.
+// Fields marked "humming-only" are left at 0/nullptr by MarlinFusedFp4A16MoeLayer.
 // ===========================================================================
 struct MoePerfStats {
   // Aggregated times in milliseconds for the profiling window since last Reset().
@@ -37,11 +37,11 @@ struct MoePerfStats {
 
   // Humming-only detailed non-GEMM breakdown (0 for marlin).
   // align = GEMM1 align + GEMM2 re-align; quant = GEMM1 quant + GEMM2 quant.
-  float gating_time_ms = 0.f;   // TopK softplus-sqrt
-  float align_time_ms = 0.f;    // MoE align (GEMM1 + GEMM2)
-  float quant_time_ms = 0.f;    // FP8 activation quant (W4A8 only; 0 for W4A16)
-  float silu_time_ms = 0.f;     // SiluAndMul
-  float mulsum_time_ms = 0.f;   // MoeFusedMulSum
+  float gating_time_ms = 0.f;  // TopK softplus-sqrt
+  float align_time_ms = 0.f;   // MoE align (GEMM1 + GEMM2)
+  float quant_time_ms = 0.f;   // FP8 activation quant (W4A8 only; 0 for W4A16)
+  float silu_time_ms = 0.f;    // SiluAndMul
+  float mulsum_time_ms = 0.f;  // MoeFusedMulSum
 
   // Humming-only: last selected JIT kernel meta (nullptr for marlin).
   // Set once per ForwardT call (same meta across all benchmark iterations for
@@ -49,11 +49,11 @@ struct MoePerfStats {
   const llm_kernels::nvidia::humming::KernelMeta* last_gemm1_meta = nullptr;
   const llm_kernels::nvidia::humming::KernelMeta* last_gemm2_meta = nullptr;
 
-  // FLOP counts for the current (cfg, num_tokens) combination, filled by the
-  // benchmark driver so TFLOPS can be printed directly.
-  double gemm1_flops = 0.;
-  double gemm2_flops = 0.;
-  double total_flops = 0.;
+  // Last Forward's moe_block_size for GEMM1/GEMM2 align (set by layer, read by test).
+  // Humming: sel1.block_m / sel2.block_m. Marlin: SelectMoeBlockSize (same for both).
+  // 0 when perf_stats_ is null (production) — layers only write when do_profile is true.
+  int32_t last_moe_block_size_1 = 0;
+  int32_t last_moe_block_size_2 = 0;
 
   void Reset() {
     gemm1_time_ms = 0.f;
@@ -66,14 +66,9 @@ struct MoePerfStats {
     mulsum_time_ms = 0.f;
     last_gemm1_meta = nullptr;
     last_gemm2_meta = nullptr;
-    gemm1_flops = 0.;
-    gemm2_flops = 0.;
-    total_flops = 0.;
+    last_moe_block_size_1 = 0;
+    last_moe_block_size_2 = 0;
   }
-
-  double Gemm1TFLOPS() const { return gemm1_time_ms > 0.f ? (gemm1_flops / (gemm1_time_ms / 1e3)) / 1e12 : 0.; }
-  double Gemm2TFLOPS() const { return gemm2_time_ms > 0.f ? (gemm2_flops / (gemm2_time_ms / 1e3)) / 1e12 : 0.; }
-  double TotalTFLOPS() const { return total_time_ms > 0.f ? (total_flops / (total_time_ms / 1e3)) / 1e12 : 0.; }
 };
 
 }  // namespace ksana_llm

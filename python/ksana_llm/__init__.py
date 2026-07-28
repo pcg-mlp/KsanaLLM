@@ -21,6 +21,26 @@ try:
 except importlib.metadata.PackageNotFoundError:
     pass
 
+# Ensure torch is imported (lazily loaded) before libtorch_serving.so. Under
+# `python -m ksana_llm.serving_server`, runpy imports this package BEFORE the
+# serving_server.py body runs, so torch hasn't been imported yet. Loading the
+# extension with RTLD_NOW then fails resolving libtorch_cuda.so symbols (e.g.
+# ncclCommResume) against an unmatched system libnccl. Importing torch first
+# lets libtorch_cuda.so load with lazy binding, sidestepping the issue.
+# pre_configure_cuda() must run before torch (it reads --config_file from
+# sys.argv to set CUDA_VISIBLE_DEVICES for embedded-encoder mode; no-op when
+# no config_file is present, so other entry points are unaffected).
+# ksana_encoder lives at top level in source-tree dev (python/ksana_encoder)
+# but as a ksana_llm subpackage in wheel installs (ksana_llm/ksana_encoder);
+# try both so this works in either layout.
+# TODO(jinxcwu) 当前源码树排布与whl打包排查差异很大,需要统一修改
+try:
+    from ksana_llm.ksana_encoder.utils import pre_configure_cuda
+except ImportError:
+    from ksana_encoder.utils import pre_configure_cuda
+pre_configure_cuda()
+import torch
+
 # Load library path.
 sys.path.append(os.path.abspath("./lib"))
 

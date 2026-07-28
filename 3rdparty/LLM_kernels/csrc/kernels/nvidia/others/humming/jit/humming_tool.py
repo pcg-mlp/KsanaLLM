@@ -364,6 +364,10 @@ def _apply_override(base: Dict, stream_k_override=None, block_n_override=None,
         result["use_stream_k"] = stream_k_override
     if block_n_override is not None:
         result["block_n"] = block_n_override
+        # warp_shape[1] must divide block_shape[1]; cap it to block_n_override
+        # so configs like base block_n=256 → override 128 don't end up with
+        # warp_shape_n=256 > block_n=128 (invalid, silently dropped by validator).
+        result["warp_shape"][1] = min(block_n_override, base["warp_shape"][1])
     if stages_override is not None:
         result["num_stages"] = stages_override
     if block_k_override is not None:
@@ -464,25 +468,50 @@ def _inject_gemm2_configs(heuristic_configs: list, size_n: int, size_k: int,
         c["warp_shape"][0] = bm
         return c
 
+    # Choose block_k so the WGMMA pipeline has enough K-iterations to fill:
+    # S3 needs (stages+1)=4 K-iterations.  The heuristic block_k=256 leaves only
+    # 2 iterations for K=512 and (after _fix_block_k_divisibility) 3 for K=384,
+    # starving the pipeline and making small-block_m kernels artificially slow.
+    # Pick the largest power-of-2 block_k in {256,128,64} with K/block_k >= 4
+    # and K % block_k == 0.
+    #
+    # Dtype cap: _apply_override sets warp_shape[2] = block_k_override, and
+    # wgmma.cuh:60 requires kSwizzleSizeK >= WarpShape::K.  For BF16 (kBits=16)
+    # kSwizzleSizeK = 64 (block_k<1024) → warp_k must be <= 64, so block_k=128
+    # produces an uncompilable kernel (silently dropped by the JIT, leaving no
+    # small-block_m kernel at runtime → "No humming kernel with block_m=..."
+    # assertion).  FP8 (kBits=8) has kSwizzleSizeK=128 and tolerates warp_k=128.
+    max_bk_for_dtype = 64 if compute_dtype == 0 else 128
+    optimal_bk = None
+    for bk in [256, 128, 64]:
+        if bk > max_bk_for_dtype:
+            continue
+        if size_k % bk == 0 and size_k // bk >= 4:
+            optimal_bk = bk
+            break
+
     injected = []
     # Small M (1-384): block_m=8 and 64
     for bm in [8, 64]:
         c = _apply_override(_get_base_for_bm(bm), stream_k_override=True,
-                            block_n_override=256, stages_override=3)
+                            block_n_override=256, stages_override=3,
+                            block_k_override=optimal_bk)
         c["min_shape_m"] = 1
         c["max_shape_m"] = 384
         injected.append(c)
     # Medium M (385-1536): block_m=16, 32, and 64
     for bm in [16, 32, 64]:
         c = _apply_override(_get_base_for_bm(bm), stream_k_override=True,
-                            block_n_override=256, stages_override=3)
+                            block_n_override=256, stages_override=3,
+                            block_k_override=optimal_bk)
         c["min_shape_m"] = 385
         c["max_shape_m"] = 1536
         injected.append(c)
     # Large-medium M (1537-3072): block_m=48 and 64
     for bm in [48, 64]:
         c = _apply_override(_get_base_for_bm(bm), stream_k_override=True,
-                            block_n_override=256, stages_override=3)
+                            block_n_override=256, stages_override=3,
+                            block_k_override=optimal_bk)
         c["min_shape_m"] = 1537
         c["max_shape_m"] = 3072
         injected.append(c)
@@ -508,8 +537,18 @@ def _generate_variants(heuristic_configs: list, size_n: int, size_k: int,
             variants.append(_apply_override(base, stream_k_override=True))
         # 2. block_n variant (try 256 instead of heuristic 128)
         variants.append(_apply_override(base, block_n_override=256))
-        # 3. stages variants (try 3, 4, 5 as alternatives)
-        for stages in [3, 4, 5]:
+        # 2b. block_n=128 variant (try 128 instead of heuristic 256)
+        # Generates a block_n=128 variant from EVERY base (incl. large block_m
+        # bases with heuristic block_n=256).  Dedup skips duplicates; small
+        # block_m bases already at block_n=128 dedup out.  Large block_m bases
+        # get the new variant, doubling N-parallelism (e.g. N=768: 3→6 N-blocks).
+        # The warp_shape[1] fix in _apply_override keeps these configs valid.
+        variants.append(_apply_override(base, block_n_override=128))
+        # 3. stages variants (try 2, 3, 4, 5 as alternatives)
+        # R4: stages=2 added for GEMM2 small-K pipeline fill/drain optimization.
+        # S2 has fill/drain (S-1)/K_BLOCKS = 1/16 = 6.3% (vs S5 25%), but only 1 stage
+        # overlap — w4a8 transform_b may block compute. High risk, profiler decides.
+        for stages in [2, 3, 4, 5]:
             variants.append(_apply_override(base, stages_override=stages))
         # 4. block_k variant (try 64 for FP8 with K>64)
         if compute_dtype == 1 and size_k > 64:
@@ -521,6 +560,30 @@ def _generate_variants(heuristic_configs: list, size_n: int, size_k: int,
         variants.append(_apply_override(base, stages_override=4, block_n_override=256))
         # 6b. stages=5 + num_ctas_per_sm=2
         variants.append(_apply_override(base, stages_override=5, num_ctas_per_sm_override=2))
+        # 6c. stages=3 + block_k=64 (optimal pipeline for small-K GEMM2)
+        if compute_dtype == 1 and size_k > 64 and size_k % 64 == 0:
+            variants.append(_apply_override(base, stages_override=3, block_k_override=64))
+        # R2: block_k=64 + S4/S5 explicit combos (6c only covers S3).
+        # block_k=64 doubles K_BLOCKS (halving fill/drain) but also doubles TMA
+        # load count. S4/S5 + block_k=64 may find a sweet spot: deeper pipeline
+        # overlap with fewer fill/drain iterations than S3+block_k=128.
+        if compute_dtype == 1 and size_k > 64 and size_k % 64 == 0:
+            variants.append(_apply_override(base, stages_override=4, block_k_override=64))
+            variants.append(_apply_override(base, stages_override=5, block_k_override=64))
+        # 6d. block_n=256 + block_k=128 (small block_m, GEMM1+GEMM2)
+        # opt14: dropped size_n>=4096 guard so GEMM1 (N=768/1024) also gets
+        # the 64x256x128 tile from block_m=64 bases (heuristic block_n=128,
+        # block_k=256). M-util analysis shows block_m=64 (100% M-util) should
+        # outperform block_m=72/152 (56-79% M-util) at large tokens.
+        if size_k >= 128 and size_k % 128 == 0:
+            variants.append(_apply_override(base, block_n_override=256, block_k_override=128))
+        # 6e. stages=3 + block_k=128 (pipeline fill for small-K GEMM2)
+        if compute_dtype == 1 and size_k >= 128 and size_k % 128 == 0:
+            variants.append(_apply_override(base, stages_override=3, block_k_override=128))
+        # 6f. stages=3 + num_ctas_per_sm=2 (S3 pipeline + C2 occupancy for small-K GEMM2)
+        variants.append(_apply_override(base, stages_override=3, num_ctas_per_sm_override=2))
+        # 6g. stages=3 + num_ctas_per_sm=3 (S3 pipeline + C3 occupancy)
+        variants.append(_apply_override(base, stages_override=3, num_ctas_per_sm_override=3))
 
         # Variants must NOT inherit the base heuristic's M-range.
         # The heuristic range reflects the base config's optimality window, which
@@ -533,14 +596,79 @@ def _generate_variants(heuristic_configs: list, size_n: int, size_k: int,
 
         # Dedup variants against existing configs (by final config values)
         for v in variants:
-            if len(all_configs) >= hard_cap:
-                break
             identity = _config_identity(v)
             if identity not in seen_identities:
                 seen_identities.add(identity)
                 all_configs.append(v)
-        if len(all_configs) >= hard_cap:
-            break
+
+    # ── 4.4: Inject large block_m candidates (200/224/256) ───────────────
+    # After 4.1 (EP -1 modeling), Flash_EP4 large-token (16384/32768) regressed
+    # 8-11% because the heuristic caps block_m at 176 (get_config1), so the
+    # profiler picked block_m=112 for those buckets—smaller tile_m saved padding
+    # but lost WGMMA efficiency.  Injecting larger tile_m candidates lets
+    # profiling pick the better tile for big M.  block_m must be a multiple of 8
+    # (200/224/256 all are).  smem feasibility (H200 cap 227KB) is enforced
+    # later by _validate_config + JIT compile; over-budget combos are dropped.
+    # Only inject when the heuristic already reaches a large block_m (>=152),
+    # i.e. the problem shape warrants big tiles; small-N/small-M shapes that
+    # never produce large block_m are left untouched.
+    large_base = max(heuristic_configs, key=lambda c: c["block_m"])
+    if large_base["block_m"] >= 152:
+        # (target_block_m, block_n, num_stages, num_ctas_per_sm)
+        # block_n=256 only feasible for bm=200 S3 (~223KB); bm=224/256 need
+        # block_n=128 for smem headroom.  S5 dropped where estimate exceeds cap.
+        large_bm_combos = [
+            (200, 256, 3, 1),
+            (200, 128, 3, 1), (200, 128, 4, 1), (200, 128, 5, 1),
+            (224, 128, 3, 1), (224, 128, 4, 1),
+            (256, 128, 3, 1), (256, 128, 4, 1),
+            # R5: C2 variants (bn=128 for smem headroom).  C2 doubles per-CTA
+            # smem; only S3 with bn=128 fits under the 227KB cap:
+            #   200x128xS3 C2 ≈ 198KB ✓; 224x128xS3 C2 ≈ 216KB ✓ (just under);
+            #   200x128xS4 C2 ≈ 264KB ✗ (dropped by _validate_config, kept as
+            #     explicit probe so the validator's verdict is recorded).
+            (200, 128, 3, 2),  # R5: 200 S3 C2 (bn=128) for big-token occupancy
+            (200, 128, 4, 2),  # R5: 200 S4 C2 probe (likely smem-infeasible)
+            (224, 128, 3, 2),  # R5: 224 S3 C2 (bn=128, ~216KB just under cap)
+        ]
+        for target_bm, bn, stages, ctas in large_bm_combos:
+            bm_base = dict(large_base)
+            bm_base["warp_shape"] = list(large_base["warp_shape"])
+            bm_base["block_m"] = target_bm
+            bm_base["warp_shape"][0] = target_bm
+            v = _apply_override(bm_base, block_n_override=bn,
+                                stages_override=stages,
+                                num_ctas_per_sm_override=ctas)
+            v["min_shape_m"] = 1
+            v["max_shape_m"] = 2**63 - 1  # INT64_MAX
+            identity = _config_identity(v)
+            if identity not in seen_identities:
+                seen_identities.add(identity)
+                all_configs.append(v)
+
+    # ── R1: Inject missing intermediate block_m values ──────────────────
+    # The heuristic only generates block_m values that are argmin of
+    # calc_num_block_list for some shape_m. This leaves gaps (e.g. block_m=16
+    # for Pro_EP8 GEMM2) that may be optimal at specific EP token ranges.
+    # Inject from the largest heuristic base, overriding block_m only.
+    missing_bm_values = [16, 24, 32, 48, 64, 96, 128]
+    for target_bm in missing_bm_values:
+        if target_bm >= large_base["block_m"]:
+            continue  # already covered by heuristic or 4.4 injection
+        bm_base = dict(large_base)
+        bm_base["warp_shape"] = list(large_base["warp_shape"])
+        bm_base["block_m"] = target_bm
+        bm_base["warp_shape"][0] = target_bm
+        # Try a few stage/cta combos for each block_m
+        for stages, ctas in [(3, 1), (3, 2), (4, 1), (5, 1)]:
+            v = _apply_override(bm_base, stages_override=stages,
+                                num_ctas_per_sm_override=ctas)
+            v["min_shape_m"] = 1
+            v["max_shape_m"] = 2**63 - 1
+            identity = _config_identity(v)
+            if identity not in seen_identities:
+                seen_identities.add(identity)
+                all_configs.append(v)
 
     # Return only the variants (not the heuristic configs that are already in the input)
     return all_configs[len(heuristic_configs):]
@@ -588,6 +716,11 @@ def _cmd_query_configs(args):
         heuristic_configs = fixed_heuristic
 
         # 3. Variant generation (migrated from C++)
+        # Opt 10: hard_cap truncation removed entirely.  Previously the cap
+        # (72 or 96) was filled by small-block_m bases' variants before large
+        # block_m bases got their C2/C3 variants generated, silently dropping
+        # smem-feasible C2 configs for block_m 72-96.  Dedup alone now controls
+        # the candidate count.
         extend_configs = _generate_variants(
             heuristic_configs, args.size_n, args.size_k, args.compute_dtype)
 

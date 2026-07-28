@@ -16,8 +16,10 @@ option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
 if(WITH_CUDA)
   project(LLMKernels LANGUAGES CXX CUDA)
-  # Use 16 threads to accelerate CUDA compilation
-  set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} --threads 16)
+  set(KLLM_CUDA_THREADS 2 CACHE STRING "nvcc --threads N per .cu file (0=disable, 1=low-disk, 2=default, 4+=fast)")
+  if(KLLM_CUDA_THREADS GREATER 0)
+    add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:--threads=${KLLM_CUDA_THREADS}>)
+  endif()
 elseif(WITH_ACL)
   set(ASCEND_PRODUCT_TYPE "ascend910")
   set(ASCEND_CORE_TYPE "AiCore")

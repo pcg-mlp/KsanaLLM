@@ -16,6 +16,7 @@
 #  include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "csrc/utils/search_status.h"
+#  include "layers/humming_fp4_moe_jit_cache.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"
@@ -27,9 +28,9 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class HummingFp4MoeLayer : public BaseMoeLayer {
+class HummingFusedFp4A16MoeLayer : public BaseMoeLayer {
  public:
-  virtual ~HummingFp4MoeLayer() {
+  virtual ~HummingFusedFp4A16MoeLayer() {
     for (auto& e : events_) {
       if (e) cudaEventDestroy(e);
     }
@@ -51,12 +52,26 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
                          const LayerExecContext& exec_ctx = {}) override;
 
   // Attach a profiling stats output (nullptr = disabled, default).
-  // Non-virtual — HummingFp4MoeLayer owns this API directly.
+  // Non-virtual — HummingFusedFp4A16MoeLayer owns this API directly.
   void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
+
+  // Test-only: when true, Forward records profiling events but defers the
+  // cudaEventSynchronize + ElapsedMs read to a single FlushPerfStats() call after
+  // the benchmark loop. Eliminates the per-Forward sync bubble. Production callers
+  // (perf_stats_==nullptr) are unaffected; non-test callers that attach perf_stats_
+  // without setting this keep the legacy per-Forward flush.
+  void SetDeferPerfFlush(bool defer) { defer_perf_flush_ = defer; }
+
+  // Read the last Forward's event markers and scale by `iterations` to populate
+  // perf_stats_ as an accumulated sum (matching the legacy contract). No-op if
+  // perf_stats_ is null or defer_perf_flush_ is false. Called by the test driver
+  // after its own cudaEventSynchronize(end).
+  void FlushPerfStats(size_t iterations);
 
   // Expose the JIT compiler's kernel table for test/inspection (nullptr if no compiler).
   // The table contains all JIT-compiled kernel variants for all shapes/dtypes compiled
-  // by any HummingFp4MoeLayer instance (jit_compiler_ is static, shared across instances).
+  // by any HummingFusedFp4A16MoeLayer instance (compiler is the process-global singleton
+  // from humming_fp4_moe_jit_cache.h, shared across instances).
   static const std::vector<llm_kernels::nvidia::humming::KernelMeta>* GetJitKernelTable();
 
  private:
@@ -136,27 +151,23 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
     return ms;
   }
 
-  // Invoke MoE align block size kernel (encapsulates >=224 and EP branching).
+  // Invoke MoE align block size kernel (EP/TP template branching).
   void InvokeAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids, int32_t* expert_ids, int32_t* num_tokens_post_pad,
                             int32_t* cumsum, int32_t max_num_tokens_padded, size_t numel, int32_t moe_block_size,
-                            int32_t top_k, bool use_expert_parallel, int32_t expert_para_size, int rank,
-                            cudaStream_t stream);
+                            bool use_expert_parallel, cudaStream_t stream);
 
-  // Fill the fill_info buffer for MoE align (experts < 224 path only).
-  void InvokeFillInfo(int32_t* fused_id_buffer, void* fill_info_device, int id_offset, int max_num_tokens_padded,
-                      int numel, cudaStream_t stream);
-
-  // Quantize activations to FP8 (W4A8 path). Returns true if quantization was performed.
-  // On success, out_a and out_a_scale point to the internal FP8 activation/scale buffers.
-  template <typename T>
-  bool QuantizeToFp8(const void* input, int size_k, int num_tokens, cudaStream_t stream, const void*& out_a,
-                     const void*& out_a_scale);
+  // Invoke merged MoE align for two block_m values in one launch (EP/TP template branching).
+  void InvokeMergedAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids1, int32_t* expert_ids1,
+                                  int32_t* num_tokens_post_pad1, int32_t* sorted_ids2, int32_t* expert_ids2,
+                                  int32_t* num_tokens_post_pad2, int32_t max_num_tokens_padded1,
+                                  int32_t max_num_tokens_padded2, int32_t moe_block_size1, int32_t moe_block_size2,
+                                  size_t numel, int32_t* cumsum1, int32_t* cumsum2, bool use_expert_parallel,
+                                  cudaStream_t stream);
 
   // Prepared dummy weights for profiling (generated once per GEMM shape, reused across buckets).
   struct ProfWeights {
-    torch::Tensor b;             // WGMMA-repacked weight [E, N, K/2] uint8
-    torch::Tensor b_scale;       // processed scales [E, K/32, N] uint8
-    torch::Tensor global_scale;  // [E] float (W4A8 only; empty for W4A16)
+    torch::Tensor b;        // WGMMA-repacked weight [E, N, K/2] uint8
+    torch::Tensor b_scale;  // processed scales [E, K/32, N] uint8
   };
 
   // Per-block_m align buffer set for profiling: sorted_ids, expert_ids, num_tokens_post_pad.
@@ -169,7 +180,7 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   };
 
   // Generate dummy FP4 weights + scales and process them through the same
-  // pipeline as test (repack_weight_wgmma + process_scales / process_mxfp4_w4a8_weight).
+  // pipeline as test (repack_weight_wgmma + process_scales).
   // Called once per GEMM shape, reused across all buckets.
   ProfWeights PrepareDummyWeights(int64_t size_n, int64_t size_k, int64_t num_experts, cudaStream_t stream);
 
@@ -178,7 +189,14 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   // values, then topk → random uniform expert assignment). At small M this naturally
   // produces sparse/skewed load (most experts get 0 tokens), at large M it converges
   // to uniform. Fixed seed ensures reproducibility across runs.
-  static torch::Tensor MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts);
+  //
+  // EP -1 modeling: when ep_size > 1, each pair is set to -1 (non-local expert) with
+  // probability (ep_size-1)/ep_size, mimicking the per-rank topk_ids after expert_map
+  // remap in Forward (InvokeExpertMapInplace). Combined with use_expert_parallel=true
+  // in InvokeAlignBlockSize, this makes the profile's num_tokens_post_pad match the
+  // real Forward workload instead of overestimating it by ~ep_size x. ep_size=1 (TP)
+  // is unchanged: 0% -1, fully local distribution (identical to the original behavior).
+  static torch::Tensor MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts, int64_t ep_size = 1);
 
   // Profile a single GEMM shape at a given size_m with pre-prepared dummy weights.
   // Tests all matching candidate kernels, returns the fastest KernelMeta*.
@@ -220,6 +238,7 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   // When 0, profiling is disabled and only heuristic kernels are compiled.
   size_t profile_iters_ = 15;
   size_t warmup_iters_ = 5;
+  size_t profile_m_thresh1_ = 512;  // rep_m above this → reduced iters (2/3 of profile_iters)
 
   // --- Workspace layout (all carved from a single contiguous workspace_buffer_) ---
   // Layout order:
@@ -227,8 +246,7 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
   //   [align_gemm1] [align_gemm2]
   //   [cache.gemm1_output / cache.gemm2_output (shared)] [cache.silu_output]
   //   [kernel.locks] [kernel.tma_descriptors]
-  //   [fp8.activation] [fp8.scales]
-  //   ← softplus_sqrt slice from tail (overlaps fp8, time-safe: gating runs before ProcessTokens) →
+  //   ← softplus_sqrt slice from tail (time-safe: gating runs before ProcessTokens) →
 
   struct GatingWorkspace {
     void* topk_weights = nullptr;  // [M*topk] float
@@ -258,30 +276,18 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
     size_t tma_size = 0;
   };
 
-  struct Fp8QuantWorkspace {
-    void* activation = nullptr;  // [max(M*K, M*topk*inter)] FP8 uint8 (W4A8 only)
-    float* scales = nullptr;     // [M*topk] float per-token scale (W4A8 only)
-    size_t activation_size = 0;
-    size_t scale_size = 0;
-  };
-
   struct HummingWorkspace {
     GatingWorkspace gating;
     AlignWorkspace align_gemm1;
     AlignWorkspace align_gemm2;
     ActivationCache cache;
     HummingKernelWorkspace kernel;
-    Fp8QuantWorkspace fp8;
     size_t softplus_sqrt_size = 0;  // aligned size for tail slice (set in GetWorkspaceSizeT)
     size_t total_size = 0;          // total workspace bytes
   };
 
   HummingWorkspace ws_;
   size_t softplus_sqrt_workspace_size_ = 0;  // raw size from topk layer (set in InitT)
-
-  // W4A8 per-expert global_scale (device memory, allocated during weight loading)
-  float* w1_global_scale_ = nullptr;  // [num_experts] float
-  float* w2_global_scale_ = nullptr;  // [num_experts] float
 
   // EP / EPLB
   size_t global_expert_para_size_;
@@ -300,16 +306,14 @@ class HummingFp4MoeLayer : public BaseMoeLayer {
 
   std::shared_ptr<ExpertParallelManager> expert_parallel_manager_;
 
-  // JIT compiler — shared across all HummingFp4MoeLayer instances
-  static std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> jit_compiler_;
-  static std::mutex jit_mutex_;
-
   // GPU events for per-phase timing (18 events, created lazily, reused across forwards).
   // Indexed by Evt enum; see EnsureProfilingEvents().
   std::vector<cudaEvent_t> events_;
 
   // Profiling output (nullptr = disabled)
   MoePerfStats* perf_stats_ = nullptr;
+
+  bool defer_perf_flush_ = false;
 };
 #endif
 

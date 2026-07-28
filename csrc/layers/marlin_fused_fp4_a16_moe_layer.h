@@ -19,7 +19,7 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class MarlinFp4MoeLayer : public BaseMoeLayer {
+class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
@@ -37,7 +37,7 @@ class MarlinFp4MoeLayer : public BaseMoeLayer {
                          const LayerExecContext& exec_ctx = {}) override;
 
   // Attach a profiling stats output (nullptr = disabled, default).
-  // Non-virtual — MarlinFp4MoeLayer owns this API directly.
+  // Non-virtual — MarlinFusedFp4A16MoeLayer owns this API directly.
   void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
 
  private:

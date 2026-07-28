@@ -36,14 +36,14 @@ void InvokeMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* ex
                              const int32_t expert_para_size, const int32_t block_size, const size_t numel,
                              const int32_t rank, const cudaStream_t& stream);
 
-template <typename T>
+template <typename T, bool UseExpertParallel = false>
 void InvokeSglMoeAlignBlockSize(T* topk_ids, int32_t* sorted_token_ids, int32_t* expert_ids,
                                 int32_t* total_tokens_post_pad, const int32_t max_num_tokens_padded,
                                 const int32_t num_experts, const int32_t block_size, const size_t numel,
                                 int32_t* cumsum, const cudaStream_t& stream);
 
 // Merged align for two block_m values (saves one topk_ids read + one align kernel launch)
-template <typename T>
+template <typename T, bool UseExpertParallel = false>
 void InvokeSglMoeAlignBlockSizeMerged(T* topk_ids, int32_t* sorted_token_ids1, int32_t* expert_ids1,
                                       int32_t* total_tokens_post_pad1, int32_t* sorted_token_ids2, int32_t* expert_ids2,
                                       int32_t* total_tokens_post_pad2, const int32_t max_num_tokens_padded1,

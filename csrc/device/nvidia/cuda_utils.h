@@ -11,7 +11,9 @@
 #include <cuda_runtime.h>
 #include <nvtx3/nvToolsExt.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -174,6 +176,46 @@ float MeasureCudaExecutionTime(Func&& func, cudaStream_t stream, int warmups = 1
   CUDA_CHECK(cudaEventDestroy(end));
 
   return cost_time / iterations;
+}
+
+// Per-iteration timing: record events around each iteration, take min.
+// More stable than mean when iter count is low — a single anomalous
+// iteration no longer skews the result. Optional L2 cache flush between
+// iterations for cache-cold measurements.
+template <typename Func>
+float MeasureCudaMinExecutionTime(Func&& func, cudaStream_t stream, int warmups = 10, int iterations = 100,
+                                  bool flush_l2 = true) {
+  L2Flush l2_flush;
+
+  for (int i = 0; i < warmups; ++i) {
+    func();
+  }
+
+  std::vector<cudaEvent_t> timing_events(iterations + 1);
+  for (auto& e : timing_events) {
+    CUDA_CHECK(cudaEventCreate(&e));
+  }
+  CUDA_CHECK(cudaEventRecord(timing_events[0], stream));
+  for (int i = 0; i < iterations; ++i) {
+    if (flush_l2) {
+      l2_flush.Flush(stream);
+    }
+    func();
+    CUDA_CHECK(cudaEventRecord(timing_events[i + 1], stream));
+  }
+  CUDA_CHECK(cudaEventSynchronize(timing_events[iterations]));
+
+  float latency_ms = std::numeric_limits<float>::max();
+  for (int i = 0; i < iterations; ++i) {
+    float ms = 0.f;
+    CUDA_CHECK(cudaEventElapsedTime(&ms, timing_events[i], timing_events[i + 1]));
+    latency_ms = std::min(latency_ms, ms);
+  }
+  for (auto& e : timing_events) {
+    CUDA_CHECK(cudaEventDestroy(e));
+  }
+
+  return latency_ms;
 }
 
 #ifdef ENABLE_MULTICAST

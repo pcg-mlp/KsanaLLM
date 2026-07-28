@@ -196,3 +196,8 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         ${DEEPGEMM_SOURCE_DIR}/third-party/fmt/include
         CACHE INTERNAL "DeepGEMM include directories")
 endif()
+
+set(KLLM_CUDA_THREADS 2 CACHE STRING "nvcc --threads N per .cu file (0=disable, 1=low-disk, 2=default, 4+=fast)")
+if(KLLM_CUDA_THREADS GREATER 0)
+  add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:--threads=${KLLM_CUDA_THREADS}>)
+endif()

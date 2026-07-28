@@ -101,6 +101,7 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["mhc_head_big_fuse_kernel"] = {"hidden_size", "rms_eps", "mhc_pre_eps", "n_splits", "mhc_mult"};
   kernel_key_map_["_quant_tensor_kernel"] = {"N"};
   kernel_key_map_["_silu_and_mul_quant_kernel"] = {"N"};
+  kernel_key_map_["_silu_and_mul_quant_ep_kernel"] = {"N"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -470,6 +471,37 @@ INVOKE_HUMMING_FUSED_SILU_MUL_QUANT(float);
 INVOKE_HUMMING_FUSED_SILU_MUL_QUANT(half);
 INVOKE_HUMMING_FUSED_SILU_MUL_QUANT(__nv_bfloat16);
 #undef INVOKE_HUMMING_FUSED_SILU_MUL_QUANT
+
+template <typename T>
+void TritonWrapper::InvokeHummingFusedSiluAndMulFp8QuantEp(const T* input, float* scale, void* output,
+                                                           const int32_t* topk_ids, int inter_size, int num_tokens,
+                                                           float swiglu_limit, cudaStream_t stream) {
+  std::string kernel_name = "_silu_and_mul_quant_ep_kernel";
+
+  int stride_x = inter_size * 2;
+  int num_blocks = num_tokens;
+
+  void* x_ptr = const_cast<T*>(input);
+  void* xq_ptr = output;
+  void* scale_ptr = scale;
+  void* topk_ids_ptr = const_cast<int32_t*>(topk_ids);
+
+  void* args[] = {TRITON_ARGS(&topk_ids_ptr, &x_ptr, &xq_ptr, &scale_ptr, &stride_x, &num_blocks)};
+
+  std::unordered_map<std::string, std::string> map = {{"N", ConvertToString(inter_size)}};
+
+  size_t grid_x = static_cast<size_t>(num_tokens);
+  InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
+}
+
+#define INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(T)                                                          \
+  template void TritonWrapper::InvokeHummingFusedSiluAndMulFp8QuantEp<T>(                                  \
+      const T* input, float* scale, void* output, const int32_t* topk_ids, int inter_size, int num_tokens, \
+      float swiglu_limit, cudaStream_t stream)
+INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(float);
+INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(half);
+INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(__nv_bfloat16);
+#undef INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP
 
 template <typename T>
 void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale,

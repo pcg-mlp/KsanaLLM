@@ -1,7 +1,7 @@
 /* Copyright 2026 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "layers/marlin_fp4_moe_layer.h"
+#include "layers/marlin_fused_fp4_a16_moe_layer.h"
 
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/others/sglang/main/marlin_moe_wna16/marlin_moe_wna16_wrapper.h"
@@ -36,15 +36,15 @@ static inline int64_t SelectMoeBlockSize(size_t num_tokens, size_t topk, size_t 
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
-Status MarlinFp4MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                               std::shared_ptr<Context> context, int rank) {
+Status MarlinFusedFp4A16MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                       std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
 template <typename T>
-Status MarlinFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                std::shared_ptr<Context> context, int rank) {
+Status MarlinFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                        std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
@@ -131,18 +131,19 @@ Status MarlinFp4MoeLayer::InitT(const std::vector<std::any>& parameters, const R
         global_expert_para_size_, global_expert_para_rank, expert_num_per_node_ * global_expert_para_size_);
   }
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] MarlinFp4MoeLayer Init", rank_);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] MarlinFusedFp4A16MoeLayer Init", rank_);
   return Status();
 }
 
-void MarlinFp4MoeLayer::SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
+void MarlinFusedFp4A16MoeLayer::SetExpertParallelManager(
+    std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
   expert_parallel_manager_ = expert_parallel_manager;
 }
 
-size_t MarlinFp4MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
+size_t MarlinFusedFp4A16MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 template <typename T>
-size_t MarlinFp4MoeLayer::GetWorkspaceSizeT() {
+size_t MarlinFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
   size_t m = std::min(MARLIN_FP4_MOE_CHUNK_SIZE, max_token_num_);
 
   topk_weights_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(float));
@@ -190,19 +191,19 @@ size_t MarlinFp4MoeLayer::GetWorkspaceSizeT() {
   max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size + cache13_size +
                   intermediate_cache2_size + marlin_workspace_size + c_tmp_size + softplus_sqrt_ws_aligned;
 
-  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MarlinFp4MoeLayer", rank_, max_ws_bytes_);
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MarlinFusedFp4A16MoeLayer", rank_, max_ws_bytes_);
   return max_ws_bytes_;
 }
 
-Status MarlinFp4MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+Status MarlinFusedFp4A16MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   // Marlin FP4 kernel does not require profiling/preprocessing
   return Status();
 }
 
 template <typename T>
-Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                   const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                   const Tensor* e_score_bias, const Tensor* input_ids) {
+Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                           const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                           const Tensor* e_score_bias, const Tensor* input_ids) {
   // Lazy creation of profiling CUDA events (created once, reused across forwards)
   bool do_profile = (perf_stats_ != nullptr);
   if (do_profile) {
@@ -273,6 +274,10 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
 
       // Dynamically select block size based on token density per expert (matches sglang heuristic)
       int64_t moe_block_size = SelectMoeBlockSize(tokens_in_chunk, expert_topk_, expert_num_per_node_);
+      if (do_profile) {
+        perf_stats_->last_moe_block_size_1 = static_cast<int32_t>(moe_block_size);
+        perf_stats_->last_moe_block_size_2 = static_cast<int32_t>(moe_block_size);
+      }
 
       int64_t numel = static_cast<int64_t>(tokens_in_chunk * expert_topk_);
       int64_t max_num_tokens_padded = numel + expert_num_per_node_ * (moe_block_size - 1);
@@ -504,14 +509,15 @@ Status MarlinFp4MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* ga
 }
 
 template <typename T>
-Status MarlinFp4MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
-                                             const Tensor* eplb_map, Tensor* workspace, const Tensor* e_score_bias) {
+Status MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
+                                                     const Tensor* eplb_map, Tensor* workspace,
+                                                     const Tensor* e_score_bias) {
   const size_t num_tokens = hidden_states->shape[0];
   Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
   Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
   Status status = grouped_topk_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, e_score_bias);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "MarlinFp4MoeLayer::ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer";
+    KLLM_LOG_ERROR << "MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer";
     return status;
   }
 
@@ -542,9 +548,9 @@ Status MarlinFp4MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const 
 }
 
 template <typename T>
-Status MarlinFp4MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
-                                                  const Tensor* eplb_map, Tensor* workspace, const Tensor* e_score_bias,
-                                                  const Tensor* input_ids) {
+Status MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
+                                                          const Tensor* eplb_map, Tensor* workspace,
+                                                          const Tensor* e_score_bias, const Tensor* input_ids) {
   const size_t num_tokens = hidden_states->shape[0];
 
   // aux1: input_ids (hash) or correction_bias; aux2: tid2eid (hash only).
@@ -552,7 +558,7 @@ Status MarlinFp4MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, c
   const Tensor* aux2_ptr = nullptr;
   if (use_hash_) {
     KLLM_CHECK_WITH_INFO(input_ids != nullptr,
-                         "MarlinFp4MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
+                         "MarlinFusedFp4A16MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
     aux1_ptr = input_ids;     // input_ids
     aux2_ptr = e_score_bias;  // tid2eid
   } else if (use_e_score_correction_bias_) {
@@ -566,7 +572,7 @@ Status MarlinFp4MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, c
   Status status =
       topk_softplus_sqrt_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, aux1_ptr, aux2_ptr);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "MarlinFp4MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
+    KLLM_LOG_ERROR << "MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
     return status;
   }
 
@@ -597,25 +603,27 @@ Status MarlinFp4MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, c
   return Status();
 }
 
-Status MarlinFp4MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinFusedFp4A16MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
+                                           std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Dispatch(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status MarlinFp4MoeLayer::Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status MarlinFusedFp4A16MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
+                                          std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Combine(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status MarlinFp4MoeLayer::DumpEplbData(Tensor& topk_ids) {
+Status MarlinFusedFp4A16MoeLayer::DumpEplbData(Tensor& topk_ids) {
   topk_ids.SaveToNpyFile(
       fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
 }
 
-Status MarlinFp4MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                  const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                  const Tensor* e_score_bias, const Tensor* input_ids,
-                                  const LayerExecContext& exec_ctx) {
+Status MarlinFusedFp4A16MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                          const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                          const Tensor* e_score_bias, const Tensor* input_ids,
+                                          const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, workspace,
                       e_score_bias, input_ids);
 }

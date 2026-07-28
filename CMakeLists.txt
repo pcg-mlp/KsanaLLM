@@ -85,9 +85,6 @@ if(NOT KLLM_BUILD_GIT_DIRTY_RC EQUAL 0)
 endif()
 string(TIMESTAMP KLLM_BUILD_TIMESTAMP "%Y-%m-%d %H:%M:%S")
 message(STATUS "Build id: ${KLLM_BUILD_GIT_HASH} @ ${KLLM_BUILD_TIMESTAMP}")
-add_compile_definitions(
-  KLLM_BUILD_GIT_HASH="${KLLM_BUILD_GIT_HASH}"
-  KLLM_BUILD_TIMESTAMP="${KLLM_BUILD_TIMESTAMP}")
 
 # Build external libraries statically by default
 set(BUILD_SHARED_LIBS OFF)

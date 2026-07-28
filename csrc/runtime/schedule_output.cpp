@@ -236,9 +236,9 @@ static Status DeserializeStructuredGeneratorConfig(StructuredGeneratorConfig& co
   // constraint_spec
   config.constraint_spec = DeserializeString(ptr, offset);
 
-  KLLM_LOG_INFO << "Deserialized StructuredGeneratorConfig: "
-                << "constraint_type=" << static_cast<int>(config.constraint_type)
-                << ", constraint_spec=" << config.constraint_spec;
+  KLLM_LOG_DEBUG << "Deserialized StructuredGeneratorConfig: "
+                 << "constraint_type=" << static_cast<int>(config.constraint_type)
+                 << ", constraint_spec=" << config.constraint_spec;
 
   return Status();
 }
