@@ -87,7 +87,7 @@ setting:
     # MTP层数。如果模型中只有1层MTP但mtp_step_num大于1，将复用第一层的参数
     mtp_step_num: 1
     # 是否使用Xgrammar作为约束解码后端，开启后则进行特定格式的约束解码
-    enable_xgrammar: false
+    enable_xgrammar: true
     attention_dp_lb_config:
       # 是否启用ADP Balance策略，当attn_data_para_size > 1时可开启
       enable_balance: false

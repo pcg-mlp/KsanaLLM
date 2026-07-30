@@ -147,9 +147,12 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsFillsCurBatchPairsWhenBuildAheadEn
   BatchSchedulerConfig bsc;
   env->GetBatchSchedulerConfig(bsc);
   const bool orig_flag = bsc.enable_executor_build_ahead;
+  const bool orig_xgrammar = bsc.enable_xgrammar;
   bsc.enable_executor_build_ahead = true;
   bsc.enable_async = true;
   bsc.scheduler_type = SchedulerType::DEFAULT;
+  // FastPath 与 xgrammar 互斥；服务默认开启 xgrammar 时，本测需显式关闭。
+  bsc.enable_xgrammar = false;
   env->SetBatchSchedulerConfig(bsc);
   runtime_config_.enable_prefix_caching = false;
   runtime_config_.enable_flexible_caching = false;
@@ -178,6 +181,7 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsFillsCurBatchPairsWhenBuildAheadEn
   EXPECT_EQ(pairs_host[3], 1);
 
   bsc.enable_executor_build_ahead = orig_flag;
+  bsc.enable_xgrammar = orig_xgrammar;
   env->SetBatchSchedulerConfig(bsc);
   ReinitFastPathGate(bsc);
 }
@@ -208,9 +212,12 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsSkipsZeroLenDecodeInCurBatchPairs)
   BatchSchedulerConfig bsc;
   env->GetBatchSchedulerConfig(bsc);
   const bool orig_flag = bsc.enable_executor_build_ahead;
+  const bool orig_xgrammar = bsc.enable_xgrammar;
   bsc.enable_executor_build_ahead = true;
   bsc.enable_async = true;
   bsc.scheduler_type = SchedulerType::DEFAULT;
+  // FastPath 与 xgrammar 互斥；服务默认开启 xgrammar 时，本测需显式关闭。
+  bsc.enable_xgrammar = false;
   env->SetBatchSchedulerConfig(bsc);
   runtime_config_.enable_prefix_caching = false;
   runtime_config_.enable_flexible_caching = false;
@@ -237,6 +244,7 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsSkipsZeroLenDecodeInCurBatchPairs)
   EXPECT_EQ(pairs_host[1], 0);
 
   bsc.enable_executor_build_ahead = orig_flag;
+  bsc.enable_xgrammar = orig_xgrammar;
   env->SetBatchSchedulerConfig(bsc);
   ReinitFastPathGate(bsc);
 }

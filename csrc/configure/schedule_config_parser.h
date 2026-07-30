@@ -117,7 +117,11 @@ struct BatchSchedulerConfig {
   // 否则透明降级到原 enable_async 深度 1 路径。
   bool enable_executor_build_ahead = false;
 
-  bool enable_xgrammar = false;
+  // 是否启用 xgrammar 约束解码后端（默认开启）。
+  // 开启约束解码后，会对结构化输出相关的请求在推理时进行语法约束，确保输出符合格式要求。
+  // 注意：enable_xgrammar=true 时 FastPath（enable_executor_build_ahead）会在启动期被强制禁用。
+  // 如需使用 FastPath，请在 YAML 中显式设置 enable_xgrammar: false。
+  bool enable_xgrammar = true;
 
   // Max total kv tokens per chunk when chunked KV is enabled. Must be >= max_seq_len
   // so that any single request's tokens can always fit in one chunk

@@ -324,13 +324,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
                 << ", model MTP layer: " << model_config.num_nextn_predict_layers;
 
   batch_scheduler_config_.enable_xgrammar =
-      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", false);
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", true);
   batch_scheduler_config_.enable_async =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_async", false);
 
   // Executor 端 build-ahead + device 侧 token 替换总开关（默认关闭）。
   batch_scheduler_config_.enable_executor_build_ahead = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_executor_build_ahead", false);
+
+  KLLM_LOG_INFO << "enable_xgrammar: " << batch_scheduler_config_.enable_xgrammar
+                << ", enable_executor_build_ahead: " << batch_scheduler_config_.enable_executor_build_ahead;
 
   // Parse ADP Balance Strategy configuration
   batch_scheduler_config_.attention_dp_lb_config.enable_balance = yaml_reader.GetScalar<bool>(
