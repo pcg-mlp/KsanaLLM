@@ -586,6 +586,86 @@ TEST_F(ContinuousBatchingTest, ProcessTransferQueuePrefillTest) {
   continuous_batching_strategy_->batch_state_->transfer_queue.clear();
 }
 
+// Draft-token validation in ProcessWaitingQueue: speculative decoding disabled,
+// user-supplied draft_tokens.spec must be cleared entirely.
+TEST_F(ContinuousBatchingTest, ProcessWaitingQueueDraftClearedWhenSpecDisabled) {
+  continuous_batching_strategy_->batch_scheduler_config_.enable_speculative_decoding = false;
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+  req->block_token_num = 16;
+  req->draft_tokens.spec = {10, 20, 30};
+
+  // Empty input_tokens: request short-circuits right after the draft filter,
+  // isolating the tested logic from block allocation.
+  req->input_tokens = {};
+  req->output_tokens = {};
+  req->ResetPrefillingTokens();
+
+  continuous_batching_strategy_->batch_state_->ResetInfoBeforeSchedule();
+  continuous_batching_strategy_->batch_state_->waiting_queue.push_back(req);
+  continuous_batching_strategy_->ProcessWaitingQueue();
+
+  ASSERT_TRUE(req->draft_tokens.spec.empty());
+}
+
+// Draft-token validation: invalid ids (negative or >= max_vocab_size) are dropped,
+// valid ones preserved in order.
+TEST_F(ContinuousBatchingTest, ProcessWaitingQueueDraftDropsInvalidIds) {
+  continuous_batching_strategy_->batch_scheduler_config_.enable_speculative_decoding = true;
+  continuous_batching_strategy_->batch_scheduler_config_.max_vocab_size = 1000;
+  continuous_batching_strategy_->dp_max_logits_num_ = 64;
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+  req->block_token_num = 16;
+  req->draft_tokens.spec = {5, -1, 42, 1000, 999, 2000};
+
+  req->input_tokens = {};
+  req->output_tokens = {};
+  req->ResetPrefillingTokens();
+
+  continuous_batching_strategy_->batch_state_->ResetInfoBeforeSchedule();
+  continuous_batching_strategy_->batch_state_->waiting_queue.push_back(req);
+  continuous_batching_strategy_->ProcessWaitingQueue();
+
+  const std::vector<int> expected = {5, 42, 999};
+  ASSERT_EQ(req->draft_tokens.spec, expected);
+}
+
+// Draft-token validation: length capped so filtered.size()+kStepGenerateTokenNum < dp_max_logits_num_.
+TEST_F(ContinuousBatchingTest, ProcessWaitingQueueDraftCapsLength) {
+  continuous_batching_strategy_->batch_scheduler_config_.enable_speculative_decoding = true;
+  continuous_batching_strategy_->batch_scheduler_config_.max_vocab_size = 32000;
+  // dp_max_logits_num_=5, kStepGenerateTokenNum=1 → cap at 4 tokens.
+  continuous_batching_strategy_->dp_max_logits_num_ = 5;
+
+  auto ksana_python_input = std::make_shared<KsanaPythonInput>();
+  auto req_ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
+  auto request = std::make_shared<Request>(ksana_python_input, req_ctx);
+  auto req = std::make_shared<InferRequest>(request, 0);
+  req->cache_manager = continuous_batching_strategy_->GetCacheManager();
+  req->block_token_num = 16;
+  req->draft_tokens.spec = {1, 2, 3, 4, 5, 6, 7, 8};
+
+  req->input_tokens = {};
+  req->output_tokens = {};
+  req->ResetPrefillingTokens();
+
+  continuous_batching_strategy_->batch_state_->ResetInfoBeforeSchedule();
+  continuous_batching_strategy_->batch_state_->waiting_queue.push_back(req);
+  continuous_batching_strategy_->ProcessWaitingQueue();
+
+  const std::vector<int> expected = {1, 2, 3, 4};
+  ASSERT_EQ(req->draft_tokens.spec, expected);
+}
+
 // Test that empty request (input_tokens=[]) is rejected instead of crashing.
 TEST_F(ContinuousBatchingTest, EmptyRequestAbortTest) {
   // Create an empty request with no input tokens.

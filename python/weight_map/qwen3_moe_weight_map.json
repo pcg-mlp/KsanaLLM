@@ -1,5 +1,10 @@
 {
-    "model.layers.(\\d+).self_attn.k_norm.weight": "model.layers.$1.self_attn.key_layernorm.weight",
-    "model.layers.(\\d+).self_attn.q_norm.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+    "^speech_model\\..*": "deprecated",
+    "^speech_projection\\..*": "deprecated",
+    "^thinker\\.audio_tower\\..*": "deprecated",
+    "^thinker\\.visual\\..*": "deprecated",
+    "^(?:language_model\\.|thinker\\.)?model\\.layers\\.(\\d+)\\.self_attn\\.k_norm\\.weight": "model.layers.$1.self_attn.key_layernorm.weight",
+    "^(?:language_model\\.|thinker\\.)?model\\.layers\\.(\\d+)\\.self_attn\\.q_norm\\.weight": "model.layers.$1.self_attn.query_layernorm.weight",
+    "^(?:language_model|thinker)\\.(?=(?:model|lm_head)\\.)": "",
     "(.*)\\.weight_scale_inv": "$1.weight_scale"
 }

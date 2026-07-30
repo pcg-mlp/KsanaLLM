@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <string>
 #ifdef ENABLE_CUDA
-#include "device/nvidia/cuda_utils.h"
+#  include "device/nvidia/cuda_utils.h"
 #endif
 
 #include "fmt/core.h"
@@ -517,6 +517,34 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
         }
 #endif
       }
+    } else if (model_config.type == "moeconformerllm" || model_config.type == "qwen3_omni_moe") {
+      if (config_json.contains("thinker_config")) {
+        config_json = config_json["thinker_config"];
+      }
+      if (config_json.contains("text_config")) {
+        config_json = config_json["text_config"];
+      }
+      // Text-only inference does not need mrope: with T=H=W the mrope kernel is mathematically
+      // equivalent to plain 1-D rope. Drop mrope_section so ParseModelMaxLength() will not promote
+      // the type to "mrope", keeping the fast default path. Restore this when adding vision/audio.
+      if (config_json.contains("rope_scaling") && config_json["rope_scaling"].is_object()) {
+        if (config_json["rope_scaling"].contains("mrope_section")) {
+          config_json["rope_scaling"].erase("mrope_section");
+        }
+        if (config_json["rope_scaling"].contains("type")) {
+          config_json["rope_scaling"]["type"] = "default";
+        }
+        if (config_json["rope_scaling"].contains("rope_type")) {
+          config_json["rope_scaling"]["rope_type"] = "default";
+        }
+      }
+      model_config.type = "qwen3_moe";
+      PrepareQwenMoeAttributes(config_json, model_config);
+#ifdef ENABLE_CUDA
+      if (GetCurrentDeviceSmVersion() >= kMinSmVersionForVllmMoe) {
+        model_config.moe_config.use_vllm_moe = true;
+      }
+#endif
     } else if (model_config.type == "llama4") {
       config_json = config_json["text_config"];
       model_config.weight_data_type = GetModelDataType(config_json, model_config);

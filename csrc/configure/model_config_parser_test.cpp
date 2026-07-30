@@ -196,6 +196,74 @@ TEST_F(ModelConfigParserTest, GenerationConfigNoEosTokenIdKeepsOriginal) {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: build a Qwen3-omni-style nested config with thinker_config/text_config.
+// The outer model_type triggers the moeconformerllm/qwen3_omni_moe branch;
+// inner text_config holds the real MoE parameters.
+// ---------------------------------------------------------------------------
+static nlohmann::json BuildQwen3OmniNestedConfig(const std::string &outer_model_type) {
+  nlohmann::json text_config = {{"model_type", "qwen3_moe"},
+                                {"architectures", {"Qwen3MoeForCausalLM"}},
+                                {"torch_dtype", "bfloat16"},
+                                {"hidden_size", 128},
+                                {"intermediate_size", 256},
+                                {"moe_intermediate_size", 64},
+                                {"max_position_embeddings", 4096},
+                                {"num_attention_heads", 4},
+                                {"num_hidden_layers", 2},
+                                {"num_key_value_heads", 2},
+                                {"num_experts", 8},
+                                {"num_experts_per_tok", 2},
+                                {"norm_topk_prob", true},
+                                {"rms_norm_eps", 1e-6},
+                                {"rope_theta", 1000000.0f},
+                                {"rope_scaling", {{"type", "mrope"}, {"mrope_section", {16, 24, 24}}}},
+                                {"bos_token_id", 151643},
+                                {"eos_token_id", 151645},
+                                {"pad_token_id", 151643},
+                                {"vocab_size", 152064},
+                                {"tie_word_embeddings", false}};
+  nlohmann::json thinker_config = {{"text_config", text_config}};
+  return {{"model_type", outer_model_type},
+          {"architectures", {"Qwen3OmniMoeForConditionalGeneration"}},
+          {"torch_dtype", "bfloat16"},
+          {"thinker_config", thinker_config}};
+}
+
+// ---------------------------------------------------------------------------
+// moeconformerllm and qwen3_omni_moe share one branch: nested thinker_config/
+// text_config is unwrapped, type rewritten to qwen3_moe, MoE attributes
+// populated, and rope_scaling.mrope_section stripped so type is not promoted
+// to "mrope" (keeps the fast default 1-D rope path for text-only inference).
+// ---------------------------------------------------------------------------
+TEST_F(ModelConfigParserTest, ParseQwen3OmniNestedConfig) {
+  for (const std::string &outer_type : {"moeconformerllm", "qwen3_omni_moe"}) {
+    SCOPED_TRACE("outer model_type=" + outer_type);
+    // Fresh temp dir per iteration so each RunParse gets a clean config.json.
+    std::filesystem::remove_all(tmp_dir_);
+    std::filesystem::create_directories(tmp_dir_);
+
+    nlohmann::json cfg = BuildQwen3OmniNestedConfig(outer_type);
+    ModelConfig model_config;
+    Status status = RunParse(cfg, model_config);
+
+    EXPECT_TRUE(status.OK()) << status.GetMessage();
+    EXPECT_EQ(model_config.type, "qwen3_moe");
+    EXPECT_TRUE(model_config.is_moe);
+    EXPECT_EQ(model_config.moe_config.num_experts, 8u);
+    EXPECT_EQ(model_config.moe_config.experts_topk, 2u);
+    EXPECT_EQ(model_config.moe_config.moe_inter_size, 64u);
+    EXPECT_TRUE(model_config.moe_config.norm_topk_prob);
+    // Inner text_config params reach ModelConfig (proves nested extraction).
+    EXPECT_EQ(model_config.num_layer, 2u);
+    EXPECT_EQ(model_config.hidden_units, 128u);
+    EXPECT_EQ(model_config.vocab_size, 152064u);
+    // mrope_section stripped, type coerced to "default" → not promoted to "mrope".
+    EXPECT_NE(model_config.rope_scaling_factor_config.type, "mrope");
+    EXPECT_TRUE(model_config.rope_scaling_factor_config.mrope_section.empty());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Missing config.json returns an error status
 // ---------------------------------------------------------------------------
 TEST_F(ModelConfigParserTest, MissingConfigJsonReturnsError) {

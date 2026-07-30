@@ -20,9 +20,9 @@ inline void PrepareQwenMoeAttributes(const nlohmann::json &config_json, ModelCon
     model_config.is_moe = true;
     model_config.moe_config.moe_inter_size =
         config_json.value("moe_intermediate_size", model_config.moe_config.moe_inter_size);
-    if (config_json.contains("shared_expert_intermediate_size")) {
+    if (config_json.value("shared_expert_intermediate_size", 0) > 0) {
       model_config.has_shared_experts = true;
-      model_config.moe_config.shared_expert_inter_size = config_json.value("shared_expert_intermediate_size", 20480);
+      model_config.moe_config.shared_expert_inter_size = config_json["shared_expert_intermediate_size"].get<int>();
     }
     model_config.moe_config.experts_topk = config_json.value("num_experts_per_tok", 2);
     model_config.moe_config.norm_topk_prob = config_json.value("norm_topk_prob", false);

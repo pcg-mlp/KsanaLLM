@@ -700,9 +700,24 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       continue;
     }
 
-    // Ignore draft tokens when speculative decoding is disabled
     if (!req->draft_tokens.spec.empty() && !batch_scheduler_config_.enable_speculative_decoding) {
+      // Ignore draft tokens when speculative decoding is disabled
       req->draft_tokens.spec.clear();
+    } else if (!req->draft_tokens.spec.empty()) {
+      // Filter user-provided draft tokens: drop invalid ids and cap length.
+      auto &spec = req->draft_tokens.spec;
+      std::vector<int> filtered;
+      filtered.reserve(spec.size());
+      for (const int draft_token : spec) {
+        if (draft_token < 0 || draft_token >= static_cast<int>(batch_scheduler_config_.max_vocab_size)) {
+          continue;
+        }
+        if (filtered.size() + kStepGenerateTokenNum >= dp_max_logits_num_) {
+          break;
+        }
+        filtered.push_back(draft_token);
+      }
+      spec = std::move(filtered);
     }
 
     bool is_first_prefill_step = true;
@@ -774,9 +789,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       assert(!planning_workload.IsEmpty());
     }
 
-    // add extra token for MTP sub model if needed
-    req_step_block_num =
-        cache_manager_->GetRequestStepBlockNumber(req->req_id, seq_token_num + runtime_config_.mtp_step_num);
+    // add extra token for MTP sub model/User draft if needed
+    req_step_block_num = cache_manager_->GetRequestStepBlockNumber(
+        req->req_id, seq_token_num + req->draft_tokens.spec.size(), runtime_config_.mtp_step_num);
     KLLM_LOG_SCHEDULER << "req_step_token_num:" << req_step_token_num << ", req_step_block_num:" << req_step_block_num
                        << ", seq_token_num:" << seq_token_num;
 
