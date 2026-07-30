@@ -90,6 +90,12 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
     swiglu_limit_host_.assign(expert_num_per_node_, swiglu_limit_);
   }
 
+  // Consume remaining params to stay aligned with the factory's 26-param layout.
+  [[maybe_unused]] uint32_t num_hash_layers = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] uint32_t vocab_size = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] float situ_beta = std::any_cast<float>(parameters[parameter_index++]);
+  [[maybe_unused]] float situ_linear_beta = std::any_cast<float>(parameters[parameter_index++]);
+
   // 清空tactic
   config_map_.clear();
 

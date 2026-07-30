@@ -5,8 +5,10 @@
 #include <random>
 #include <sstream>
 
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <torch/torch.h>
 
 #include "moe_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
@@ -446,6 +448,36 @@ TEST_F(LlamaNvidiaMoeTestSuit, FillIntToBufferTest) {
 
   cudaFree(output_ptr);
   cudaFree(fill_info_ptr);
+}
+
+TEST_F(LlamaNvidiaMoeTestSuit, SituAndMulTest) {
+  torch::manual_seed(42);
+  torch::cuda::manual_seed(42);
+  int num_tokens = 128;
+  int inter_size = 1024;
+  float beta = 4.0f;
+  float linear_beta = 25.0f;
+
+  auto bf16_opt = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kBFloat16);
+  auto f32_opt = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
+
+  auto input = torch::randn({num_tokens, 2 * inter_size}, bf16_opt);
+  auto output = torch::empty({num_tokens, inter_size}, bf16_opt);
+
+  auto f32_input = input.to(torch::kFloat32);
+  auto gate = f32_input.slice(1, 0, inter_size);
+  auto up = f32_input.slice(1, inter_size, 2 * inter_size);
+  auto ref = (beta * torch::tanh(gate / beta) * torch::sigmoid(gate) *
+              linear_beta * torch::tanh(up / linear_beta)).to(torch::kBFloat16);
+
+  InvokeSituAndMul<__nv_bfloat16, false>(
+      static_cast<const __nv_bfloat16*>(input.data_ptr()),
+      static_cast<__nv_bfloat16*>(output.data_ptr()), nullptr,
+      num_tokens * 2 * inter_size, inter_size, beta, linear_beta, stream);
+  cudaStreamSynchronize(stream);
+
+  ASSERT_TRUE(torch::allclose(output, ref, /*rtol=*/1e-2, /*atol=*/2e-2))
+      << "SiTU kernel output mismatch";
 }
 
 }  // namespace test

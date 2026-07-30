@@ -89,20 +89,38 @@ torch::Tensor Fp8QuantDequantGpu(torch::Tensor x) {
 // Accepts pre-dequantized weights to avoid redundant dequant across token sizes.
 // ===========================================================================
 torch::Tensor GpuRefFp4MoeForward(const torch::Tensor& w1_dequant, const torch::Tensor& w2_dequant,
-                                  const Fp4MoeTestConfig& cfg, torch::Tensor hs_gpu, torch::Tensor gate_gpu,
-                                  Fp4Backend backend, float swiglu_limit) {
+                                   const Fp4MoeTestConfig& cfg, torch::Tensor hs_gpu, torch::Tensor gate_gpu,
+                                   Fp4Backend backend, torch::Tensor e_score_bias = {}) {
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
-  size_t topk = 6;
+  size_t K = cfg.hidden_size();
+  size_t topk = cfg.topk();
   int64_t M = hs_gpu.size(0);
 
-  // 1. TopK gating: scores = sqrt(softplus(gate))
+  const float swiglu_limit = cfg.swiglu_limit();
+  const float situ_beta = cfg.situ_beta();
+  const float situ_linear_beta = cfg.situ_linear_beta();
+
+  // 1. TopK gating: scores depend on scoring_func
   auto gate_f32 = gate_gpu.to(torch::kFloat32);
-  auto scores = torch::sqrt(torch::nn::functional::softplus(gate_f32));
-  auto topk_result = torch::topk(scores, static_cast<int64_t>(topk), /*dim=*/-1, /*largest=*/true, /*sorted=*/true);
-  auto topk_weights = std::get<0>(topk_result).to(torch::kFloat32);  // [M, topk]
-  auto topk_ids = std::get<1>(topk_result).to(torch::kInt64);        // [M, topk]
+  torch::Tensor scores;
+  if (cfg.is_k3()) {
+    // K3: sigmoid scoring (matches GroupedTopkLayer torch fallback)
+    scores = torch::sigmoid(gate_f32);
+  } else {
+    // DSv4: sqrt(softplus(gate)) scoring
+    scores = torch::sqrt(torch::nn::functional::softplus(gate_f32));
+  }
+  torch::Tensor topk_weights;
+  torch::Tensor topk_ids;
+  // SGLang/vLLM semantics: selection uses biased scores, weights use unbiased scores
+  auto scores_with_bias = scores + e_score_bias.to(torch::kFloat32).unsqueeze(0);
+  auto topk_result = torch::topk(scores_with_bias, static_cast<int64_t>(topk), /*dim=*/-1, /*largest=*/true,
+                                 /*sorted=*/true);
+  topk_ids = std::get<1>(topk_result).to(torch::kInt64);  // [M, topk]
+  topk_weights = scores.gather(1, topk_ids);              // unbiased weights
+  topk_weights = topk_weights / topk_weights.sum(-1, /*keepdim=*/true);  // renormalize
+  topk_weights = topk_weights * cfg.routed_scaling_factor();             // scale
 
   // Flatten routing indices for per-expert grouping
   auto flat_ids = topk_ids.reshape(-1);  // [M*topk]
@@ -127,12 +145,20 @@ torch::Tensor GpuRefFp4MoeForward(const torch::Tensor& w1_dequant, const torch::
     cache1.index_copy_(0, row_idx, x_e.matmul(w1_dequant[e].t()));
   }
 
-  // 3. SwiGLU with limit
+  // 3. Activation: SiTU (K3) or SwiGLU with limit (DSv4)
   auto gate_part = cache1.slice(1, 0, static_cast<int64_t>(N));
   auto up_part = cache1.slice(1, static_cast<int64_t>(N), static_cast<int64_t>(N * 2));
-  gate_part = torch::clamp_max(gate_part, swiglu_limit);
-  up_part = torch::clamp(up_part, -swiglu_limit, swiglu_limit);
-  auto cache2 = torch::nn::functional::silu(gate_part) * up_part;  // [M*topk, N]
+  torch::Tensor cache2;
+  if (situ_beta > 0.0f) {
+    // SiTU: gate_out = beta * tanh(g/beta) * sigmoid(g); up_out = linear_beta * tanh(u/linear_beta)
+    cache2 = (situ_beta * torch::tanh(gate_part / situ_beta) * torch::sigmoid(gate_part) * situ_linear_beta *
+              torch::tanh(up_part / situ_linear_beta));  // [M*topk, N]
+  } else {
+    // SwiGLU with limit
+    gate_part = torch::clamp_max(gate_part, swiglu_limit);
+    up_part = torch::clamp(up_part, -swiglu_limit, swiglu_limit);
+    cache2 = torch::nn::functional::silu(gate_part) * up_part;  // [M*topk, N]
+  }
 
   // 4. GEMM2: per-expert batched matmul
   auto x2 = cache2;
@@ -191,8 +217,8 @@ std::vector<AccuracyResult> VerifyAccuracy(const ProcessedWeights& base, const F
                                            const std::vector<std::vector<torch::Tensor>>& all_outputs,
                                            const std::vector<BackendSpec>& selected_backends,
                                            const torch::Tensor& hs_full, const torch::Tensor& gate_full,
-                                           float swiglu_limit) {
-  size_t K = cfg.hidden_size;
+                                           const torch::Tensor& e_score_bias = {}) {
+  size_t K = cfg.hidden_size();
   size_t E_local = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
 
@@ -219,10 +245,10 @@ std::vector<AccuracyResult> VerifyAccuracy(const ProcessedWeights& base, const F
 
     torch::Tensor ref_bf16, ref_fp8;
     if (need_bf16_ref) {
-      ref_bf16 = GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kMarlin, swiglu_limit);
+      ref_bf16 = GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kMarlin, e_score_bias);
     }
     if (need_fp8_ref) {
-      ref_fp8 = GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kHummingW4A8, swiglu_limit);
+      ref_fp8 = GpuRefFp4MoeForward(w1_dequant, w2_dequant, cfg, hs_m, gate_m, Fp4Backend::kHummingW4A8, e_score_bias);
     }
 
     for (size_t b = 0; b < selected_backends.size(); ++b) {

@@ -149,11 +149,12 @@ void PrintExpertRoutingSummary(const std::string& config_name, const Fp4MoeTestC
     for (size_t i = 0; i < kTokenSizes.size(); ++i) {
       if (i >= all_results[b].size()) break;
       const auto& r = all_results[b][i];
-      std::cout << "  " << std::setw(10) << kTokenSizes[i] << std::setw(6) << 6 << std::setw(14) << r.total_pairs
-                << std::setw(20) << r.experts_accessed << std::setw(16) << ComputeExpertsPerRank(cfg) << std::setw(10)
-                << r.moe_block_size_1 << std::setw(10) << r.moe_block_size_2 << std::setw(18) << r.real_pairs_g1
-                << std::setw(18) << r.real_pairs_g2 << std::fixed << std::setprecision(1) << std::setw(11)
-                << (r.waste_rate_g1 * 100.0) << "%" << std::setw(11) << (r.waste_rate_g2 * 100.0) << "%" << std::endl;
+      std::cout << "  " << std::setw(10) << kTokenSizes[i] << std::setw(6) << cfg.topk() << std::setw(14)
+                << r.total_pairs << std::setw(20) << r.experts_accessed << std::setw(16) << ComputeExpertsPerRank(cfg)
+                << std::setw(10) << r.moe_block_size_1 << std::setw(10) << r.moe_block_size_2 << std::setw(18)
+                << r.real_pairs_g1 << std::setw(18) << r.real_pairs_g2 << std::fixed << std::setprecision(1)
+                << std::setw(11) << (r.waste_rate_g1 * 100.0) << "%" << std::setw(11) << (r.waste_rate_g2 * 100.0)
+                << "%" << std::endl;
     }
   }
 }
@@ -173,9 +174,9 @@ void PrintJitKernelTable(const std::string& config_name, const Fp4MoeTestConfig&
   // Problem shape header
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
   std::cout << "\n=== " << config_name << " Problem Shapes ===" << std::endl;
-  std::cout << "  experts_per_rank=" << E << "  topk=" << 6 << "  hidden=" << K << "  inter_per_rank=" << N
+  std::cout << "  experts_per_rank=" << E << "  topk=" << cfg.topk() << "  hidden=" << K << "  inter_per_rank=" << N
             << std::endl;
   std::cout << "  GEMM1: N=" << N * 2 << "  K=" << K << std::endl;
   std::cout << "  GEMM2: N=" << K << "  K=" << N << std::endl;

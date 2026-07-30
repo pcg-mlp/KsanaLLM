@@ -27,6 +27,8 @@ struct GroupedTopkLayerParameters : public BaseLayerParameters {
   }
 };
 
+enum class GroupedTopkBackend { kSglang, kVllm };
+
 #ifdef ENABLE_CUDA
 class GroupedTopkLayer : public BaseLayer {
  public:
@@ -48,6 +50,8 @@ class GroupedTopkLayer : public BaseLayer {
   size_t expert_world_size_;
 
   bool is_profile_mode_;
+
+  GroupedTopkBackend backend_{GroupedTopkBackend::kSglang};
 };
 #endif
 

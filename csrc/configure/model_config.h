@@ -347,6 +347,10 @@ struct ModelConfig {
   //   up   (后半): clamp(min = -swiglu_limit, max = swiglu_limit)
   float swiglu_limit = 0.0f;
 
+  // SiTU activation params (Kimi K3). situ_beta > 0 时启用 SiTU 激活(替代 SwiGLU)。
+  float situ_beta = 0.0f;
+  float situ_linear_beta = 0.0f;
+
   // The activation function used.
   std::string activation_function{"swiglu"};
 

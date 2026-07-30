@@ -82,6 +82,10 @@ template <typename T, bool UseExpertParallel, bool HAS_SWIGLU_LIMIT = false>
 void InvokeSiluAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
                       float swiglu_limit, const cudaStream_t& stream);
 
+template <typename T, bool UseExpertParallel>
+void InvokeSituAndMul(const T* input, T* output, const int* topk_ids, size_t elements_num, size_t inter_size,
+                      float beta, float linear_beta, const cudaStream_t& stream);
+
 template <typename T>
 void InvokeWeightDequant(const uint8_t* x, const float* s, T* output, int M, int N, int block_size,
                          const cudaStream_t& stream);

@@ -238,6 +238,8 @@ class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
   bool apply_weight_ = false;
   bool has_swiglu_limit_ = false;
   float swiglu_limit_ = 0.0f;
+  float situ_beta_ = 0.0f;
+  float situ_linear_beta_ = 0.0f;
 
   llm_kernels::nvidia::humming::ComputeDtype humming_compute_dtype_;
 

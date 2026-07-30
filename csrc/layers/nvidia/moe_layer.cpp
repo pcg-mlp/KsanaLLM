@@ -58,6 +58,8 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
   num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
   vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  situ_beta_ = std::any_cast<float>(parameters[parameter_index++]);
+  situ_linear_beta_ = std::any_cast<float>(parameters[parameter_index++]);
 
   w4afp8_moe_backend_ = runtime_config.w4afp8_moe_backend;
 

@@ -121,7 +121,7 @@ ProcessedWeights GenerateBaseWeights(const Fp4MoeTestConfig& cfg, int scale_lo, 
   ProcessedWeights base;
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);  // inter_per_rank
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
 
   auto uint8_opt = torch::TensorOptions().device(torch::kCUDA, 0).dtype(torch::kUInt8);
 
@@ -165,7 +165,7 @@ ProcessedWeights ProcessWeightsMarlin(const ProcessedWeights& base, const Fp4Moe
   using llm_kernels::nvidia::marlin_moe_wna16::transpose_2d_batched;
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
   int64_t N1 = static_cast<int64_t>(N * 2);  // fused up+gate
   int64_t K1 = static_cast<int64_t>(K);
 
@@ -244,7 +244,7 @@ ProcessedWeights ProcessWeightsHummingW4A16(const ProcessedWeights& base, const 
   using llm_kernels::nvidia::humming::repack_weight_wgmma;
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
   int64_t N1 = static_cast<int64_t>(N * 2);
   int64_t K1 = static_cast<int64_t>(K);
 
@@ -284,7 +284,7 @@ ProcessedWeights ProcessWeightsHummingW4A8(const ProcessedWeights& base, const F
   using llm_kernels::nvidia::humming::repack_weight_wgmma;
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
   int64_t N1 = static_cast<int64_t>(N * 2);
   int64_t K1 = static_cast<int64_t>(K);
 
@@ -358,38 +358,40 @@ void DeepCopyTensorInto(const Tensor& src, Tensor& dst, cudaStream_t stream) {
 }
 
 // ===========================================================================
-// Build 24-parameter Init list
+// Build 26-parameter Init list
 // ===========================================================================
-std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_token_num, float swiglu_limit) {
+std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_token_num) {
   size_t inter_per_rank = ComputeInterPerRank(cfg);
   size_t experts_per_rank = ComputeExpertsPerRank(cfg);
   size_t moe_tp = ComputeMoeTp(cfg);
 
   std::vector<std::any> params;
-  params.push_back(MoeScaleNormMode::NO_NORM);     // 0
-  params.push_back(max_token_num);                 // 1
-  params.push_back(0);                             // 2: layer_idx
-  params.push_back(experts_per_rank);              // 3
-  params.push_back(cfg.hidden_size);               // 4: expert_hidden_size
-  params.push_back(inter_per_rank);                // 5: expert_inter_size
-  params.push_back(size_t(6));                     // 6: expert_topk
-  params.push_back(moe_tp);                        // 7: tp_size
-  params.push_back(true);                          // 8: use_vllm_moe
-  params.push_back(uint32_t(1));                   // 9
-  params.push_back(uint32_t(1));                   // 10
-  params.push_back(std::string("sqrtsoftplus"));   // 11
-  params.push_back(std::string("greedy"));         // 12
-  params.push_back(false);                         // 13
-  params.push_back(1.0f);                          // 14
-  params.push_back(false);                         // 15
-  params.push_back(false);                         // 16
-  params.push_back(DataType::TYPE_INVALID);        // 17
-  params.push_back(DataType::TYPE_FP4_E2M1FN_x2);  // 18: int_weight_dtype
-  params.push_back(128);                           // 19: group_size
-  params.push_back(false);                         // 20: apply_weight
-  params.push_back(swiglu_limit);                  // 21: swiglu_limit
-  params.push_back(uint32_t(0));                   // 22: num_hash_layers
-  params.push_back(uint32_t(0));                   // 23: vocab_size
+  params.push_back(MoeScaleNormMode::NO_NORM);        // 0
+  params.push_back(max_token_num);                    // 1
+  params.push_back(0);                                // 2: layer_idx
+  params.push_back(experts_per_rank);                 // 3
+  params.push_back(cfg.hidden_size());                // 4: expert_hidden_size
+  params.push_back(inter_per_rank);                   // 5: expert_inter_size
+  params.push_back(cfg.topk());                       // 6: expert_topk
+  params.push_back(moe_tp);                           // 7: tp_size
+  params.push_back(true);                             // 8: use_vllm_moe
+  params.push_back(uint32_t(1));                      // 9
+  params.push_back(uint32_t(1));                      // 10
+  params.push_back(std::string(cfg.scoring_func()));  // 11: scoring_func ("sqrtsoftplus" or "sigmoid")
+  params.push_back(std::string("noaux_tc"));           // 12: topk_method
+  params.push_back(true);                             // 13: norm_topk_prob
+  params.push_back(cfg.routed_scaling_factor());       // 14: routed_scaling_factor
+  params.push_back(true);                             // 15: use_e_score_correction_bias
+  params.push_back(false);                            // 16
+  params.push_back(DataType::TYPE_INVALID);           // 17
+  params.push_back(DataType::TYPE_FP4_E2M1FN_x2);     // 18: int_weight_dtype
+  params.push_back(128);                              // 19: group_size
+  params.push_back(false);                            // 20: apply_weight
+  params.push_back(cfg.swiglu_limit());               // 21: swiglu_limit
+  params.push_back(uint32_t(0));                      // 22: num_hash_layers
+  params.push_back(uint32_t(0));                      // 23: vocab_size
+  params.push_back(cfg.situ_beta());                  // 24: situ_beta (K3: 4.0, DSv4: 0.0)
+  params.push_back(cfg.situ_linear_beta());           // 25: situ_linear_beta (K3: 25.0, DSv4: 0.0)
   return params;
 }
 

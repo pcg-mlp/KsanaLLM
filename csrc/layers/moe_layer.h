@@ -108,6 +108,8 @@ class MoeLayer : public BaseMoeLayer {
   bool use_e_score_correction_bias_ = false;
   bool enable_full_shared_expert_ = false;
   float swiglu_limit_ = 0.0f;
+  float situ_beta_ = 0.0f;
+  float situ_linear_beta_ = 0.0f;
 
   size_t scale_probabilities_size_;
   size_t src_to_dest_map_size_;

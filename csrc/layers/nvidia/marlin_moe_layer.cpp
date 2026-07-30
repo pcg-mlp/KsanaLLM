@@ -16,6 +16,7 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   int parameter_index = 0;
   moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
   max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
+  [[maybe_unused]] int layer_idx = std::any_cast<int>(parameters[parameter_index++]);
   expert_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
   expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
@@ -30,12 +31,17 @@ Status MarlinMoeLayer::Init(const std::vector<std::any>& parameters, const Runti
   routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
   use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
   enable_full_shared_expert_ = std::any_cast<bool>(parameters[parameter_index++]);
-  DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
+  [[maybe_unused]] DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
+  [[maybe_unused]] DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
   group_size_ = std::any_cast<int>(parameters[parameter_index++]);
   apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
   const float swiglu_limit = std::any_cast<float>(parameters[parameter_index++]);
   KLLM_CHECK_WITH_INFO(!(swiglu_limit > 0.0f), "MarlinMoeLayer does not support swiglu_limit.");
+  // Consume remaining params to stay aligned with the factory's 26-param layout.
+  [[maybe_unused]] uint32_t num_hash_layers = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] uint32_t vocab_size = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  [[maybe_unused]] float situ_beta = std::any_cast<float>(parameters[parameter_index++]);
+  [[maybe_unused]] float situ_linear_beta = std::any_cast<float>(parameters[parameter_index++]);
   return Status();
 }
 

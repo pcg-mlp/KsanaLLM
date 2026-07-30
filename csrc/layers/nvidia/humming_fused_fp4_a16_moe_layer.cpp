@@ -82,6 +82,8 @@ Status HummingFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters
   has_swiglu_limit_ = (swiglu_limit_ > 0.0f);
   num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
   vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
+  situ_beta_ = std::any_cast<float>(parameters[parameter_index++]);
+  situ_linear_beta_ = std::any_cast<float>(parameters[parameter_index++]);
 
   // Compute global EP size and rank
   global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *

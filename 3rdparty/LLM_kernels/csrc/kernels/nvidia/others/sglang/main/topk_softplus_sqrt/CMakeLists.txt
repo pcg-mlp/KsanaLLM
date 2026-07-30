@@ -24,5 +24,5 @@ if(SGLANG_TSS_TEST_SRCS)
   cc_test(llm_kernels_nvidia_kernel_sglang_topk_softplus_sqrt_test SRCS ${SGLANG_TSS_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_sglang_topk_softplus_sqrt
-    llm_kernels_nvidia_kernel_topk_softplus_sqrt)
+    llm_kernels_nvidia_kernel_vllm_topk_softplus_sqrt)
 endif()

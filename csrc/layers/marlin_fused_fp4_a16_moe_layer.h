@@ -21,6 +21,13 @@ namespace ksana_llm {
 #ifdef ENABLE_CUDA
 class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
  public:
+  virtual ~MarlinFusedFp4A16MoeLayer() {
+    if (evt_gemm1_start_) cudaEventDestroy(evt_gemm1_start_);
+    if (evt_gemm1_end_) cudaEventDestroy(evt_gemm1_end_);
+    if (evt_gemm2_start_) cudaEventDestroy(evt_gemm2_start_);
+    if (evt_gemm2_end_) cudaEventDestroy(evt_gemm2_end_);
+  }
+
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
 
@@ -90,6 +97,8 @@ class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
   bool apply_weight_ = false;
   bool has_swiglu_limit_ = false;
   float swiglu_limit_ = 0.0f;
+  float situ_beta_ = 0.0f;
+  float situ_linear_beta_ = 0.0f;
 
   void* topk_weights_ptr_ = nullptr;
   size_t topk_weights_ptr_size = 0;

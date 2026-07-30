@@ -136,18 +136,23 @@ inline RoutingStats ComputeRoutingStats(const Fp4MoeTestConfig& cfg, size_t num_
                                         const torch::Tensor& gate_full) {
   RoutingStats rs;
   rs.num_tokens = num_tokens;
-  rs.topk = 6;
+  rs.topk = cfg.topk();
   rs.experts_total = ComputeExpertsPerRank(cfg);
   rs.is_ep = (cfg.expert_para_size > 1);
 
   size_t E_local = rs.experts_total;
   int64_t M = static_cast<int64_t>(num_tokens);
-  int64_t topk = 6;
+  int64_t topk = static_cast<int64_t>(cfg.topk());
 
   // Slice gate to [0, M) and compute gating (same as ref.h GpuRefFp4MoeForward)
   auto gate_m = gate_full.slice(0, 0, M);
   auto gate_f32 = gate_m.to(torch::kFloat32);
-  auto scores = torch::sqrt(torch::nn::functional::softplus(gate_f32));
+  torch::Tensor scores;
+  if (cfg.is_k3()) {
+    scores = torch::sigmoid(gate_f32);
+  } else {
+    scores = torch::sqrt(torch::nn::functional::softplus(gate_f32));
+  }
   auto topk_result = torch::topk(scores, topk, /*dim=*/-1, /*largest=*/true, /*sorted=*/true);
   auto topk_ids = std::get<1>(topk_result).to(torch::kInt64);  // [M, topk]
   auto flat_ids = topk_ids.reshape(-1);                        // [M*topk]
@@ -196,7 +201,7 @@ inline RoutingStats ComputeRoutingStats(const Fp4MoeTestConfig& cfg, size_t num_
 inline void ComputeCostModel(const Fp4MoeTestConfig& cfg, const RoutingStats& rs, Fp4Backend backend, int32_t bs1,
                              int32_t bs2, BenchResult& br) {
   size_t inter_per_rank = ComputeInterPerRank(cfg);
-  size_t K = cfg.hidden_size;
+  size_t K = cfg.hidden_size();
   double N1 = static_cast<double>(inter_per_rank) * 2.0;  // GEMM1 N (fused gate+up)
   double N2 = static_cast<double>(inter_per_rank);        // GEMM2 K
   double Kd = static_cast<double>(K);
@@ -341,10 +346,11 @@ BenchResult MeasureMoeCudaExecutionTime(Func&& forward, MoePerfStats* perf_stats
 template <typename LayerT>
 std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
     LayerT* layer, std::vector<Tensor>& persistent_inputs, const Fp4MoeTestConfig& cfg, cudaStream_t stream,
-    const void* hs_full, const void* gate_full, const std::vector<RoutingStats>& routing_stats, Fp4Backend backend) {
+    const void* hs_full, const void* gate_full, const std::vector<RoutingStats>& routing_stats, Fp4Backend backend,
+    const torch::Tensor& e_score_bias = {}) {
   static constexpr size_t kBytesPerBF16 = 2;
-  size_t K = cfg.hidden_size;
-  size_t E = cfg.num_experts;
+  size_t K = cfg.hidden_size();
+  size_t E = cfg.num_experts();
 
   MoePerfStats perf_stats;
   layer->SetPerfStats(&perf_stats);
@@ -353,6 +359,14 @@ std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
   results.reserve(kTokenSizes.size());
   std::vector<torch::Tensor> outputs;
   outputs.reserve(kTokenSizes.size());
+
+  // Wrap e_score_bias into a ksana Tensor for Forward's 8th argument.
+  Tensor e_bias_tensor;
+  if (e_score_bias.defined()) {
+    e_bias_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {E});
+    cudaMemcpyAsync(e_bias_tensor.GetPtr<void>(), e_score_bias.data_ptr(), E * sizeof(float),
+                    cudaMemcpyDeviceToDevice, stream);
+  }
 
   for (size_t idx = 0; idx < kTokenSizes.size(); ++idx) {
     size_t num_tokens = kTokenSizes[idx];
@@ -369,7 +383,7 @@ std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
 
     auto forward = [&]() {
       layer->Forward(&persistent_inputs[0], &persistent_inputs[1], &persistent_inputs[2], &persistent_inputs[3],
-                     &eplb_map, &output, &workspace);
+                     &eplb_map, &output, &workspace, e_score_bias.defined() ? &e_bias_tensor : nullptr);
     };
 
     if constexpr (IsHummingFp4MoeLayerV<LayerT>) {

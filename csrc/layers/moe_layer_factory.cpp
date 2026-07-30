@@ -240,6 +240,8 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   moe_matmul_param.push_back(model_config_.swiglu_limit);  // swiglu_limit (>0 means enabled)
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.num_hash_layers));
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.vocab_size));
+  moe_matmul_param.push_back(model_config_.situ_beta);        // situ_beta
+  moe_matmul_param.push_back(model_config_.situ_linear_beta);  // situ_linear_beta
 
   // FP4 MoE layer creation
   if (enable_moe_fp4) {

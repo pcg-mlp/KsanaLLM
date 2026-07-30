@@ -27,7 +27,7 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_blockwise_gemm llm_kernels_nvidia_utils
     llm_kernels_nvidia_kernel_flash_mla llm_kernels_nvidia_kernel_expand
     llm_kernels_nvidia_kernel_flash_sparse_mla llm_kernels_nvidia_kernel_gather
-    llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_topk_softplus_sqrt
+    llm_kernels_nvidia_kernel_grouped_topk llm_kernels_nvidia_kernel_vllm_topk_softplus_sqrt
     llm_kernels_nvidia_kernel_sglang_topk_softplus_sqrt llm_kernels_nvidia_kernel_machete
     llm_kernels_nvidia_kernel_moe_wna16 llm_kernels_nvidia_kernel_dequant llm_kernels_nvidia_kernel_dequant_fp4
     llm_kernels_nvidia_kernel_marlin_moe llm_kernels_nvidia_kernel_trt_all_reduce
@@ -41,7 +41,9 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_dspark
     llm_kernels_nvidia_kernel_flashinfer_attention
     llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16
-    llm_kernels_nvidia_kernel_qknorm_rope)
+    llm_kernels_nvidia_kernel_qknorm_rope
+    llm_kernels_nvidia_kernel_sglang_route_radix
+    llm_kernels_nvidia_kernel_vllm_single_group_topk)
 
   if(TARGET llm_kernels_nvidia_kernel_humming)
     list(APPEND nvidia_kernels_LIBS llm_kernels_nvidia_kernel_humming)
