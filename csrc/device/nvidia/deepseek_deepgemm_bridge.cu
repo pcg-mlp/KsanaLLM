@@ -15,8 +15,7 @@
 
 #  include "jit_kernels/impls/sm90_fp8_gemm_1d2d.hpp"
 #  include "jit_kernels/impls/sm90_tf32_hc_prenorm_gemm.hpp"
-#  include "jit_kernels/impls/smxx_fp8_fp4_mqa_logits.hpp"
-#  include "jit_kernels/impls/smxx_fp8_fp4_paged_mqa_logits.hpp"
+#  include "jit_kernels/impls/sm90_fp8_mqa_logits.hpp"
 
 namespace {
 
@@ -58,7 +57,7 @@ void SmxxFp8MqaLogits(const torch::Tensor& q, const torch::Tensor& kv, const tor
                       const torch::Tensor& weights, const torch::Tensor& cu_seq_len_k_start,
                       const torch::Tensor& cu_seq_len_k_end, const torch::Tensor& logits, int seq_len, int seq_len_kv,
                       int max_seqlen_k, int stride_logits, int num_heads, int head_dim, int block_q, int block_kv) {
-  deep_gemm::smxx_fp8_mqa_logits(q, kv, kv_scales, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits,
+  deep_gemm::sm90_fp8_mqa_logits(q, kv, kv_scales, weights, cu_seq_len_k_start, cu_seq_len_k_end, logits,
                                  logits.scalar_type(), seq_len, seq_len_kv, max_seqlen_k, stride_logits, num_heads,
                                  head_dim, block_q, block_kv);
 }
@@ -69,7 +68,7 @@ void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache
                            int next_n, int num_heads, int head_dim, int num_kv_blocks, int block_kv,
                            bool is_context_lens_2d, int logits_stride, int block_table_stride, int num_sms,
                            int split_kv) {
-  deep_gemm::smxx_fp8_paged_mqa_logits(q, kv_cache, kv_cache_scales, weights, context_lens, logits, block_table,
+  deep_gemm::sm90_fp8_paged_mqa_logits(q, kv_cache, kv_cache_scales, weights, context_lens, logits, block_table,
                                        /*indices=*/torch::Tensor(), schedule_meta, logits.scalar_type(), batch_size,
                                        next_n, num_heads, head_dim, num_kv_blocks, block_kv, is_context_lens_2d,
                                        /*is_varlen=*/false, logits_stride, block_table_stride, num_sms, split_kv);
@@ -77,7 +76,7 @@ void SmxxFp8PagedMqaLogits(const torch::Tensor& q, const torch::Tensor& kv_cache
 
 void SmxxPagedMqaLogitsMetadata(const torch::Tensor& context_lens, const torch::Tensor& schedule_metadata,
                                 int batch_size, int next_n, int block_kv, int num_sms, bool is_context_lens_2d) {
-  deep_gemm::smxx_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms,
+  deep_gemm::sm90_paged_mqa_logits_metadata(context_lens, schedule_metadata, batch_size, next_n, block_kv, num_sms,
                                             is_context_lens_2d, /*is_varlen=*/false, /*indices_ptr=*/nullptr);
 }
 

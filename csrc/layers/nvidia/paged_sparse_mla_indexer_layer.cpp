@@ -7,6 +7,7 @@
 #include <fmt/core.h>
 #include <torch/torch.h>
 
+#include "csrc/kernels/nvidia/others/sglang/main/deepseek_v32/indexer_k.h"
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/fused_rope_quant_scale.h"
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/rope.h"
 #include "csrc/kernels/nvidia/others/sglang/main/deepseek_v4/store.h"
@@ -22,7 +23,10 @@ template <typename SCALAR_T>
 struct PagedMlaInputData {
   SCALAR_T* q_ptr;
   SCALAR_T* k_ptr;
-  SCALAR_T* weights_ptr;
+  const void* k_norm_weight_ptr;
+  const void* k_norm_bias_ptr;
+  float k_norm_eps;
+  void* weights_ptr;
   uint8_t* quant_workspace_ptr;
   const Tensor& rotary_pos;
   const int* store_out_loc_ptr;
@@ -139,20 +143,6 @@ static void PrepareQuantWorkspace(size_t total_q_tokens, PagedQuantWorkspace& wo
 }
 
 template <typename SCALAR_T>
-static Status StoreKVCache(SCALAR_T* k_ptr, const PagedMlaInputData<SCALAR_T>& input_data,
-                           PagedQuantWorkspace& workspace, int layer_index, int page_bits, int block_stride) {
-  // Quant and store K to KV cache if needed
-  if (input_data.total_k_tokens > 0) {
-    DISPATCH_STORE_BY_PAGE_BITS(
-        page_bits, llm_kernels::nvidia::fused_store_indexer_cache, k_ptr,
-        /*cache*/ input_data.layer_indexer_kv_cache_ptr_tensor->template GetPtr<void*>()[1 + layer_index * 2],
-        input_data.store_out_loc_ptr, input_data.total_k_tokens, block_stride, input_data.stream);
-  }
-
-  return Status();
-}
-
-template <typename SCALAR_T>
 static Status ComputeMqaLogits(const PagedMlaInputData<SCALAR_T>& input_data, PagedQuantWorkspace& workspace, int rank,
                                int n_heads, int head_dim, int block_size, int block_stride, int layer_index,
                                int max_seq_len) {
@@ -244,7 +234,10 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const PagedSparseMlaIndexerParams& p
   PagedMlaInputData<SCALAR_T> input_data{
       .q_ptr = p.q->GetPtr<SCALAR_T>(),
       .k_ptr = p.k->GetPtr<SCALAR_T>(),
-      .weights_ptr = p.weights->GetPtr<SCALAR_T>(),
+      .k_norm_weight_ptr = p.k_norm_weight ? p.k_norm_weight->GetPtr<void>() : nullptr,
+      .k_norm_bias_ptr = p.k_norm_bias ? p.k_norm_bias->GetPtr<void>() : nullptr,
+      .k_norm_eps = p.k_norm_eps,
+      .weights_ptr = p.weights->GetPtr<void>(),
       .quant_workspace_ptr = p.quant_workspace->GetPtr<uint8_t>(),
       .rotary_pos = *p.rotary_embedding_pos,
       .store_out_loc_ptr = p.store_out_loc->GetPtr<int>(),
@@ -271,22 +264,22 @@ Status PagedSparseMlaIndexerLayer::ForwardT(const PagedSparseMlaIndexerParams& p
                         workspace_buffer_->GetPtr<float>(), n_heads_, head_dim_, max_seq_len_,
                         input_data.max_compressed_seq_len, block_size_);
 
-  if (compress_ratio_ == 1) {
-    // DSA indexer path: additionally apply RoPE to K and store to KV cache.
-    const int64_t k_stride_batch = static_cast<int64_t>(head_dim_) * sizeof(SCALAR_T);
-    const int64_t k_stride_head = k_stride_batch;
+  if (compress_ratio_ == 1 && input_data.total_k_tokens > 0) {
+    void* cache_ptr = input_data.layer_indexer_kv_cache_ptr_tensor->template GetPtr<void*>()[1 + layer_index_ * 2];
 
-    llm_kernels::nvidia::fused_qk_rope(
-        /*q=*/nullptr, /*k=*/input_data.k_ptr,  // rope_dim comes first
+    llm_kernels::nvidia::fused_k_indexer_norm_rope_store(
+        /*k_input=*/input_data.k_ptr,
+        /*cache=*/cache_ptr,
+        /*indices=*/input_data.store_out_loc_ptr,
+        /*weight=*/input_data.k_norm_weight_ptr,
+        /*bias=*/input_data.k_norm_bias_ptr,
         /*freqs_cis=*/rotary_embedding_cuda_->cos_sin_cache_,
         /*positions=*/input_data.rotary_pos.template GetPtr<int64_t>(),
-        /*q_stride_batch=*/0, k_stride_batch, /*q_stride_head=*/0, k_stride_head,
-        /*num_q_heads=*/0u,
-        /*num_k_heads=*/1u,
-        /*batch_size=*/static_cast<uint32_t>(input_data.total_q_tokens), input_data.stream, /*inverse=*/false,
-        is_neox_);
-
-    StoreKVCache<SCALAR_T>(input_data.k_ptr, input_data, workspace, layer_index_, page_bits_, block_stride_);
+        /*k_input_stride_batch=*/static_cast<int64_t>(head_dim_),
+        /*batch_size=*/static_cast<uint32_t>(input_data.total_k_tokens),
+        /*page_bits=*/static_cast<uint32_t>(page_bits_),
+        /*page_stride=*/static_cast<int64_t>(block_stride_),
+        /*eps=*/input_data.k_norm_eps, input_data.stream, is_neox_);
   }
 
   // Step 3: Fused RoPE + FP8 quantization + weight scaling for Q (both paths)

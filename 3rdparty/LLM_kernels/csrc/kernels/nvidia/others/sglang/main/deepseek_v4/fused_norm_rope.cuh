@@ -41,7 +41,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 /// \brief common block size for memory-bound kernel
 constexpr uint32_t kFNRBlockSize = 128;
 constexpr uint32_t kFNRNumWarps = kFNRBlockSize / device::kWarpThreads;
@@ -85,7 +84,8 @@ __global__ void fused_norm_rope_kernel(const __grid_constant__ FusedNormRopePara
   const auto lane_id = threadIdx.x % kWarpThreads;
   const auto work_id = blockIdx.x * kFNRNumWarps + warp_id;
 
-  if (work_id >= num_works) return;
+  if (work_id >= num_works) [[unlikely]]
+    return;
 
   // Wait here because reading the plan depends on the previous kernel's write.
   PDLWaitPrimary<kUsePDL>();

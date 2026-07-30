@@ -16,7 +16,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 struct FusedNormRopeStoreIndexerParams {
   const void* __restrict__ input;   // [num_works, kHeadDim] DType (read-only)
   const void* __restrict__ weight;  // [kHeadDim] DType (read-only), RMSNorm scale
@@ -76,7 +75,8 @@ __global__ void fused_norm_rope_store_indexer_kernel(const __grid_constant__ Fus
   const auto lane_id = threadIdx.x % kWarpThreads;
   const auto work_id = blockIdx.x * kFNRNumWarps + warp_id;
 
-  if (work_id >= num_works) return;
+  if (work_id >= num_works) [[unlikely]]
+    return;
 
   // Wait here because reading the plan depends on the previous kernel's write.
   PDLWaitPrimary<kUsePDL>();

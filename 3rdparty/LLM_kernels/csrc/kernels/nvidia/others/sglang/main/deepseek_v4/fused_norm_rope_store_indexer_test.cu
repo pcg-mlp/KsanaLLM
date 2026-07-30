@@ -19,7 +19,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants matching the indexer kernel
 // ─────────────────────────────────────────────────────────────────────────────

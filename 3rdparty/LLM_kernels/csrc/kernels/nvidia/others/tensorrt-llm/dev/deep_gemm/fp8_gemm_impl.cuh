@@ -159,6 +159,8 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
   // Synchronize all threads to make barrier visible in normal memory model
   (kNumTMAMulticast > 1) ? cute::cluster_sync() : __syncthreads();
 
+  cudaGridDependencySynchronize();
+
   // For pipeline unrolling
   struct DivisibleK {};
 
@@ -187,9 +189,6 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
 
     // NOTES: only one thread (or warp) will be used
     if (threadIdx.x == kNumMathThreads) {
-#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-      cudaGridDependencySynchronize();
-#  endif
       // Persistently schedule over blocks
       while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
         launch_k_iterations([&](int k_iter, auto type) {
@@ -517,6 +516,8 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
   // Synchronize all threads to make barrier visible in normal memory model
   (kNumTMAMulticast > 1) ? cute::cluster_sync() : __syncthreads();
 
+  cudaGridDependencySynchronize();
+
   // For pipeline unrolling
   struct DivisibleK {};
 
@@ -545,9 +546,6 @@ __global__ void __launch_bounds__(get_num_threads_per_sm<kNumTMAThreads, kNumMat
 
     // NOTES: only one thread (or warp) will be used
     if (threadIdx.x == kNumMathThreads) {
-#  if (defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900))
-      cudaGridDependencySynchronize();
-#  endif
       // Persistently schedule over blocks
       while (scheduler.get_next_block(m_block_idx, n_block_idx)) {
         launch_k_iterations([&](int k_iter, auto type) {

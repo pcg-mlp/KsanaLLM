@@ -109,9 +109,10 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
   STATUS_CHECK_RETURN(compressor_->Forward(x, workspace, kv_compressed_output, forwarding_context));
 
   // Step 2: Compute weights = weights_proj(x)
-  // Input: x [total_tokens, hidden_dim], Output: weight [total_tokens, n_heads]
+  // Input: x [total_tokens, hidden_dim], Output: weight [total_tokens, n_heads] FP32
   std::vector<Tensor> weights_tensors{workspace.GetView({total_tokens, n_heads_}, workspace_offset)};
-  workspace_offset += weights_tensors[0].GetElementNumber();
+  weights_tensors[0].dtype = DataType::TYPE_FP32;  // output as fp32
+  workspace_offset += weights_tensors[0].GetElementNumber() * /*for fp32*/ 2;
   STATUS_CHECK_RETURN(weights_proj_->Forward(x, weights_tensors));
 
   // Step 3: Query projection q = wq_b(qr)
@@ -144,9 +145,13 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
     Tensor context_k_indexer = kv_compressed_output.GetView({dp_context_kv_tokens, k_stride});
     Tensor context_weights = weights_tensors[0].GetView({dp_context_tokens, n_heads_});
 
+    // C4Indexer uses compress_ratio=4; k_norm branch (compress_ratio==1) is inactive.
     FlashSparseMlaIndexerLayer::FlashSparseMlaIndexerParams flash_params{
         .q = &context_q_indexer,
         .k = &context_k_indexer,
+        .k_norm_weight = nullptr,
+        .k_norm_bias = nullptr,
+        .k_norm_eps = 0.0f,
         .weights = &context_weights,
         .quant_workspace = &quant_workspace,
         .rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos,
@@ -187,6 +192,9 @@ Status C4Indexer::Forward(const Tensor& x, const Tensor& qr, const Tensor& works
       PagedSparseMlaIndexerLayer::PagedSparseMlaIndexerParams paged_params{
           .q = &current_q_indexer,
           .k = &current_k_indexer,
+          .k_norm_weight = nullptr,
+          .k_norm_bias = nullptr,
+          .k_norm_eps = 0.0f,
           .weights = &current_weights,
           .quant_workspace = &quant_workspace,
           .rotary_embedding_pos = &model_input->page_metas[i]->rotary_embedding_pos,

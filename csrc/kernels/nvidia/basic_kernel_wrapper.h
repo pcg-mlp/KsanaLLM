@@ -133,6 +133,11 @@ void InvokeMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle
                   cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0);
 
 template <typename T>
+void InvokeMatMulFp32Out(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,
+                         const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream, void* workspace_ptr,
+                         cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size = 0);
+
+template <typename T>
 void InvokeBatchedMatMul(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m, int n,
                          int k, int lda, int ldb, int ldc, int64_t batch_offset_a, int64_t batch_offset_b,
                          int64_t batch_offset_c, const void* a_ptr, const void* b_ptr, void* c_ptr,

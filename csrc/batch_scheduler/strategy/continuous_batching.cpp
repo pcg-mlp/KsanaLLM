@@ -795,9 +795,9 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
     size_t req_token_num = runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv
                                ? req_step_token_num
                                : seq_token_num;
-    // Reserve at least (GetDecodeTokenNumThreshold() - 1) tokens per request to ensure
+    // Reserve at least mtp_step_num tokens per request to ensure
     // prefill drafts fit within buffers sized for multi-token decoding, e.g., MTP/PTP/DSpark.
-    req_token_num = std::max(req_token_num, GetDecodeTokenNumThreshold() - 1);
+    req_token_num = std::max(req_token_num, runtime_config_.mtp_step_num);
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
         per_dp_batch_size < per_dp_max_batch_size_ && step_token_num + req_token_num <= dp_max_step_token_num_ &&
         req_step_block_num + launch_block_threshold <= total_free_block_num) {

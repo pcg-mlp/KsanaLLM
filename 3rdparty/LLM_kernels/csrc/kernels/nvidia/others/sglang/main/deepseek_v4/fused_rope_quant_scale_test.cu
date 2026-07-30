@@ -23,7 +23,6 @@ namespace llm_kernels {
 namespace nvidia {
 namespace test {
 
-
 static constexpr int64_t kHeadDim = 128;
 static constexpr int64_t kRopeDim = 64;
 static constexpr int64_t kNopeDim = 64;
@@ -142,14 +141,12 @@ class FusedRopeQuantScaleTest : public NvidiaTestSuitBase {
     FillRandomBF16(&w_f, &rng, -0.5f, 0.5f);
     FillRandomBF16(&freq_f, &rng);
 
-    std::vector<__nv_bfloat16> q_h, w_h, freq_h;
+    std::vector<__nv_bfloat16> q_h, freq_h;
     HostFloatToBF16(q_f, &q_h);
-    HostFloatToBF16(w_f, &w_h);
     HostFloatToBF16(freq_f, &freq_h);
 
     // Re-derive floats from bf16 to match kernel precision
     for (size_t i = 0; i < q_f.size(); ++i) q_f[i] = __bfloat162float(q_h[i]);
-    for (size_t i = 0; i < w_f.size(); ++i) w_f[i] = __bfloat162float(w_h[i]);
     for (size_t i = 0; i < freq_f.size(); ++i) freq_f[i] = __bfloat162float(freq_h[i]);
 
     std::vector<int64_t> h_positions(batch_size);
@@ -159,7 +156,7 @@ class FusedRopeQuantScaleTest : public NvidiaTestSuitBase {
 
     // Allocate device memory
     BufferMeta d_q = CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {q_elem});
-    BufferMeta d_weights = CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {w_elem});
+    BufferMeta d_weights = CreateBuffer<float>(MEMORY_GPU, {w_elem});
     BufferMeta d_freqs = CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {f_elem});
     BufferMeta d_positions = CreateBuffer<int64_t>(MEMORY_GPU, {static_cast<size_t>(batch_size)});
     BufferMeta d_output_q_fp8 =
@@ -168,8 +165,7 @@ class FusedRopeQuantScaleTest : public NvidiaTestSuitBase {
 
     CHECK_NVIDIA_CUDA_ERROR(
         cudaMemcpy(d_q.data_ptr, q_h.data(), q_elem * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
-    CHECK_NVIDIA_CUDA_ERROR(
-        cudaMemcpy(d_weights.data_ptr, w_h.data(), w_elem * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(d_weights.data_ptr, w_f.data(), w_elem * sizeof(float), cudaMemcpyHostToDevice));
     CHECK_NVIDIA_CUDA_ERROR(
         cudaMemcpy(d_freqs.data_ptr, freq_h.data(), f_elem * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice));
     CHECK_NVIDIA_CUDA_ERROR(
@@ -267,6 +263,16 @@ TEST_F(FusedRopeQuantScaleTest, NeoxLargeBatch) {
   TestCorrectness(/*batch_size=*/128, /*num_heads=*/128, /*rope_offset=*/0, /*is_neox=*/true);
 }
 
+// NeoX with page_bits=8 (256 tokens/page): batch spans full position range.
+TEST_F(FusedRopeQuantScaleTest, NeoxPageBits8RopeOffset0) {
+  TestCorrectness(/*batch_size=*/256, /*num_heads=*/16, /*rope_offset=*/0, /*is_neox=*/true);
+}
+
+TEST_F(FusedRopeQuantScaleTest, NeoxPageBits8RopeOffset64) {
+  TestCorrectness(/*batch_size=*/256, /*num_heads=*/16, /*rope_offset=*/static_cast<uint32_t>(kNopeDim),
+                  /*is_neox=*/true);
+}
+
 TEST_F(FusedRopeQuantScaleTest, DISABLED_PerfTest) {
   const std::vector<uint32_t> batch_sizes = {1, 8, 32, 128, 512, 2048};
   constexpr uint32_t num_heads = 128;
@@ -284,7 +290,7 @@ TEST_F(FusedRopeQuantScaleTest, DISABLED_PerfTest) {
   const size_t max_w_elem = static_cast<size_t>(max_batch) * num_heads;
 
   BufferMeta d_q = CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {max_q_elem}, /*random=*/true);
-  BufferMeta d_weights = CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {max_w_elem}, /*random=*/true);
+  BufferMeta d_weights = CreateBuffer<float>(MEMORY_GPU, {max_w_elem}, /*random=*/true);
   BufferMeta d_freqs =
       CreateBuffer<__nv_bfloat16>(MEMORY_GPU, {static_cast<size_t>(max_pos * kRopeDim)}, /*random=*/true);
   BufferMeta d_positions = CreateBuffer<int64_t>(MEMORY_GPU, {max_batch});
@@ -314,7 +320,7 @@ TEST_F(FusedRopeQuantScaleTest, DISABLED_PerfTest) {
 
     // Bandwidth calculation
     double input_bytes = static_cast<double>(batch_size) * num_heads * kHeadDim * sizeof(__nv_bfloat16);
-    double weight_bytes = static_cast<double>(batch_size) * num_heads * sizeof(__nv_bfloat16);
+    double weight_bytes = static_cast<double>(batch_size) * num_heads * sizeof(float);
     double freq_bytes = static_cast<double>(batch_size) * kRopeDim * sizeof(__nv_bfloat16);
     double output_bytes = static_cast<double>(batch_size) * num_heads * (kHeadDim + sizeof(float));
     double total_bytes = input_bytes + weight_bytes + freq_bytes + output_bytes;

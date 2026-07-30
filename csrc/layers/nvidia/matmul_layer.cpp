@@ -33,6 +33,7 @@ Status MatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& 
   if (cublas_workspace_size_ > 0) {
     cublas_workspace_ptr_ = workspace_buffer_->GetPtr<void>();
   }
+  const bool fp32_out = output.dtype == DataType::TYPE_FP32;
   if (context_->device->ext->GetGPUGemmAlgoHelper().IsInit()) {
     uint32_t sm = context_->device->ext->GetComputeCapacity();
     uint32_t cuda_ver = context_->device->ext->GetCudaVersion();
@@ -47,8 +48,9 @@ Status MatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& 
     } else if (std::is_same<T, __nv_bfloat16>::value) {
       dtype = CUDA_R_16BF;
     }
+    cudaDataType_t out_dtype = fp32_out ? CUDA_R_32F : dtype;
     llm_kernels::nvidia::GemmAlgoInfo gemm_algo_info = context_->device->ext->GetGPUGemmAlgoHelper().GetGemmAlgo(
-        sm, cuda_ver, BATCH_SIZE, input.shape[0], weight.shape[1], input.shape[1], dtype, dtype, dtype, CUDA_R_32F,
+        sm, cuda_ver, BATCH_SIZE, input.shape[0], weight.shape[1], input.shape[1], dtype, dtype, out_dtype, CUDA_R_32F,
         CUBLAS_OP_N, CUBLAS_OP_N);
     if (gemm_algo_info.gemm_op_type != llm_kernels::nvidia::DEFAULT_GEMM_ALGO) {
       cublaslt_algo_ptr_ = &(gemm_algo_info.cublaslt_algo);
@@ -56,14 +58,23 @@ Status MatMulLayer::ForwardT(const Tensor& input, const Tensor& weight, Tensor& 
   }
 
   cudaStream_t compute_stream = GetComputeStream(exec_ctx);
-  InvokeMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(),
-                  static_cast<int>(input.shape[0]), static_cast<int>(weight.shape[1]), static_cast<int>(input.shape[1]),
-                  reinterpret_cast<const void*>(input.GetPtr<void>()),
-                  reinterpret_cast<const void*>(weight.GetPtr<void>()), output.GetPtr<void>(), compute_stream,
-                  cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
-
-  output.shape = {input.shape[0], weight.shape[1]};
-  output.dtype = input.dtype;
+  if (fp32_out) {
+    InvokeMatMulFp32Out<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(),
+                           static_cast<int>(input.shape[0]), static_cast<int>(weight.shape[1]),
+                           static_cast<int>(input.shape[1]), reinterpret_cast<const void*>(input.GetPtr<void>()),
+                           reinterpret_cast<const void*>(weight.GetPtr<void>()), output.GetPtr<void>(), compute_stream,
+                           cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
+    output.shape = {input.shape[0], weight.shape[1]};
+    // output.dtype already FP32 — preserve it.
+  } else {
+    InvokeMatMul<T>(context_->device->ext->GetCublasHandle(), context_->device->ext->GetCublasLtHandle(),
+                    static_cast<int>(input.shape[0]), static_cast<int>(weight.shape[1]),
+                    static_cast<int>(input.shape[1]), reinterpret_cast<const void*>(input.GetPtr<void>()),
+                    reinterpret_cast<const void*>(weight.GetPtr<void>()), output.GetPtr<void>(), compute_stream,
+                    cublas_workspace_ptr_, cublaslt_algo_ptr_, cublas_workspace_size_);
+    output.shape = {input.shape[0], weight.shape[1]};
+    output.dtype = input.dtype;
+  }
   cublaslt_algo_ptr_ = nullptr;
   return Status();
 }

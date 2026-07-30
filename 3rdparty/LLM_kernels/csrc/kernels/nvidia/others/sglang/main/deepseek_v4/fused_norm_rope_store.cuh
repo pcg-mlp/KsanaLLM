@@ -92,7 +92,8 @@ __global__ void fused_norm_rope_store_kernel(const __grid_constant__ FusedNormRo
   const auto lane_id = threadIdx.x % kWarpThreads;
   const auto work_id = blockIdx.x * kFNRNumWarps + warp_id;
 
-  if (work_id >= num_works) return;
+  if (work_id >= num_works) [[unlikely]]
+    return;
 
   // Wait here because reading the plan depends on the previous kernel's write.
   PDLWaitPrimary<kUsePDL>();

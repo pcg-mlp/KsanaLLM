@@ -22,6 +22,9 @@ class FlashSparseMlaIndexerLayer : public BaseLayer {
   struct FlashSparseMlaIndexerParams {
     const Tensor* q;
     const Tensor* k;
+    const Tensor* k_norm_weight;
+    const Tensor* k_norm_bias;
+    float k_norm_eps;
     const Tensor* weights;
     const Tensor* quant_workspace;
     const Tensor* rotary_embedding_pos;

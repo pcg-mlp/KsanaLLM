@@ -42,10 +42,10 @@ SparseMlaIndexer::SparseMlaIndexer(int layer_idx, LayerCreationContext& creation
   weights_proj_ =
       std::make_shared<Linear>(layer_prefix + ".indexer.weights_proj.weight", creation_context, linear_compute_backend);
 
-  // Initialize layer norm
-  k_norm_ = std::make_shared<Layernorm>(layer_prefix + ".indexer.k_norm.weight",
-                                        model_creation_config.layernorm_config.layernorm_eps, creation_context,
-                                        layer_prefix + ".indexer.k_norm.bias");
+  // Initialize layer norm parameters
+  k_norm_weight_ = creation_context.base_weight->GetModelWeights(layer_prefix + ".indexer.k_norm.weight");
+  k_norm_bias_ = creation_context.base_weight->GetModelWeights(layer_prefix + ".indexer.k_norm.bias");
+  k_norm_eps_ = model_creation_config.layernorm_config.layernorm_eps;
 
   // Initialize flash and paged indexer layers with local layer index
   flash_sparse_mla_indexer_layer_ = std::make_unique<FlashSparseMlaIndexerLayer>();
@@ -99,15 +99,12 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
   // Step 1: Key projection k = wk(x)
   // Input: x [total_tokens, dim]
   // Output: k [total_tokens, head_dim]
+  size_t workspace_offset = 0;
   std::vector<Tensor> k_indexer_tensors{workspace.GetView({total_tokens, head_dim_})};
+  workspace_offset += k_indexer_tensors[0].GetElementNumber();
   {
     PROFILE_EVENT_SCOPE(wk_forward, "indexer_wk", rank);
     STATUS_CHECK_RETURN(wk_->Forward(x, k_indexer_tensors));
-  }
-  // Step 2: Key normalization
-  {
-    PROFILE_EVENT_SCOPE(k_norm_forward, "indexer_k_norm", rank);
-    STATUS_CHECK_RETURN(k_norm_->Forward(k_indexer_tensors[0], k_indexer_tensors[0]));
   }
 
   // Calculate token counts
@@ -117,10 +114,12 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
   const size_t dp_context_tokens = model_input->dp_context_tokens;
   const size_t dp_decode_tokens = model_input->dp_decode_tokens;
 
-  // Step 3: Compute weights = weights_proj(x)
+  // Step 2: Compute weights = weights_proj(x)
   // Input: x [total_tokens, dim]
-  // Output: weight [total_tokens, n_local_heads]
-  std::vector<Tensor> weights_tensors{workspace.GetView({total_tokens, n_heads_}, total_tokens * head_dim_)};
+  // Output: weight [total_tokens, n_local_heads] FP32
+  std::vector<Tensor> weights_tensors{workspace.GetView({total_tokens, n_heads_}, workspace_offset)};
+  weights_tensors[0].dtype = DataType::TYPE_FP32;  // output as fp32
+  workspace_offset += weights_tensors[0].GetElementNumber() * /*for fp32*/ 2;
   {
     PROFILE_EVENT_SCOPE(weights_proj_forward, "indexer_weights_proj", rank);
     if (context_use_dsa || dp_context_tokens == 0) {
@@ -134,7 +133,7 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     }
   }
 
-  // Step 4: Query projection q = wq_b(qr)
+  // Step 3: Query projection q = wq_b(qr)
   // Input: qr [total_tokens, q_lora_rank]
   // Output: q [total_tokens, n_local_heads * head_dim]
   std::vector<Tensor> q_indexer_tensors{x.GetView({total_tokens, n_heads_, head_dim_})};
@@ -151,10 +150,9 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     }
   }
 
-  // Step 5: Process flash and paged attention separately
+  // Step 4: Process flash and paged attention separately
   // Use large enough workspace
-  Tensor quant_workspace =
-      workspace.GetView({total_tokens * n_heads_ * head_dim_}, total_tokens * (n_heads_ + head_dim_));
+  Tensor quant_workspace = workspace.GetView({total_tokens * n_heads_ * head_dim_}, workspace_offset);
   auto& attn_ctx = forwarding_context.GetAttentionForwardContext();
 
   if (dp_context_tokens > 0) {
@@ -169,6 +167,9 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
     FlashSparseMlaIndexerLayer::FlashSparseMlaIndexerParams fparams;
     fparams.q = &context_q_indexer;
     fparams.k = &context_k_indexer;
+    fparams.k_norm_weight = &k_norm_weight_;
+    fparams.k_norm_bias = &k_norm_bias_;
+    fparams.k_norm_eps = k_norm_eps_;
     fparams.weights = &context_weights;
     fparams.quant_workspace = &quant_workspace;
     fparams.rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos;
@@ -208,6 +209,9 @@ Status SparseMlaIndexer::Forward(const Tensor& x, const Tensor& qr, const Tensor
       PagedSparseMlaIndexerLayer::PagedSparseMlaIndexerParams pparams;
       pparams.q = &current_q_indexer;
       pparams.k = &current_k_indexer;
+      pparams.k_norm_weight = &k_norm_weight_;
+      pparams.k_norm_bias = &k_norm_bias_;
+      pparams.k_norm_eps = k_norm_eps_;
       pparams.weights = &current_weights;
       pparams.quant_workspace = &quant_workspace;
       pparams.rotary_embedding_pos = &model_input->page_metas[i]->rotary_embedding_pos;

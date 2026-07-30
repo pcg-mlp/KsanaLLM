@@ -9,7 +9,6 @@
 #include "layers/base_layer.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/layer_creation_context.h"
-#include "modules/basic/layernorm.h"
 #include "modules/basic/linear.h"
 #include "utils/status.h"
 #include "utils/tensor.h"
@@ -52,8 +51,12 @@ class SparseMlaIndexer {
   // Layers
   std::shared_ptr<Linear> wq_b_;          // Query projection (q_lora_rank -> n_heads * head_dim)
   std::shared_ptr<Linear> wk_;            // Key projection (dim -> head_dim)
-  std::shared_ptr<Layernorm> k_norm_;     // Key normalization
   std::shared_ptr<Linear> weights_proj_;  // Weights projection (dim -> n_heads)
+
+  // Key layer norm parameters
+  Tensor k_norm_weight_;
+  Tensor k_norm_bias_;
+  float k_norm_eps_;
 
   // Flash and paged indexer layers
   std::unique_ptr<BaseLayer> flash_sparse_mla_indexer_layer_;

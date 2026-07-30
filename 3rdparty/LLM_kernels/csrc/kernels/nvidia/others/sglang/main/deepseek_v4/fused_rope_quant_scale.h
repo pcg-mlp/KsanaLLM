@@ -10,7 +10,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 // Fused RoPE + FP8 quantization + weight scaling.
 //
 // 1. RoPE rotation on 64 dims of Q at the given rope_offset within the head.
@@ -18,7 +17,7 @@ namespace nvidia {
 // 3. output_scale = q_scale * weight * (n_heads_inv_sqrt * softmax_scale)
 //
 // q:            [batch * heads, 128] bf16, contiguous.
-// weights:      [batch * heads] bf16, contiguous.
+// weights:      [batch * heads] fp32, contiguous.
 // freqs_cis:    [max_pos, 64] bf16, split [cos|sin].
 // positions:    [batch] int64.
 // output_q_fp8: [batch * heads, 128] fp8_e4m3, contiguous.

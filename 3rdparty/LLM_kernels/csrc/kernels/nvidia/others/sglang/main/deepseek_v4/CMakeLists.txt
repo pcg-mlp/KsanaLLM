@@ -17,8 +17,10 @@ target_include_directories(llm_kernels_nvidia_kernel_sglang_deepseek_v4 PUBLIC
   ${PROJECT_SOURCE_DIR}
   ${PROJECT_SOURCE_DIR}/csrc/kernels/nvidia/others/sglang/main/include
 )
-target_link_libraries(llm_kernels_nvidia_kernel_sglang_deepseek_v4 PUBLIC -lcublas -lcudart -lcublasLt llm_kernels_nvidia_utils)
+target_link_libraries(llm_kernels_nvidia_kernel_sglang_deepseek_v4 PUBLIC -lcudart llm_kernels_nvidia_utils)
 
 # for test
 file(GLOB_RECURSE DEEPSEEK_V4_TEST_SRCS *test.cu)
-cc_test(llm_kernels_nvidia_kernel_sglang_deepseek_v4_test SRCS ${DEEPSEEK_V4_TEST_SRCS} DEPS llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_sglang_deepseek_v4)
+if(DEEPSEEK_V4_TEST_SRCS)
+  cc_test(llm_kernels_nvidia_kernel_sglang_deepseek_v4_test SRCS ${DEEPSEEK_V4_TEST_SRCS} DEPS llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_sglang_deepseek_v4)
+endif()

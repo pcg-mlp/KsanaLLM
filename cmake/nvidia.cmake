@@ -144,14 +144,14 @@ if(GIT_FOUND AND ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         if(NOT GIT_SUBMODULE_RESULT EQUAL 0)
             message(WARNING "Failed to update DeepGEMM submodules.")
         endif()
-        message(STATUS "Checking out DeepGEMM to commit 714dd1a4a980f7937a74343d19a8eba4fe321480")
+        message(STATUS "Checking out DeepGEMM to commit 559d79fb6994a58b8a15b4b93bf13ccc16edf247")
         execute_process(
-            COMMAND ${GIT_EXECUTABLE} checkout 714dd1a4a980f7937a74343d19a8eba4fe321480
+            COMMAND ${GIT_EXECUTABLE} checkout 559d79fb6994a58b8a15b4b93bf13ccc16edf247
             WORKING_DIRECTORY ${DEEPGEMM_SOURCE_DIR}
             RESULT_VARIABLE GIT_CHECKOUT_RESULT
         )
         if(NOT GIT_CHECKOUT_RESULT EQUAL 0)
-            message(WARNING "Failed to checkout DeepGEMM to 714dd1a4a980f7937a74343d19a8eba4fe321480, using current branch.")
+            message(WARNING "Failed to checkout DeepGEMM to 559d79fb6994a58b8a15b4b93bf13ccc16edf247, using current branch.")
         endif()
 
         set(DEEPGEMM_PATCH_FILE ${CMAKE_SOURCE_DIR}/3rdparty/LLM_kernels/3rdparty/deepgemm.patch)

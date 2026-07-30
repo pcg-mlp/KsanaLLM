@@ -22,7 +22,6 @@ class BatchedMatMulLayer : public MatMulBaseLayer {
 #ifdef ENABLE_CUDA
   void* cublas_workspace_ptr_{nullptr};
   int cublas_workspace_size_{-1};
-  cublasLtMatmulAlgo_t* cublaslt_algo_ptr_{nullptr};
 #endif
 
  private:

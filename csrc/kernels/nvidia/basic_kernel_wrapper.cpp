@@ -369,6 +369,21 @@ INVOKE_MATMUL(half, CUDA_R_16F);
 INVOKE_MATMUL(__nv_bfloat16, CUDA_R_16BF);
 #undef INVOKE_MATMUL
 
+// FP32-output variant: A/B in T, C in fp32. Compute type is fp32.
+#define INVOKE_MATMUL_FP32_OUT(T, CUDA_TYPE)                                                                         \
+  template <>                                                                                                        \
+  void InvokeMatMulFp32Out<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int m, int n, int k,   \
+                              const void* a_ptr, const void* b_ptr, void* c_ptr, cudaStream_t& stream,               \
+                              void* workspace_ptr, cublasLtMatmulAlgo_t* cublaslt_algo, size_t workspace_size) {     \
+    CUDA_CHECK(llm_kernels::nvidia::InvokeCublasGemm(                                                                \
+        cublas_handle, cublaslt_handle, CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, b_ptr, n, CUDA_TYPE, a_ptr, k, CUDA_TYPE, \
+        c_ptr, n, CUDA_R_32F, CUDA_R_32F, stream, workspace_ptr, workspace_size, cublaslt_algo));                    \
+  }
+INVOKE_MATMUL_FP32_OUT(float, CUDA_R_32F);
+INVOKE_MATMUL_FP32_OUT(half, CUDA_R_16F);
+INVOKE_MATMUL_FP32_OUT(__nv_bfloat16, CUDA_R_16BF);
+#undef INVOKE_MATMUL_FP32_OUT
+
 #define INVOKE_BATCHED_GEMM(T, CUDA_TYPE)                                                                              \
   template <>                                                                                                          \
   void InvokeBatchedMatMul<T>(cublasHandle_t cublas_handle, cublasLtHandle_t cublaslt_handle, int batch_size, int m,   \

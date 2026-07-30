@@ -37,7 +37,6 @@
 namespace llm_kernels {
 namespace nvidia {
 
-
 // =============================================================================
 // Constants
 // =============================================================================
@@ -54,7 +53,7 @@ static constexpr uint32_t kRopeSize = kRopeDim / kVecSize;  // = 16
 // =============================================================================
 struct FusedRopeQuantScaleParams {
   const void* __restrict__ q;          // [batch * heads, head_dim] bf16, contiguous
-  const void* __restrict__ weights;    // [batch * heads] bf16
+  const void* __restrict__ weights;    // [batch * heads] fp32
   const void* __restrict__ freqs_cis;  // [max_pos, rope_dim] bf16, split [cos|sin]
   const void* __restrict__ positions;  // [batch] int64
   void* __restrict__ output_q_fp8;     // [batch * heads, head_dim] fp8, contiguous
@@ -100,7 +99,8 @@ __global__ __launch_bounds__(kBlockSize, 16) void fused_rope_quant_scale_kernel(
       (kRopeLaneStart == 0) ? (lane_id < kRopeLaneEnd) : (lane_id >= kRopeLaneStart && lane_id < kRopeLaneEnd);
 
   const uint32_t total_works = params.batch_size * params.num_heads;
-  if (work_id >= total_works) return;
+  if (work_id >= total_works) [[unlikely]]
+    return;
 
   const uint32_t batch_id = work_id / params.num_heads;
   const auto input_ptr = static_cast<const DType*>(params.q) + work_id * kHeadDim;
@@ -109,7 +109,7 @@ __global__ __launch_bounds__(kBlockSize, 16) void fused_rope_quant_scale_kernel(
 
   PDLWaitPrimary<kUsePDL>();
   Float4 data;
-  const auto weight_val = cast<float>(static_cast<const DType*>(params.weights)[work_id]);
+  const auto weight_val = static_cast<const float*>(params.weights)[work_id];
 
   // ── Part 1: Load Q head. Each lane owns a 4-elem pack. ──
   {
@@ -169,14 +169,11 @@ __global__ __launch_bounds__(kBlockSize, 16) void fused_rope_quant_scale_kernel(
 
   // ── Part 3: FP8 abs-max quantization + store ──
   {
-    float local_max = math::abs(data[0]);
-#pragma unroll
-    for (int i = 1; i < kVecSize; ++i) {
-      local_max = math::max(local_max, math::abs(data[i]));
-    }
+    const float local_max = fmaxf(fmaxf(fabsf(data[0]), fabsf(data[1])), fmaxf(fabsf(data[2]), fabsf(data[3])));
     const auto abs_max = warp::reduce_max(local_max);
     const auto scale = fmaxf(1e-4f, abs_max) / math::FP8_E4M3_MAX;
     const auto inv_scale = 1.0f / scale;
+
     OutStorage result;
     result[0] = pack_fp8(data[0] * inv_scale, data[1] * inv_scale);
     result[1] = pack_fp8(data[2] * inv_scale, data[3] * inv_scale);

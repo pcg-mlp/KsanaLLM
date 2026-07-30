@@ -2,6 +2,7 @@
 
 add_subdirectory(elementwise)
 add_subdirectory(quantization)
+add_subdirectory(deepseek_v32)
 add_subdirectory(deepseek_v4)
 add_subdirectory(topk)
 add_subdirectory(topk_softplus_sqrt)

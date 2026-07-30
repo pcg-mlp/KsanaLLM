@@ -191,7 +191,7 @@ cublasStatus_t InvokeCublasGemm(cublasHandle_t cublas_handle, cublasLtHandle_t c
 
   RETURN_NVIDIA_CUBLAS_ERROR(
       cublasLtMatmul(cublaslt_handle, operation_desc, alpha, a_ptr, a_desc, b_ptr, b_desc, beta, c_ptr, c_desc, c_ptr,
-                     c_desc, is_use_cublaslt_algo ? nullptr : cublaslt_algo, workspace_ptr, workspace_size, stream));
+                     c_desc, is_use_cublaslt_algo ? cublaslt_algo : nullptr, workspace_ptr, workspace_size, stream));
 
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatmulDescDestroy(operation_desc));
   RETURN_NVIDIA_CUBLAS_ERROR(cublasLtMatrixLayoutDestroy(c_desc));
