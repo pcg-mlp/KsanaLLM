@@ -34,6 +34,7 @@
 #  include "api/sparse_decode.h"
 #  include "common.h"
 #  include "csrc/kernels/nvidia/flash_sparse_mla/kernels/fp8_splitkv_mla.h"
+#  include "csrc/kernels/nvidia/flash_sparse_mla/kernels/fp8_splitkv_mla_swapab.cuh"
 #  include "params.h"
 #  include "sm90/decode/sparse_fp8/splitkv_mla.h"
 #  include "smxx/decode/combine/combine.h"
@@ -73,7 +74,7 @@ inline size_t AlignSize(const size_t size) {
   return (size + kAlignment - 1) & ~(kAlignment - 1);
 };
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, bool USE_SWAP_AB>
 void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indices_ptr,
                                      int* tile_scheduler_metadata_ptr, int* num_splits_ptr, bool sched_meta_initialized,
                                      int batch_size, int seqlen_q, int num_heads_q, int head_size_k, int num_blocks,
@@ -189,6 +190,24 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
 
   DecodeImplMeta impl_meta = impl->get_meta(std::max(kMinNumHeads, num_heads_q), seqlen_q);
 
+  // Swap-AB (h_q=16) over-partitions KV cache with the default heuristic
+  // (num_sm_parts=num_sms/s_q=132/s_q): when total KV blocks are scarce (small
+  // batch) most SM partitions end up idle but still pay launch + prologue +
+  // epilogue + tile-scheduler cost, and the combine kernel merges many splits.
+  // Cap num_sm_parts by the estimated total KV blocks so each partition handles
+  // enough work; non-swap-AB path unchanged. The override keeps the 1/s_q
+  // scaling of the default heuristic so it stays within the tile_scheduler
+  // metadata buffer sized by GetNumSmParts().
+  if constexpr (USE_SWAP_AB) {
+    constexpr int kSwapabTargetBlocksPerPart = 3;
+    const int extra_topk_eff = have_extra_kcache ? extra_topk : 0;
+    const int blocks_per_batch = (topk + extra_topk_eff + impl_meta.block_size_topk - 1) / impl_meta.block_size_topk;
+    const int total_blocks_est = batch_size * (blocks_per_batch + impl_meta.fixed_overhead_num_blocks);
+    const int default_num_sm_parts = std::max(arch.num_sms / seqlen_q, 1);
+    const int min_parts_for_work = std::max(total_blocks_est / kSwapabTargetBlocksPerPart, 1);
+    impl_meta.num_sm_parts = std::min(default_num_sm_parts, min_parts_for_work);
+  }
+
   const std::vector<int> q_shape{batch_size, seqlen_q, num_heads_q, head_size_k};
   const std::vector<int> kcache_shape{num_blocks, block_size, num_heads_k, bytes_per_token};
   const std::vector<int> indices_shape{batch_size, seqlen_q, topk};
@@ -286,33 +305,44 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8DsMla) {
     impl->run(params, features);
   } else {
+    if constexpr (USE_SWAP_AB) {
+      if (num_heads_q != 16) {
+        KLLM_KERNEL_THROW("use_swap_ab only supports num_heads_q=16, got %d", num_heads_q);
+      }
+      if (model_type == ModelType::V32) {
+        llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_swapab_kernel<ModelType::V32, 16, 16>(params);
+      } else {
+        llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_swapab_kernel<ModelType::MODEL1, 16, 16>(params);
+      }
+    } else {
 #  define LAUNCH_KERNEL_BY_NUM_HEADS(NUM_HEADS)                                                           \
     if (model_type == ModelType::V32) {                                                                   \
       llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_kernel<ModelType::V32, NUM_HEADS>(params);    \
     } else {                                                                                              \
       llm_kernels::nvidia::run_flash_splitkv_mla_fp8_sparse_kernel<ModelType::MODEL1, NUM_HEADS>(params); \
     }
-    // Supported num_heads must be instantiated under kernels/instantiations
-    switch (params.h_q) {
-      case 8:  // GLM-5 TP8
-        LAUNCH_KERNEL_BY_NUM_HEADS(8);
-        break;
-      case 16:  // DSV-32 TP8
-        LAUNCH_KERNEL_BY_NUM_HEADS(16);
-        break;
-      case 64:  // GLM-5 DP8
-        LAUNCH_KERNEL_BY_NUM_HEADS(64);
-        break;
-      case 128:  // DSV-32 DP8
-        LAUNCH_KERNEL_BY_NUM_HEADS(128);
-        break;
-      case 32:
-        LAUNCH_KERNEL_BY_NUM_HEADS(32);
-        break;
-      default:
-        KLLM_KERNEL_THROW("Unsupported num_heads_q: %d", num_heads_q);
-    }
+      // Supported num_heads must be instantiated under kernels/instantiations
+      switch (params.h_q) {
+        case 8:  // GLM-5 TP8
+          LAUNCH_KERNEL_BY_NUM_HEADS(8);
+          break;
+        case 16:  // DSV-32 TP8
+          LAUNCH_KERNEL_BY_NUM_HEADS(16);
+          break;
+        case 64:  // GLM-5 DP8
+          LAUNCH_KERNEL_BY_NUM_HEADS(64);
+          break;
+        case 128:  // DSV-32 DP8
+          LAUNCH_KERNEL_BY_NUM_HEADS(128);
+          break;
+        case 32:
+          LAUNCH_KERNEL_BY_NUM_HEADS(32);
+          break;
+        default:
+          KLLM_KERNEL_THROW("Unsupported num_heads_q: %d", num_heads_q);
+      }
 #  undef LAUNCH_KERNEL_BY_NUM_HEADS
+    }
   }
 
   CombineParams combine_params = {batch_size,
@@ -347,7 +377,10 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
   delete impl;
 }
 #  define INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(SCALAR_T, CACHE_T, KV_DTYPE)                               \
-    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE>(                           \
+    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE, false>(                    \
+        void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
+        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int);  \
+    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE, true>(                     \
         void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
         cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int)
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla);
@@ -364,7 +397,7 @@ int GetNumSmParts(int num_heads_q, int seqlen_q) { return 0; }
 
 int GetDecodingSchedMetaSize() { return 0; }
 
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, bool USE_SWAP_AB>
 void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indices_ptr,
                                      int* tile_scheduler_metadata_ptr, int* num_splits_ptr, bool sched_meta_initialized,
                                      int batch_size, int seqlen_q, int num_heads_q, int head_size_k, int num_blocks,
@@ -375,7 +408,10 @@ void InvokeFlashSparseMlaWithKVCache(void* q_ptr, CACHE_T* kcache_ptr, int* indi
                                      int extra_num_blocks, int extra_block_size, int extra_topk,
                                      int extra_kcache_batch_stride) {}
 #  define INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(SCALAR_T, CACHE_T, KV_DTYPE)                               \
-    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE>(                           \
+    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE, false>(                    \
+        void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
+        cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int);  \
+    template void InvokeFlashSparseMlaWithKVCache<SCALAR_T, CACHE_T, KV_DTYPE, true>(                     \
         void*, CACHE_T*, int*, int*, int*, bool, int, int, int, int, int, int, int, int, int, int, float, \
         cudaStream_t stream, float*, SCALAR_T*, int*, float*, CACHE_T*, int*, int*, int, int, int, int)
 INVOKE_FLASH_SPARSE_MLA_WITH_KVCACHE(__nv_bfloat16, uint8_t, llm_kernels::utils::KVCacheType::kFp8DsMla);

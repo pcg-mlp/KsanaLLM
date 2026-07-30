@@ -41,7 +41,7 @@ int GetDecodingSchedMetaSize();
 
 // Wrapper of run_get_decoding_sched_meta_kernel, run_flash_splitkv_mla_fp8_sparse_kernel and
 // flash_fwd_mla_combine_kernel
-template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE, bool USE_SWAP_AB = false>
 void InvokeFlashSparseMlaWithKVCache(
     void* q_ptr,                       // batch_size x seqlen_q x num_heads_q x head_size_k
     CACHE_T* kcache_ptr,               // num_blocks x block_size x num_heads_k x bytes_per_token

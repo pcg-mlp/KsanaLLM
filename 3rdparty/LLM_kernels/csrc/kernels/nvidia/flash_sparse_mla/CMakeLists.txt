@@ -52,7 +52,7 @@ target_link_libraries(llm_kernels_nvidia_kernel_flash_sparse_mla PRIVATE cutlass
 file(GLOB_RECURSE FLASH_SPARSE_MLA_TEST_SRCS *test.cu)
 if(FLASH_SPARSE_MLA_TEST_SRCS AND (ENABLE_FLASH_MLA STREQUAL "TRUE"))
   cc_test(llm_kernels_nvidia_kernel_flash_sparse_mla_test SRCS ${FLASH_SPARSE_MLA_TEST_SRCS} DEPS
-    llm_kernels_nvidia_kernel_flash_sparse_mla)
+    llm_kernels_nvidia_kernel_flash_sparse_mla torch c10 LINKS -Wl,--allow-shlib-undefined)
   if(WITH_TESTING)
     target_include_directories(llm_kernels_nvidia_kernel_flash_sparse_mla_test PRIVATE
       ${CUTLASS_INCLUDE_DIRS}

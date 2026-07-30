@@ -264,5 +264,94 @@ class KernelTemplate {
   static void run(const SparseAttnDecodeParams &params);
 };
 
+template <ModelType MODEL_TYPE, int NUM_HEADS, int BLOCK_SIZE_N>
+class KernelTemplateSwapAB {
+ public:
+  static_assert(NUM_HEADS == BLOCK_SIZE_N, "swap-AB requires NUM_HEADS == BLOCK_SIZE_N (h_q placed in N)");
+  static_assert(BLOCK_SIZE_N == 16, "only BLOCK_SIZE_N=16 instantiated in this plan");
+  static constexpr int NUM_M_BLOCKS = 1;
+  static constexpr int CLUSTER_SIZE = 1;
+
+  static constexpr int HEAD_DIM_K = MODEL_TYPE == ModelType::V32 ? 576 : 512;
+  static constexpr int HEAD_DIM_V = 512;
+  static constexpr int HEAD_DIM_ROPE = 64;
+  static constexpr int HEAD_DIM_NOPE = HEAD_DIM_K - HEAD_DIM_ROPE;
+
+  static constexpr int NUM_THREADS = 128 * 3;
+  static constexpr int TOPK_BLOCK_SIZE = 64;
+  static constexpr int NUM_K_BUFS = 2;
+  static constexpr int NUM_LOCAL_COLS = BLOCK_SIZE_N / 8 * 2;
+
+  static constexpr int OBUF_SW = 64;
+
+  using SmemLayoutQ = decltype(tile_to_shape(GMMA::Layout_SW64_Atom<fp8, GMMA::Major::K>{},
+                                               Shape<Int<BLOCK_SIZE_N>, Int<HEAD_DIM_K>>{}));
+
+  using SmemLayoutK = decltype(tile_to_shape(GMMA::Layout_SW64_Atom<fp8, GMMA::Major::K>{},
+                                               Shape<Int<TOPK_BLOCK_SIZE>, Int<HEAD_DIM_K>>{}));
+
+  using TransposeShapeAtomV = Shape<_64, _64>;
+  using SmemLayoutAtomVt = decltype(tile_to_shape(GMMA::Layout_SW64_Atom<fp8, GMMA::Major::K>{}, TransposeShapeAtomV{}));
+  using SmemLayoutV = decltype(tile_to_shape(SmemLayoutAtomVt{}, Shape<Int<HEAD_DIM_V>, Int<TOPK_BLOCK_SIZE>>{}));
+  using SmemLayoutHalfV = decltype(tile_to_shape(SmemLayoutAtomVt{}, Shape<Int<HEAD_DIM_V / 2>, Int<TOPK_BLOCK_SIZE>>{}));
+
+  using SmemLayoutS = decltype(tile_to_shape(GMMA::Layout_K_SW64_Atom<fp8>{},
+                                               Shape<Int<BLOCK_SIZE_N>, Int<TOPK_BLOCK_SIZE>>{}));
+
+  using SmemLayoutOBuf = decltype(tile_to_shape(GMMA::Layout_K_SW128_Atom<bf16>{},
+                                                  Shape<Int<BLOCK_SIZE_N>, Int<HEAD_DIM_V>>{}));
+  using SmemLayoutOAccumBuf = Layout<Shape<Int<BLOCK_SIZE_N>, Int<HEAD_DIM_V>>,
+                                       Stride<Int<520>, _1>>;
+
+  using TiledMMA_QK = decltype(make_tiled_mma(GMMA::MMA_64x16x32_F32E4M3E4M3_SS_TN<>{}, Layout<Shape<_1, _1, _1>>{}));
+  using TiledMMA_PV = decltype(make_tiled_mma(GMMA::MMA_64x16x32_F32E4M3E4M3_SS_TN<>{}, Layout<Shape<_1, _1, _1>>{}));
+
+  struct SharedMemoryPlan {
+    array_aligned<fp8, cosize_v<SmemLayoutQ>> q;
+    union {
+      struct {
+        array_aligned<fp8, cosize_v<SmemLayoutK>> k[NUM_K_BUFS];
+        array_aligned<fp8, cosize_v<SmemLayoutV>> vt[NUM_K_BUFS];
+      } kv;
+      array_aligned<bf16, cosize_v<SmemLayoutOBuf>> oBuf;
+      array_aligned<float, cosize_v<SmemLayoutOAccumBuf>> oAccumBuf;
+    } u;
+    CUTE_ALIGNAS(1024) array_aligned<fp8, cosize_v<SmemLayoutS>> s;
+    bool is_kv_valid[NUM_K_BUFS][TOPK_BLOCK_SIZE];
+
+    float sM[BLOCK_SIZE_N], sL[BLOCK_SIZE_N], sScale[BLOCK_SIZE_N], sOScale[BLOCK_SIZE_N];
+    array_aligned<float, 4 * 4 * NUM_LOCAL_COLS> warp_group_reduction_wksp_0;
+    array_aligned<float, 4 * 4 * NUM_LOCAL_COLS> warp_group_reduction_wksp_1;
+    transac_bar_t bar_q, bar_k_local_ready[NUM_K_BUFS], bar_k_avail[NUM_K_BUFS];
+    transac_bar_t bar_v_local_ready[NUM_K_BUFS];
+  };
+
+  template <typename Shape_Q, typename TMA_Q>
+  struct TmaParams {
+    Shape_Q shape_Q;
+    TMA_Q tma_Q;
+    CUtensorMap tensor_map_o;
+  };
+
+  enum NamedBarriers : uint32_t {
+    sScale_and_sS_ready = 0,
+    sScale_and_sS_free = 1,
+    oBuf_free_and_sL_ready = 2,
+    epilogue_r2s_ready = 3,
+    batch_loop_sync = 4,
+    warpgroup0_sync = 5,
+    sColMaxReady = 6,
+    sColMaxReadDone = 7,
+    sColSumReady = 8,
+  };
+
+  static __forceinline__ __device__ void sync_all_threads_in_cluster() { __syncthreads(); }
+
+  template <typename TMAParams>
+  static __device__ __forceinline__ void devfunc(const SparseAttnDecodeParams& params, const TMAParams& tma_params);
+
+  static void run(const SparseAttnDecodeParams& params);
+};
+
 }  // namespace nvidia
 }  // namespace llm_kernels

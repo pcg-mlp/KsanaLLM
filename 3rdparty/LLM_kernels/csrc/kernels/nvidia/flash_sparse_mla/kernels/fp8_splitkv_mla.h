@@ -12,5 +12,8 @@ namespace nvidia {
 template <ModelType MODEL_TYPE, int NUM_HEADS>
 void run_flash_splitkv_mla_fp8_sparse_kernel(const SparseAttnDecodeParams &params);
 
+template <ModelType MODEL_TYPE, int NUM_HEADS, int BLOCK_SIZE_N>
+void run_flash_splitkv_mla_fp8_sparse_swapab_kernel(const SparseAttnDecodeParams &params);
+
 }  // namespace nvidia
 }  // namespace llm_kernels
