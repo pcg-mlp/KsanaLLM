@@ -158,6 +158,11 @@ class TritonWrapper {
   void InvokeHummingFusedSiluAndMulFp8QuantEp(const T* input, float* scale, void* output, const int32_t* topk_ids,
                                               int inter_size, int num_tokens, float swiglu_limit, cudaStream_t stream);
 
+  template <typename T>
+  void InvokeAttnResKernel(void* prefix, void* delta, void* blocks, void* norm_weight, void* qk_weight,
+                           void* output_norm_weight, void* output, int num_tokens, int hidden_size, int num_blocks,
+                           bool write_block, cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);

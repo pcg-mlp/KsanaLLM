@@ -60,6 +60,10 @@ void HiddenUnitBufferHelper::InitializeHiddenUnitConfig() {
   tensor_para_size_ = runtime_config.parallel_basic_config.tensor_parallel_size;
   max_token_num_ = runtime_config.max_step_token_num;
   hidden_unit_size_ = model_config.hidden_units * model_config.mhc_config.hc_mult;
+  if (model_config.attn_res_config.attn_res_block_size > 0) {
+    hidden_unit_size_ *=
+        DivRoundUp(pipeline_config.upper_layer_idx + 1, model_config.attn_res_config.attn_res_block_size);
+  }
 
   KLLM_LOG_INFO << "HiddenUnitBufferPool::InitializeHiddenUnitConfig weight_type:" << weight_type_
                 << ", tensor_para_size:" << tensor_para_size_ << ", max_token_num:" << max_token_num_

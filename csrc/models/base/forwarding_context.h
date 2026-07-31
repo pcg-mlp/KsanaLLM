@@ -62,6 +62,9 @@ struct ForwardingBuffers {
   TensorBuffer* shared_buffer;
   TensorBuffer* kv_cache_buffer;
 
+  // Partial block prefix buffer for attn_res [max_token_num, hidden_units].
+  TensorBuffer* prefix_residual_buffer = nullptr;
+
   // Used among multiple forward calls for MTP/DSpark
   std::vector<Tensor> mtp_hidden_buffer_tensors;
   std::vector<Tensor> dspark_hidden_buffer_tensors;

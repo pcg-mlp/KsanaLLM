@@ -34,11 +34,11 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
       creation_context.runtime_config.parallel_basic_config.attn_data_parallel_size == tensor_parallel_size_
           ? 20 * 1024
           : 256 * 1024);
-  o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
   use_q_lora_ = (attn_config.model_config.mla_config.q_lora_rank != 0);
   if (use_dsa_) {
     KLLM_CHECK_WITH_INFO(use_q_lora_, "DeepSeek sparse attention must use q lora");
   }
+  use_output_gate_ = attn_config.model_config.mla_config.mla_use_output_gate;
 
   // attn_config.idx is the offset in kv_cache list.
   // e.g., master has normal layer 0-30 and nextn layer 61, the offset of layer_idx_61 is 31
@@ -101,6 +101,12 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
   if (o_proj_out_of_dp_) {
     mem_adjuster_ = std::make_shared<MemAdjuster>(creation_context);
   }
+  if (use_output_gate_) {
+    attn_g_proj_ =
+        std::make_shared<Linear>(layer_prefix + ".self_attn.g_proj.weight", creation_context, linear_compute_backend);
+    mla_output_gate_ = std::make_unique<MlaOutputGateLayer>();
+    mla_output_gate_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
+  }
 
 #ifdef ENABLE_CUDA
   set_torch_stream_layers_ = std::make_shared<SetTorchStreamLayer>();
@@ -120,6 +126,7 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   qk_rope_head_dim_ = attn_config.model_config.mla_config.qk_rope_head_dim;
   kv_lora_rank_ = attn_config.model_config.mla_config.kv_lora_rank;
   q_lora_rank_ = attn_config.model_config.mla_config.q_lora_rank;
+  o_proj_k_dim_ = head_num_per_atp_ * attn_config.model_config.mla_config.v_head_dim;
 
   const size_t kv_lora_or_q_nope_rope_buffer_size =
       max_token_num * std::max(head_num_per_atp_ * (qk_nope_head_dim_ + qk_rope_head_dim_), kv_lora_rank_);
@@ -147,6 +154,10 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
       attn_config.model_config.use_dsa ? max_token_num * attn_config.model_config.dsa_config.index_topk : 0;
   mla_buffers.topk_indices_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.topk_indices_buffer", {topk_indices_buffer_size}, TYPE_INT32);
+
+  const size_t g_buffer_size =
+      attn_config.model_config.mla_config.mla_use_output_gate ? max_token_num * o_proj_k_dim_ : 0;
+  mla_buffers.g_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.g_buffer", {g_buffer_size}, weight_type);
   return Status();
 }
 
@@ -195,6 +206,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   CREATE_BUFFER_SCOPE(q_rope_tensors, mla_buffers_.q_rope_buffer);
   CREATE_BUFFER_SCOPE(q_nope_rope_buffer_tensors, mla_buffers_.kv_lora_or_q_nope_rope_buffer);
   CREATE_BUFFER_SCOPE(indices_tensors, mla_buffers_.topk_indices_buffer);
+  CREATE_BUFFER_SCOPE(g_buffer_tensors, mla_buffers_.g_buffer);
   auto& indices_tensor = indices_tensors[0];
   if (use_dsa_) {
     const size_t offset =
@@ -235,6 +247,11 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     {
       PROFILE_EVENT_SCOPE(kv_a_layernorm, "kv_a_layernorm", rank);
       kv_a_layernorms_->Forward(kv_lora_buffer_tensors[0], kv_buffer_tensors[0]);
+    }
+
+    if (use_output_gate_) {
+      PROFILE_EVENT_SCOPE(attn_g_proj, "attn_g_proj", rank);
+      STATUS_CHECK_RETURN(attn_g_proj_->Forward(dp_hidden_input, g_buffer_tensors));
     }
 
     Tensor q_b_input = dp_hidden_input;
@@ -367,6 +384,12 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
     std::vector<Tensor> absorb_attn_output_tensors = {hidden_buffer_tensors_0[0].GetView(
         {dp_absorb_tokens, o_proj_k_dim_}, (dp_total_tokens - dp_absorb_tokens) * o_proj_k_dim_ + attn_output_offset)};
     STATUS_CHECK_RETURN(attn_w_uv_bmm_->Forward(reduce_buffer_tensors[0], absorb_attn_output_tensors[0]));
+  }
+
+  if (use_output_gate_ && dp_total_tokens > 0) {
+    PROFILE_EVENT_SCOPE(attn_output_gate, "attn_output_gate", rank);
+    Tensor attn_output = hidden_buffer_tensors_0[0].GetView({dp_total_tokens, o_proj_k_dim_}, attn_output_offset);
+    STATUS_CHECK_RETURN(mla_output_gate_->Forward(&attn_output, &g_buffer_tensors[0], /*output=*/&attn_output));
   }
 
   if (o_proj_out_of_dp_) {

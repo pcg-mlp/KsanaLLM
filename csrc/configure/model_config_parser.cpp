@@ -25,6 +25,7 @@
 #include "models/deepseek_v3/deepseek_v3_config.h"
 #include "models/deepseek_v4/deepseek_v4_config.h"
 #include "models/gpt/gpt_config.h"
+#include "models/kimi_k3/kimi_k3_config.h"
 #include "utils/gguf_file_tensor_loader.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
@@ -457,14 +458,20 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
     model_config.weight_data_type = GetModelDataType(config_json, model_config);
     model_config.type = config_json.at("model_type");
 
-    // Kimi-K2.5: extract text_config and use inner model_type "kimi_k2"
     if (model_config.type == "kimi_k25") {
+      // Kimi-K2.5: extract text_config and use inner model_type "kimi_k2"
       KLLM_LOG_INFO << "Kimi-K2.5 detected, extracting text_config";
       if (config_json.contains("text_config")) {
         config_json = config_json["text_config"];
       }
       model_config.type = config_json.value("model_type", "kimi_k2");
       model_config.weight_data_type = GetModelDataType(config_json, model_config);
+    } else if (model_config.type == "kimi_k3") {
+      // Kimi-K3: extract text_config
+      KLLM_LOG_INFO << "Kimi-K3 detected, extracting text_config";
+      if (config_json.contains("text_config")) {
+        config_json = config_json["text_config"];
+      }
     }
 
     auto architectures = config_json.at("architectures");
@@ -566,6 +573,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       PrepareDeepSeekV3Attributes(config_json, model_config);
     } else if (model_config.type == "deepseek_v4") {
       PrepareDeepSeekV4Attributes(config_json, model_config);
+    } else if (model_config.type == "kimi_k3") {
+      PrepareKimiK3Attributes(config_json, model_config);
     } else if (model_config.type == "glm4_moe") {
       PrepareGlm4MoeAttributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {

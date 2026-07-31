@@ -102,6 +102,8 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["_quant_tensor_kernel"] = {"N"};
   kernel_key_map_["_silu_and_mul_quant_kernel"] = {"N"};
   kernel_key_map_["_silu_and_mul_quant_ep_kernel"] = {"N"};
+  // (hidden_size H, num_blocks NB, has_delta HD, write_block WB, apply_output_norm ON, block_l BL).
+  kernel_key_map_["_attn_res_kernel"] = {"H", "NB", "HD", "WB", "ON", "BL"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -667,5 +669,53 @@ INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(float);
 INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(half);
 INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(__nv_bfloat16);
 #undef INVOKE_MHC_HEAD_BIG_FUSE_KERNEL
+
+template <typename T>
+void TritonWrapper::InvokeAttnResKernel(void* prefix, void* delta, void* blocks, void* norm_weight, void* qk_weight,
+                                        void* output_norm_weight, void* output, int num_tokens, int hidden_size,
+                                        int num_blocks, bool write_block, cudaStream_t stream) {
+  static_assert(std::is_same_v<T, __nv_bfloat16>, "InvokeAttnResKernel only supports __nv_bfloat16.");
+  std::string kernel_name = "_attn_res_kernel";
+
+  bool has_delta = delta != nullptr;
+  bool apply_output_norm = output_norm_weight != nullptr;
+  // Heuristic config
+  int block_l = (num_tokens >= 256 || num_blocks <= 1) ? 1 : 4;
+
+  // Triton drops optional pointer args from the compiled cubin signature when
+  // the corresponding specialization flag turns them off: `delta` disappears
+  // when HAS_DELTA=0, `output_norm_weight` disappears when APPLY_OUTPUT_NORM=0.
+  // Assemble the arg list to match the cubin's actual param order (append the
+  // Triton >= 3.x implicit scratch pair via TRITON_ARGS at the end).
+  std::vector<void*> args;
+  args.push_back(&prefix);
+  if (has_delta) {
+    args.push_back(&delta);
+  }
+  args.push_back(&blocks);
+  args.push_back(&norm_weight);
+  args.push_back(&qk_weight);
+  if (apply_output_norm) {
+    args.push_back(&output_norm_weight);
+  }
+  args.push_back(&output);
+  args.push_back(&kTritonScratchZero);
+  args.push_back(&kTritonScratchZero);
+
+  std::unordered_map<std::string, std::string> map = {{"H", ConvertToString(hidden_size)},
+                                                      {"NB", ConvertToString(num_blocks)},
+                                                      {"HD", ConvertToString(static_cast<int>(has_delta))},
+                                                      {"WB", ConvertToString(static_cast<int>(write_block))},
+                                                      {"ON", ConvertToString(static_cast<int>(apply_output_norm))},
+                                                      {"BL", ConvertToString(block_l)}};
+
+  InvokeTritonKernel(kernel_name, args.data(), map, num_tokens, 1, 1, stream);
+}
+#define INVOKE_ATTN_RES_KERNEL(T)                                                                            \
+  template void TritonWrapper::InvokeAttnResKernel<T>(                                                       \
+      void* prefix, void* delta, void* blocks, void* norm_weight, void* qk_weight, void* output_norm_weight, \
+      void* output, int num_tokens, int hidden_size, int num_blocks, bool write_block, cudaStream_t stream)
+INVOKE_ATTN_RES_KERNEL(__nv_bfloat16);
+#undef INVOKE_ATTN_RES_KERNEL
 
 }  // namespace ksana_llm

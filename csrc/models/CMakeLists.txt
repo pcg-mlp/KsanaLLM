@@ -24,6 +24,7 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_large/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v3/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v4/*.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/models/kimi_k3/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/glm4_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_turbo/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/arc_hunyuan_video/*.cpp

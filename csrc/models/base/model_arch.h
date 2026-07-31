@@ -47,6 +47,8 @@ enum class ModelArchitecture {
   ARCH_GLM4_MOE,
   // DeepSeek V4
   ARCH_DEEPSEEK_V4,
+  // Kimi K3
+  ARCH_KIMI_K3,
   // unknown
   ARCH_UNKNOWN,
 };

@@ -9,6 +9,7 @@
 #include "utils/status.h"
 #include "utils/utils.h"
 
+#include "layers/mla_output_gate_layer.h"
 #include "models/communicator/tp_communicator.h"
 #include "modules/attention/sparse_mla_indexer.h"
 #include "modules/basic/bmm.h"
@@ -28,7 +29,8 @@ struct MlaBuffers {
   TensorBuffer* k_rope_buffer;
   TensorBuffer* q_nope_buffer;
   TensorBuffer* q_rope_buffer;
-  TensorBuffer* topk_indices_buffer;
+  TensorBuffer* topk_indices_buffer = nullptr;
+  TensorBuffer* g_buffer = nullptr;
 };
 
 class MultiHeadLatentAttention {
@@ -59,6 +61,7 @@ class MultiHeadLatentAttention {
   bool use_fused_lora_a_ = false;
   // compute o_proj out of dp group
   bool o_proj_out_of_dp_ = false;
+  bool use_output_gate_ = false;
 
   std::shared_ptr<Linear> attn_fused_lora_a_projs_;
   std::shared_ptr<Linear> attn_q_a_projs_;
@@ -68,6 +71,7 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Linear> attn_q_b_lora_projs_;
   std::shared_ptr<Linear> attn_q_b_rope_projs_;
   std::shared_ptr<Linear> attn_o_proj_;
+  std::shared_ptr<Linear> attn_g_proj_;
   std::shared_ptr<Split> split_;
   std::shared_ptr<Bmm> attn_w_uk_t_bmm_;
   std::shared_ptr<Bmm> attn_w_uv_bmm_;
@@ -77,16 +81,17 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Layernorm> kv_a_layernorms_;
   std::shared_ptr<Layernorm> q_a_layernorms_;
   std::shared_ptr<SparseMlaIndexer> sparse_mla_indexer_;
+  std::unique_ptr<MlaOutputGateLayer> mla_output_gate_;
 
   // Use dsa only if input_length > context_dsa_threshold_ for efficiency
   size_t context_dsa_threshold_ = 0;
-  size_t o_proj_k_dim_ = 0;
 
   inline static size_t qk_nope_head_dim_ = 0;
   inline static size_t qk_rope_head_dim_ = 0;
   inline static size_t kv_lora_rank_ = 0;
   inline static size_t q_lora_rank_ = 0;
   inline static size_t head_num_per_atp_ = 0;
+  inline static size_t o_proj_k_dim_ = 0;
 };
 
 }  // namespace ksana_llm

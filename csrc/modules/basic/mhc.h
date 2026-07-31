@@ -63,7 +63,7 @@ class Mhc {
   // output[1]: [t, hc]
   Status FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
- protected:
+ private:
   const MhcConfig& mhc_config_;
 
   MhcBuffers& mhc_buffers_;

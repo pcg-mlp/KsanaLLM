@@ -4,15 +4,16 @@
 
 #include "model_loader/config_parser/model_config_parser_factory.h"
 
-#include "models/internlm2/new_internlm2_config_parser.h"
-#include "models/internlmxcomposer2/new_internlmxcomposer2_config_parser.h"
 #include "models/arc_hunyuan_video/arc_hunyuan_video_config_parser.h"
 #include "models/bge_reranker_minicpm/bge_reranker_minicpm_config_parser.h"
 #include "models/chatglm/chatglm_config_parser.h"
 #include "models/deepseek_v3/deepseek_v3_config_parser.h"
 #include "models/deepseek_v4/deepseek_v4_config_parser.h"
-#include "models/hunyuan_turbo/hunyuan_turbo_config_parser.h"
 #include "models/glm4_moe/glm4_moe_config_parser.h"
+#include "models/hunyuan_turbo/hunyuan_turbo_config_parser.h"
+#include "models/internlm2/new_internlm2_config_parser.h"
+#include "models/internlmxcomposer2/new_internlmxcomposer2_config_parser.h"
+#include "models/kimi_k3/kimi_k3_config_parser.h"
 #include "models/llama/llama_model_config_parser.h"
 #include "models/mixtral/mixtral_config_parser.h"
 #include "models/qwen/qwen_config_parser.h"
@@ -35,6 +36,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_DEEPSEEK_V4: {
       model_config_parser = std::make_shared<DeepSeekV4ConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_KIMI_K3: {
+      model_config_parser = std::make_shared<KimiK3ConfigParser>();
       break;
     }
     case ModelArchitecture::ARCH_QWEN: {

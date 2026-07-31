@@ -8,6 +8,7 @@
 
 #include "fmt/format.h"
 
+#include "configure/environment.h"
 #include "device/device_utils.h"
 #include "executor/global_cache_put_worker.h"
 #include "executor/layer_progress_tracker.h"
@@ -17,6 +18,7 @@
 #include "runtime/fast_path_controller.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
 #include "samplers/sampler.h"
+#include "utils/memory_utils.h"
 #include "utils/singleton.h"
 #include "utils/waiter.h"
 
@@ -146,8 +148,16 @@ void ModelRunner::GetHiddenShape(const std::shared_ptr<ScheduleOutput>& schedule
     input_ids_cpu.insert(input_ids_cpu.end(), req->forwarding_tokens.begin() + skip_token_num,
                          req->forwarding_tokens.end());
   }
-  shape = {input_ids_cpu.size(),
-           model_instance_->GetModelConfig().hidden_units * model_instance_->GetModelConfig().mhc_config.hc_mult};
+  const auto& model_config = model_instance_->GetModelConfig();
+  size_t per_token_width = model_config.hidden_units * model_config.mhc_config.hc_mult;
+  const uint32_t attn_res_block_size = model_config.attn_res_config.attn_res_block_size;
+  if (attn_res_block_size > 0) {
+    PipelineConfig pipeline_config;
+    Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
+    per_token_width = static_cast<size_t>(DivRoundUp(pipeline_config.upper_layer_idx + 1, attn_res_block_size)) *
+                      model_config.hidden_units;
+  }
+  shape = {input_ids_cpu.size(), per_token_width};
 }
 
 DataType ModelRunner::GetHiddenDataType() { return model_instance_->GetModelConfig().weight_data_type; }

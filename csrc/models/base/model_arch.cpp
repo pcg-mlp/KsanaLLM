@@ -42,7 +42,8 @@ static const std::unordered_map<std::string, ModelArchitecture> model_type_to_ar
     {"hunyuan_large", ModelArchitecture::ARCH_HUNYUAN_LARGE},
     {"hunyuan_turbo", ModelArchitecture::ARCH_HUNYUAN_TURBO},
     {"glm4_moe", ModelArchitecture::ARCH_GLM4_MOE},
-    {"deepseek_v4", ModelArchitecture::ARCH_DEEPSEEK_V4}};
+    {"deepseek_v4", ModelArchitecture::ARCH_DEEPSEEK_V4},
+    {"kimi_k3", ModelArchitecture::ARCH_KIMI_K3}};
 
 static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_type = {
     {ModelArchitecture::ARCH_LLAMA, "llama"},
@@ -62,7 +63,8 @@ static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_ty
     {ModelArchitecture::ARCH_HUNYUAN_LARGE, "hunyuan_large"},
     {ModelArchitecture::ARCH_HUNYUAN_TURBO, "hunyuan_turbo"},
     {ModelArchitecture::ARCH_GLM4_MOE, "glm4_moe"},
-    {ModelArchitecture::ARCH_DEEPSEEK_V4, "deepseek_v4"}};
+    {ModelArchitecture::ARCH_DEEPSEEK_V4, "deepseek_v4"},
+    {ModelArchitecture::ARCH_KIMI_K3, "kimi_k3"}};
 
 Status GetModelArchitectureFromString(const std::string& model_type, ModelArchitecture& model_arch,
                                       const std::vector<std::string>& architectures) {

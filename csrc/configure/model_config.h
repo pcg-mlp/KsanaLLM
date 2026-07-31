@@ -255,6 +255,9 @@ struct MlaConfig {
   uint32_t qk_nope_head_dim = 0;
   uint32_t qk_rope_head_dim = 0;
   uint32_t v_head_dim = 0;
+
+  bool mla_use_nope = false;
+  bool mla_use_output_gate = false;
 };
 
 // The DeepSeek Sparse MLA informations.
@@ -273,6 +276,12 @@ struct MhcConfig {
   uint32_t hc_mult = 1;
   uint32_t hc_sinkhorn_iters = 0;
   float hc_eps = 0.0f;
+};
+
+// The Kimi-K3 attention-residual informations.
+struct AttnResConfig {
+  // Capacity of the residual-row bank (number of frozen snapshots per token).
+  uint32_t attn_res_block_size = 0;
 };
 
 // The DeepSeek v4 attn informations.
@@ -400,6 +409,8 @@ struct ModelConfig {
   // For mhc model
   bool use_mhc = false;
   MhcConfig mhc_config;
+  // For attn_res model
+  AttnResConfig attn_res_config;
   // For dspark model
   DsparkConfig dspark_config;
 

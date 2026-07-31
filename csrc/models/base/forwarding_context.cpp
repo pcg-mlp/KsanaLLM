@@ -190,6 +190,9 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
   // Concat hidden of target_layer_ids along last dim for DSpark.
   buffers_shape_map["dspark_hidden_buffer_tensors"] = {max_token_num * model_config.hidden_units *
                                                        model_config.dspark_config.dspark_target_layer_ids.size()};
+
+  buffers_shape_map["prefix_residual_buffer"] = {
+      model_config.attn_res_config.attn_res_block_size > 0 ? max_token_num * model_config.hidden_units : 0};
 }
 
 void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
@@ -235,6 +238,10 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
                                weight_type, MemoryLocation::LOCATION_DEVICE, stream)
           ->GetTensors();
 
+  prefix_residual_buffer =
+      buffer_mgr->CreateBufferTensor("prefix_residual_buffer", buffers_shape_map["prefix_residual_buffer"], weight_type,
+                                     MemoryLocation::LOCATION_DEVICE, stream);
+
   StreamSynchronize(*stream);
 }
 
@@ -242,6 +249,11 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
                         const RuntimeConfig& runtime_config, BufferManager* buffer_mgr) {
   buffers_ = std::make_unique<ForwardingBuffers>();
   buffers_->Init(context, rank, model_config, runtime_config, buffer_mgr);
+
+  if (model_config.mla_config.mla_use_nope) {
+    // NO_ROPE path: skip cos_sin_cache allocation.
+    return;
+  }
 
   const DataType weight_type = model_config.weight_data_type;
 

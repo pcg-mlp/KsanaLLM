@@ -27,6 +27,7 @@
 #include "models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "models/internlm2/internlm2_model.h"
 #include "models/internlmxcomposer2/internlmxcomposer2_model.h"
+#include "models/kimi_k3/kimi_k3_model.h"
 #include "models/llama/llama_model.h"
 #include "models/llama4/llama4_model.h"
 #include "models/mixtral/mixtral_model.h"
@@ -133,6 +134,10 @@ void ModelInstance::Load() {
     type = "deepseek_v4";
     CreateModelInstance<DeepSeekV4Model>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                          block_cache_layout_);
+  } else if (unified_model_type.find("kimi_k3") != std::string::npos) {
+    type = "kimi_k3";
+    CreateModelInstance<KimiK3Model>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
+                                     block_cache_layout_);
   } else if (unified_model_type.find("deepseek") != std::string::npos ||
              unified_model_type.find("kimi_k2") != std::string::npos ||
              unified_model_type.find("glm_moe_dsa") != std::string::npos) {
