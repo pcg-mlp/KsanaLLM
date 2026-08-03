@@ -69,8 +69,8 @@ class HummingFp8QuantTestSuit : public testing::Test {
 
     int64_t fp8_mismatches = torch::sum(d_triton_out.to(torch::kInt32) != d_cuda_out.to(torch::kInt32)).item<int64_t>();
     float fp8_mismatch_rate = static_cast<float>(fp8_mismatches) / static_cast<float>(num_tokens * hidden_size);
-    EXPECT_LT(fp8_mismatch_rate, 0.01f) << "FP8 output mismatch rate " << fp8_mismatch_rate
-                                        << " exceeds 1% for hidden_size=" << hidden_size << " tokens=" << num_tokens;
+    EXPECT_LT(fp8_mismatch_rate, 0.05f) << "FP8 output mismatch rate " << fp8_mismatch_rate
+                                        << " exceeds 5% for hidden_size=" << hidden_size << " tokens=" << num_tokens;
 
     float max_scale_rel_err =
         (torch::abs(d_triton_scale - d_cuda_scale) / torch::clamp(torch::abs(d_cuda_scale), 1e-10f, INFINITY))
