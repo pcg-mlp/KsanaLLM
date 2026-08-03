@@ -50,7 +50,7 @@
 | `csrc/layers/nvidia/humming_fp4_moe_layer.cpp` | Layer 实现 (Forward/Preprocess、profile-based kernel 选择、GEMM2 block_m 解耦、merged align (移除 >=224 阈值，EP/TP 统一 SglMoe 路径)、fused silu+quant (EP 版跳过 -1 行)、W4A8 量化、分级 profile 迭代、延迟 perf flush、W4A16 quant 事件跳过、`FormatKernelMeta` 可读 best= 日志、`last_moe_block_size_1/2` 写入 perf_stats) |
 | `csrc/layers/moe_perf_stats.h` | `MoePerfStats` (GEMM 耗时 + 子相位 + kernel meta 指针 + FLOP/TFLOPS + `last_moe_block_size_1/2` GEMM1/GEMM2 align block size，供测试 routing/TFLOPS 统计) |
 | `csrc/utils/search_status.h` | `HummingMoeSearchStatus` 单例 (profiled schedule 缓存 + right-align + tile-waste-aware) |
-| `csrc/layers/tests/fp4_moe_layer_test.cpp` + 5 headers (`_common`/`_config`/`_perf`/`_print`/`_ref`) | FP4 MoE 测试 (W4A16/W4A8 基准、精度验证、JIT kernel 表打印)。支持 `FP4_BACKENDS` env 选择性运行 backend；`FP4_PERF_CSV=1` 输出 CSV；expert routing 统计 (torch 复现 gating 算命中，EP 按 `[0, E_local)` 过滤 rank 0 本地专家)；有效/真实双轨 TFLOPS/带宽 (真实含 block-size padding，`ceil(hit/bs)*bs` 逐专家)；5 表格 (命中汇总/有效+真实 TFLOPS/有效+真实带宽，EP 不再 skip)；`FormatKernelMeta` 共用打印 selected kernel；deferred perf flush 接入 (`if constexpr` Humming 分支传 `FlushPerfStats` 回调，Marlin 不变)。原 `csrc/layers/fp4_moe_layer_test.cpp` 已拆分移入 `tests/` 子目录 |
+| `csrc/layers/tests/wfp4_moe_layer_test.cpp` + 5 headers (`_common`/`_config`/`_perf`/`_print`/`_ref`) | FP4 MoE 测试 (W4A16/W4A8 基准、精度验证、JIT kernel 表打印)。支持 `FP4_BACKENDS` env 选择性运行 backend；`FP4_PERF_CSV=1` 输出 CSV；expert routing 统计 (torch 复现 gating 算命中，EP 按 `[0, E_local)` 过滤 rank 0 本地专家)；有效/真实双轨 TFLOPS/带宽 (真实含 block-size padding，`ceil(hit/bs)*bs` 逐专家)；5 表格 (命中汇总/有效+真实 TFLOPS/有效+真实带宽，EP 不再 skip)；`FormatKernelMeta` 共用打印 selected kernel；deferred perf flush 接入 (`if constexpr` Humming 分支传 `FlushPerfStats` 回调，Marlin 不变)。原 `csrc/layers/fp4_moe_layer_test.cpp` 已拆分移入 `tests/` 子目录 |
 
 > 另有 `3rdparty/LLM_kernels/csrc/kernels/nvidia/moe_utils/moe_utils.{cu,h}` 新增/修改 align 内核：`InvokeSglMoeAlignBlockSize`、`InvokeSglMoeAlignBlockSizeMerged`、`InvokeMoeAlignBlockSize` 均加 `UseExpertParallel` 模板参数 (`if constexpr` 跳过 `topk_ids==-1` 的非本地 expert 行，EP 路径专用)，`InvokeSglMoeAlignBlockSizeMerged` 支持 GEMM1/GEMM2 双 block_m 一次 align；`3rdparty/LLM_kernels/csrc/kernels/nvidia/moe/humming_triton_fp8_quant/generate_triton_silu_mul_quant.py` 为融合 SiluAndMul+FP8 量化 Triton kernel 生成器，含 TP 版 `_silu_and_mul_quant_kernel` 与 EP 版 `_silu_and_mul_quant_ep_kernel` (透传 topk_ids 跳过 -1 行)。两者路径根为 `3rdparty/LLM_kernels/csrc/`。
 
@@ -80,8 +80,8 @@
 | `HUMMING_JIT_LOG` | `=1` 输出详细 JIT 日志 | 未设置 (静默) |
 | `QUANT_PROFILE` | profiling 迭代次数，`0` 禁用。Layer `Init` 读一次存 `profile_iters_`，`warmup_iters_=max(1,profile_iters_/3)`，`compile_extend=(profile_iters_!=0)` 显式传入 `CompileKernels` (见 [候选配置生成 > 条件编译](#条件编译-compile_extend_configs))。`ProfileAllBuckets` 按 `rep_m` 分级使用 iter: `rep_m≤THRESH1` 用全量 `profile_iters_`，`rep_m>THRESH1` 用 `max(profile_iters_*2/3, warmup)` (见 [分级 profile 迭代](#分级-profile-迭代)) | `15` |
 | `FP4_PROFILE_M_THRESH1` | 分级 profile 迭代的 `rep_m` 阈值 ( tier 0→1 边界)，Layer `Init` 读一次存 `profile_m_thresh1_` | `512` |
-| `FP4_BACKENDS` | **测试专用** (仅 `fp4_moe_layer_test.cpp`)。逗号分隔的 backend 名 (大小写不敏感精确匹配): `marlin`/`humming_w4a16`(`w4a16`)/`humming_w4a8`(`w4a8`)。未设/空 → 运行全部 3 个 backend；未知名 → 警告并跳过；重复 → 去重保序 | 未设置 (全部) |
-| `FP4_PERF_CSV` | **测试专用**。`=1` 时将 5 个性能表格 (专家命中汇总、有效/真实 TFLOPS、有效/真实带宽) 写入 `./fp4_moe_layers_test/` 目录下标准 CSV 文件 (复合 cell 拆分为独立列)，终端打印不受影响 | 未设置 (仅终端) |
+| `FP4_BACKENDS` | **测试专用** (仅 `wfp4_moe_layer_test.cpp`)。逗号分隔的 backend 名 (大小写不敏感精确匹配): `marlin`/`humming_w4a16`(`w4a16`)/`humming_w4a8`(`w4a8`)。未设/空 → 运行全部 3 个 backend；未知名 → 警告并跳过；重复 → 去重保序 | 未设置 (全部) |
+| `FP4_PERF_CSV` | **测试专用**。`=1` 时将 5 个性能表格 (专家命中汇总、有效/真实 TFLOPS、有效/真实带宽) 写入 `./wfp4_moe_layers_test/` 目录下标准 CSV 文件 (复合 cell 拆分为独立列)，终端打印不受影响 | 未设置 (仅终端) |
 | `DISABLE_FORCE_INSTALL_HUMMING` | CMake 跳过自动 `pip install humming + triton` | 未设置 (自动安装) |
 | `HUMMING_DISABLE_PARALLEL_BUILD` | 禁止 humming 后台并行编译 launcher 扩展 | `"1"` (humming_tool.py 设置) |
 
@@ -341,7 +341,7 @@ GEMM1 (gate+up, 大 K 小 N) 和 GEMM2 (down, 小 K 大 N) 形状差异大，heu
 
 **W4A16 quant 事件跳过**: W4A16 下 `QuantizeToFp8` 为 no-op，Quant1/Quant2 的 4 个 `RecordEvent` 用 `do_profile && is_fp8` 守卫跳过 (18→14 event)，`quant_time_ms` 保持 0 (legacy 与 deferred 路径均在 `!is_fp8` 时置 0)。W4A8 保持全部 18 event (quant 为真实工作)。
 
-**测试侧 routing 统计** (`tests/fp4_moe_layer_test_perf.h`/`_print.h`): 测试通过 torch 复现 gating (`sqrt(softplus(gate))` + topk) 算专家命中，EP 按 `[0, E_local)` 过滤 rank 0 本地专家。**有效/真实双轨** FLOPS 与带宽: 真实值含 block-size padding (逐专家 `ceil(hit/bs)*bs`)，有效值仅算实际命中 token；W4A8 激活 byte 按 FP8 (1B) 非 BF16 (2B)。输出 **5 表格** (命中汇总/有效+真实 TFLOPS/有效+真实带宽，EP 不再 skip)；`FP4_PERF_CSV=1` 写 CSV 到 `./fp4_moe_layers_test/`。`PrintExpertRoutingSummary` 按 backend 逐个输出子表 (各 backend 选不同 moe block size，故 blk_sz1/2、real_pairs、waste% 各异)。
+**测试侧 routing 统计** (`tests/wfp4_moe_layer_test_perf.h`/`_print.h`): 测试通过 torch 复现 gating (`sqrt(softplus(gate))` + topk) 算专家命中，EP 按 `[0, E_local)` 过滤 rank 0 本地专家。**有效/真实双轨** FLOPS 与带宽: 真实值含 block-size padding (逐专家 `ceil(hit/bs)*bs`)，有效值仅算实际命中 token；W4A8 激活 byte 按 FP8 (1B) 非 BF16 (2B)。输出 **5 表格** (命中汇总/有效+真实 TFLOPS/有效+真实带宽，EP 不再 skip)；`FP4_PERF_CSV=1` 写 CSV 到 `./wfp4_moe_layers_test/`。`PrintExpertRoutingSummary` 按 backend 逐个输出子表 (各 backend 选不同 moe block size，故 blk_sz1/2、real_pairs、waste% 各异)。
 
 ### TMA 描述符修复 (`launcher.cu`)
 
@@ -398,7 +398,7 @@ git diff 3rdparty/LLM_kernels/csrc/kernels/nvidia/others/humming/include/
 
 # 4. 重新编译 + 测试 (清空 JIT 缓存)
 cd build && cmake .. && ninja -j64
-rm -rf ~/.cache/KsanaLLM/humming_kernel_files/ && CUDA_VISIBLE_DEVICES=3 ./bin/fp4_moe_layers_test
+rm -rf ~/.cache/KsanaLLM/humming_kernel_files/ && CUDA_VISIBLE_DEVICES=3 ./bin/wfp4_moe_layers_test
 
 # 5. 如果 humming Python API 有变化，同步修改 humming_tool.py:
 #    - HummingKernel 构造参数 → generate CLI + GenerateSource

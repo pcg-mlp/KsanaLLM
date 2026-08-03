@@ -11,7 +11,7 @@
 // logic used only by the driver, not configuration.
 //
 // Expected to be included after the layer/kernel/torch headers from
-// fp4_moe_layer_test.cpp's ENABLE_CUDA block (uses
+// wfp4_moe_layer_test.cpp's ENABLE_CUDA block (uses
 // llm_kernels::nvidia::humming::KernelMeta in BackendSpec).
 
 #include <algorithm>
@@ -56,10 +56,10 @@ struct ModelSpec {
   size_t inter_size;
   size_t num_experts;
   size_t topk;
-  const char* scoring_func;  // "sqrtsoftplus" (DSv4) or "sigmoid" (K3)
-  float swiglu_limit;        // SwiGLU clamp limit (DSv4: 10.0, K3: 0.0 = unused)
-  float situ_beta;           // SiTU activation beta (K3: 4.0, DSv4: 0.0 = unused)
-  float situ_linear_beta;    // SiTU linear beta (K3: 25.0, DSv4: 0.0 = unused)
+  const char* scoring_func;     // "sqrtsoftplus" (DSv4) or "sigmoid" (K3)
+  float swiglu_limit;           // SwiGLU clamp limit (DSv4: 10.0, K3: 0.0 = unused)
+  float situ_beta;              // SiTU activation beta (K3: 4.0, DSv4: 0.0 = unused)
+  float situ_linear_beta;       // SiTU linear beta (K3: 25.0, DSv4: 0.0 = unused)
   float routed_scaling_factor;  // routing weight scale (DSv4: 1.5, K3: 1.0)
 };
 

@@ -7,13 +7,13 @@
 // and TFLOPS/bandwidth converters.
 //
 // Expected to be included after the layer/kernel/torch headers from
-// fp4_moe_layer_test.cpp's ENABLE_CUDA block.
+// wfp4_moe_layer_test.cpp's ENABLE_CUDA block.
 #include <torch/torch.h>
 
 #include <functional>
 #include <utility>
 
-#include "fp4_moe_layer_test_config.h"
+#include "wfp4_moe_layer_test_config.h"
 
 namespace ksana_llm {
 
@@ -28,9 +28,9 @@ struct IsHummingFp4MoeLayer : std::false_type {};
 
 #ifdef ENABLE_CUDA
 template <>
-struct IsHummingFp4MoeLayer<HummingFusedFp4A16MoeLayer> : std::true_type {};
+struct IsHummingFp4MoeLayer<HummingFusedWfp4A16MoeLayer> : std::true_type {};
 template <>
-struct IsHummingFp4MoeLayer<HummingFusedFp4A8MoeLayer> : std::true_type {};
+struct IsHummingFp4MoeLayer<HummingFusedWfp4Afp8MoeLayer> : std::true_type {};
 #endif
 
 template <typename LayerT>
@@ -125,7 +125,7 @@ inline ActivationByteConfig GetActivationByteConfig(Fp4Backend backend) {
 //
 // Gating: scores = sqrt(softplus(gate)), topk=6, largest=true.
 // This matches TopKSoftplusSqrt (validated by accuracy verification — cosine
-// similarity passes against the same logic in fp4_moe_layer_test_ref.h).
+// similarity passes against the same logic in wfp4_moe_layer_test_ref.h).
 //
 // TP: hit_counts[e] = count of all topk_ids == e across all M*topk pairs.
 // EP: only pairs where expert ∈ [0, E_local) are counted (rank 0's local
@@ -364,8 +364,8 @@ std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
   Tensor e_bias_tensor;
   if (e_score_bias.defined()) {
     e_bias_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {E});
-    cudaMemcpyAsync(e_bias_tensor.GetPtr<void>(), e_score_bias.data_ptr(), E * sizeof(float),
-                    cudaMemcpyDeviceToDevice, stream);
+    cudaMemcpyAsync(e_bias_tensor.GetPtr<void>(), e_score_bias.data_ptr(), E * sizeof(float), cudaMemcpyDeviceToDevice,
+                    stream);
   }
 
   for (size_t idx = 0; idx < kTokenSizes.size(); ++idx) {

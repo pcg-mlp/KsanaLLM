@@ -1,7 +1,7 @@
 /* Copyright 2026 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "layers/marlin_fused_fp4_a16_moe_layer.h"
+#include "layers/marlin_fused_wfp4a16_moe_layer.h"
 
 #include "csrc/kernels/nvidia/moe_utils/moe_activation.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
@@ -37,46 +37,21 @@ static inline int64_t SelectMoeBlockSize(size_t num_tokens, size_t topk, size_t 
 
 inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
-Status MarlinFusedFp4A16MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                       std::shared_ptr<Context> context, int rank) {
+Status MarlinFusedWfp4A16MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                        std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
 template <typename T>
-Status MarlinFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                        std::shared_ptr<Context> context, int rank) {
+Status MarlinFusedWfp4A16MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                         std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
-  int parameter_index = 0;
-  moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
-  max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  layer_idx_ = std::any_cast<int>(parameters[parameter_index++]);
-  expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_topk_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  tp_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  use_vllm_moe_ = std::any_cast<bool>(parameters[parameter_index++]);
-  num_expert_group_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  expert_groups_topk_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  scoring_func_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  topk_method_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  norm_topk_prob_ = std::any_cast<bool>(parameters[parameter_index++]);
-  routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
-  use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
-  enable_full_shared_expert_ = std::any_cast<bool>(parameters[parameter_index++]);
-  [[maybe_unused]] DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  [[maybe_unused]] DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  [[maybe_unused]] int group_size = std::any_cast<int>(parameters[parameter_index++]);
-  apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
-  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
-  has_swiglu_limit_ = (swiglu_limit_ > 0.0f);
-  num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  situ_beta_ = std::any_cast<float>(parameters[parameter_index++]);
-  situ_linear_beta_ = std::any_cast<float>(parameters[parameter_index++]);
+  params_ = std::any_cast<MoeLayerParameters>(parameters.front());
+
+  has_swiglu_limit_ = (params_.swiglu_limit > 0.0f);
 
   // Compute global EP size and rank
   global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
@@ -87,17 +62,17 @@ Status MarlinFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters,
                   runtime_config.parallel_basic_config.attn_data_parallel_size > 1 &&
                   runtime_config.parallel_basic_config.expert_parallel_size > 1;
 
-  use_topk_softplus_sqrt_ = (scoring_func_ == "sqrtsoftplus");
+  use_topk_softplus_sqrt_ = (params_.scoring_func == "sqrtsoftplus");
   if (use_topk_softplus_sqrt_) {
-    use_hash_ = (layer_idx_ < static_cast<int>(num_hash_layers_));
+    use_hash_ = (params_.layer_idx < static_cast<int>(params_.num_hash_layers));
     TopKSoftplusSqrtLayerParameters softplus_sqrt_params{};
-    softplus_sqrt_params.topk = static_cast<uint32_t>(expert_topk_);
-    softplus_sqrt_params.num_experts = static_cast<uint32_t>(expert_num_per_node_ * global_expert_para_size_);
-    softplus_sqrt_params.max_token_num = static_cast<uint32_t>(max_token_num_);
-    softplus_sqrt_params.renormalize = norm_topk_prob_;
-    softplus_sqrt_params.routed_scaling_factor = routed_scaling_factor_;
+    softplus_sqrt_params.topk = static_cast<uint32_t>(params_.expert_topk);
+    softplus_sqrt_params.num_experts = static_cast<uint32_t>(params_.expert_num_per_node * global_expert_para_size_);
+    softplus_sqrt_params.max_token_num = static_cast<uint32_t>(params_.max_token_num);
+    softplus_sqrt_params.renormalize = params_.norm_topk_prob;
+    softplus_sqrt_params.routed_scaling_factor = params_.routed_scaling_factor;
     softplus_sqrt_params.use_hash = use_hash_;
-    softplus_sqrt_params.use_correction_bias = !use_hash_ && use_e_score_correction_bias_;
+    softplus_sqrt_params.use_correction_bias = !use_hash_ && params_.use_e_score_correction_bias;
     softplus_sqrt_params.topk_ids_dtype = TYPE_INT32;
 
     topk_softplus_sqrt_layer_ = std::make_shared<TopKSoftplusSqrtLayer>();
@@ -107,13 +82,13 @@ Status MarlinFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters,
     // Initialize GroupedTopkLayer for V3/GLM4/Qwen3-MoE path
     grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
     float score_threshold = runtime_config.moe_topk_score_threshold;
-    GroupedTopkLayerParameters grouped_topk_params{.topk = expert_topk_,
-                                                   .renormalize = norm_topk_prob_,
-                                                   .num_expert_group = num_expert_group_,
-                                                   .topk_group = expert_groups_topk_,
-                                                   .scoring_func = scoring_func_,
-                                                   .routed_scaling_factor = routed_scaling_factor_,
-                                                   .use_e_score_correction_bias = use_e_score_correction_bias_,
+    GroupedTopkLayerParameters grouped_topk_params{.topk = static_cast<int>(params_.expert_topk),
+                                                   .renormalize = params_.norm_topk_prob,
+                                                   .num_expert_group = static_cast<int>(params_.num_expert_group),
+                                                   .topk_group = static_cast<int>(params_.expert_groups_topk),
+                                                   .scoring_func = params_.scoring_func,
+                                                   .routed_scaling_factor = params_.routed_scaling_factor,
+                                                   .use_e_score_correction_bias = params_.use_e_score_correction_bias,
                                                    .score_threshold = score_threshold};
     grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
   }
@@ -131,51 +106,51 @@ Status MarlinFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters,
                                          runtime_config.parallel_basic_config.expert_parallel_size +
                                      rank_;
     expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(
-        global_expert_para_size_, global_expert_para_rank, expert_num_per_node_ * global_expert_para_size_);
+        global_expert_para_size_, global_expert_para_rank, params_.expert_num_per_node * global_expert_para_size_);
   }
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] MarlinFusedFp4A16MoeLayer Init", rank_);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] MarlinFusedWfp4A16MoeLayer Init", rank_);
   return Status();
 }
 
-void MarlinFusedFp4A16MoeLayer::SetExpertParallelManager(
+void MarlinFusedWfp4A16MoeLayer::SetExpertParallelManager(
     std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
   expert_parallel_manager_ = expert_parallel_manager;
 }
 
-size_t MarlinFusedFp4A16MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
+size_t MarlinFusedWfp4A16MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 template <typename T>
-size_t MarlinFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
-  size_t m = std::min(MARLIN_FP4_MOE_CHUNK_SIZE, max_token_num_);
+size_t MarlinFusedWfp4A16MoeLayer::GetWorkspaceSizeT() {
+  size_t m = std::min(MARLIN_FP4_MOE_CHUNK_SIZE, params_.max_token_num);
 
-  topk_weights_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(float));
-  topk_ids_ptr_size = AlignAddress(max_token_num_ * expert_topk_ * sizeof(int32_t));
+  topk_weights_ptr_size = AlignAddress(params_.max_token_num * params_.expert_topk * sizeof(float));
+  topk_ids_ptr_size = AlignAddress(params_.max_token_num * params_.expert_topk * sizeof(int32_t));
 
   // fused_id_buffer: fill_info_vec(4) + sorted_ids + expert_ids + num_tokens_post_pad + cumsum
-  size_t numel = m * expert_topk_;
-  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (kMarlinFp4MoeMaxBlockSize - 1);
+  size_t numel = m * params_.expert_topk;
+  size_t max_num_tokens_padded = numel + params_.expert_num_per_node * (kMarlinFp4MoeMaxBlockSize - 1);
   size_t max_num_m_blocks = (max_num_tokens_padded + kMarlinFp4MoeMaxBlockSize - 1) / kMarlinFp4MoeMaxBlockSize;
   // fill_info(4) + sorted_ids(max_num_tokens_padded) + expert_ids(max_num_m_blocks) + num_tokens_post_pad(1) +
   // cumsum(expert_num_per_node+1)
   max_fused_id_buffer_size = AlignAddress(
-      (SGL_MOE_ALIGN_BLOCK_VEC_SIZE + max_num_tokens_padded + max_num_m_blocks + 1 + expert_num_per_node_ + 1) *
+      (SGL_MOE_ALIGN_BLOCK_VEC_SIZE + max_num_tokens_padded + max_num_m_blocks + 1 + params_.expert_num_per_node + 1) *
       sizeof(int32_t));
 
   // Intermediate caches
   // cache1: [m * topk, inter_size * 2] — output of w1 GEMM (gate+up)
-  intermediate_cache1_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T));
+  intermediate_cache1_size = AlignAddress(m * params_.expert_topk * params_.expert_inter_size * 2 * sizeof(T));
   // cache2: [m * topk, inter_size] — output of SiluAndMul
-  intermediate_cache2_size = AlignAddress(m * expert_topk_ * expert_inter_size_ * sizeof(T));
+  intermediate_cache2_size = AlignAddress(m * params_.expert_topk * params_.expert_inter_size * sizeof(T));
   // cache3: [m * topk, hidden_size] — output of w2 GEMM
   // NOTE: cache3 reuses cache1's memory (P5 optimization) since their lifetimes don't overlap:
   //   cache1 is consumed by SiluAndMul before cache3 is produced by GEMM2.
   //   We still track the size for documentation, but don't add it to total allocation.
-  intermediate_cache3_size = AlignAddress(m * expert_topk_ * expert_hidden_size_ * sizeof(T));
+  intermediate_cache3_size = AlignAddress(m * params_.expert_topk * params_.expert_hidden_size * sizeof(T));
 
   // Marlin workspace: sized for the larger of the two GEMMs
   // Use min block size for worst-case workspace allocation
-  int64_t max_n = std::max(expert_inter_size_ * 2, expert_hidden_size_);
+  int64_t max_n = std::max(params_.expert_inter_size * 2, params_.expert_hidden_size);
   marlin_workspace_size = AlignAddress(llm_kernels::nvidia::marlin_moe_wna16::get_workspace_size(
                                            max_n, max_num_tokens_padded, kMarlinFp4MoeMaxBlockSize) *
                                        sizeof(int));
@@ -194,19 +169,19 @@ size_t MarlinFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
   max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + max_fused_id_buffer_size + cache13_size +
                   intermediate_cache2_size + marlin_workspace_size + c_tmp_size + softplus_sqrt_ws_aligned;
 
-  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MarlinFusedFp4A16MoeLayer", rank_, max_ws_bytes_);
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MarlinFusedWfp4A16MoeLayer", rank_, max_ws_bytes_);
   return max_ws_bytes_;
 }
 
-Status MarlinFusedFp4A16MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+Status MarlinFusedWfp4A16MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   // Marlin FP4 kernel does not require profiling/preprocessing
   return Status();
 }
 
 template <typename T>
-Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                           const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                           const Tensor* e_score_bias, const Tensor* input_ids) {
+Status MarlinFusedWfp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                            const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                            const Tensor* e_score_bias, const Tensor* input_ids) {
   // Lazy creation of profiling CUDA events (created once, reused across forwards)
   bool do_profile = (perf_stats_ != nullptr);
   if (do_profile) {
@@ -272,18 +247,19 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       // Current chunk pointers
       void* curr_hidden_states = static_cast<char*>(hidden_states_ptr) + chunk_start * hidden_size * sizeof(T);
       void* curr_output = static_cast<char*>(output_ptr) + chunk_start * hidden_size * sizeof(T);
-      void* curr_topk_ids = static_cast<char*>(topk_ids_ptr_) + chunk_start * expert_topk_ * sizeof(int32_t);
-      void* curr_topk_weights = static_cast<char*>(topk_weights_ptr_) + chunk_start * expert_topk_ * sizeof(float);
+      void* curr_topk_ids = static_cast<char*>(topk_ids_ptr_) + chunk_start * params_.expert_topk * sizeof(int32_t);
+      void* curr_topk_weights =
+          static_cast<char*>(topk_weights_ptr_) + chunk_start * params_.expert_topk * sizeof(float);
 
       // Dynamically select block size based on token density per expert (matches sglang heuristic)
-      int64_t moe_block_size = SelectMoeBlockSize(tokens_in_chunk, expert_topk_, expert_num_per_node_);
+      int64_t moe_block_size = SelectMoeBlockSize(tokens_in_chunk, params_.expert_topk, params_.expert_num_per_node);
       if (do_profile) {
         perf_stats_->last_moe_block_size_1 = static_cast<int32_t>(moe_block_size);
         perf_stats_->last_moe_block_size_2 = static_cast<int32_t>(moe_block_size);
       }
 
-      int64_t numel = static_cast<int64_t>(tokens_in_chunk * expert_topk_);
-      int64_t max_num_tokens_padded = numel + expert_num_per_node_ * (moe_block_size - 1);
+      int64_t numel = static_cast<int64_t>(tokens_in_chunk * params_.expert_topk);
+      int64_t max_num_tokens_padded = numel + params_.expert_num_per_node * (moe_block_size - 1);
       int64_t max_num_m_blocks = (max_num_tokens_padded + moe_block_size - 1) / moe_block_size;
 
       // Layout within fused_id_buffer: [fill_info(4)] [sorted_ids] [expert_ids] [num_tokens_post_pad] [cumsum]
@@ -295,7 +271,7 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       int32_t* sorted_ids_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
 
       // Fill sorted_ids with sentinel value (numel) for experts < 224
-      if (expert_num_per_node_ < 224) {
+      if (params_.expert_num_per_node < 224) {
         std::vector<int> fill_info(3);
         fill_info[0] = id_buffer_offset;
         fill_info[1] = static_cast<int>(max_num_tokens_padded);
@@ -312,23 +288,23 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       int32_t* num_tokens_post_pad_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
       id_buffer_offset += 1;
 
-      if (expert_num_per_node_ >= 224) {
+      if (params_.expert_num_per_node >= 224) {
         int32_t* cumsum_ptr = reinterpret_cast<int32_t*>(curr_fused_id_buffer) + id_buffer_offset;
         llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t>(
             reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr, num_tokens_post_pad_ptr,
-            static_cast<int32_t>(max_num_tokens_padded), static_cast<int32_t>(expert_num_per_node_),
+            static_cast<int32_t>(max_num_tokens_padded), static_cast<int32_t>(params_.expert_num_per_node),
             static_cast<int32_t>(moe_block_size), static_cast<size_t>(numel), cumsum_ptr, stream);
       } else {
         if (use_expert_parallel) {
           llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, true>(
               reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr, num_tokens_post_pad_ptr,
-              static_cast<int32_t>(expert_topk_), static_cast<int32_t>(expert_num_per_node_),
+              static_cast<int32_t>(params_.expert_topk), static_cast<int32_t>(params_.expert_num_per_node),
               static_cast<int32_t>(global_expert_para_size_), static_cast<int32_t>(moe_block_size),
               static_cast<size_t>(numel), rank_, stream);
         } else {
           llm_kernels::nvidia::InvokeMoeAlignBlockSize<int32_t, uint16_t, false>(
               reinterpret_cast<int32_t*>(curr_topk_ids), sorted_ids_ptr, expert_ids_ptr, num_tokens_post_pad_ptr,
-              static_cast<int32_t>(expert_topk_), static_cast<int32_t>(expert_num_per_node_),
+              static_cast<int32_t>(params_.expert_topk), static_cast<int32_t>(params_.expert_num_per_node),
               static_cast<int32_t>(global_expert_para_size_), static_cast<int32_t>(moe_block_size),
               static_cast<size_t>(numel), rank_, stream);
         }
@@ -336,7 +312,7 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
 
       // ----- GEMM 1: hidden_states × w1 → intermediate_cache1 [tokens*topk, inter_size*2] -----
       int64_t size_k_w1 = static_cast<int64_t>(hidden_size);
-      int64_t size_n_w1 = static_cast<int64_t>(expert_inter_size_ * 2);
+      int64_t size_n_w1 = static_cast<int64_t>(params_.expert_inter_size * 2);
       int64_t num_groups_w1 = size_k_w1 / 32;  // MXFP4 group size = 32
 
       // Zero workspace locks before kernel launch to prevent deadlock from stale lock values
@@ -362,7 +338,7 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
           reinterpret_cast<float*>(curr_topk_weights),  // topk_weights
           marlin_workspace_,                            // workspace
           moe_block_size,                               // moe_block_size
-          static_cast<int64_t>(expert_topk_),           // top_k
+          static_cast<int64_t>(params_.expert_topk),    // top_k
           false,                                        // mul_topk_weights (not for w1)
           use_expert_parallel,                          // is_ep
           ::marlin_moe_wna16::kFE2M1f.id(),             // b_q_type_id (MXFP4)
@@ -385,43 +361,45 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       if (do_profile) cudaEventRecord(evt_gemm1_end_, stream);
 
       // ----- Activation: intermediate_cache1 → intermediate_cache2 -----
-      const size_t elements_num = tokens_in_chunk * expert_topk_ * expert_inter_size_ * 2;
-      if (situ_beta_ > 0.0f) {
+      const size_t elements_num = tokens_in_chunk * params_.expert_topk * params_.expert_inter_size * 2;
+      if (params_.situ_beta > 0.0f) {
         if (use_expert_parallel) {
-          llm_kernels::nvidia::InvokeSituAndMul<T, true>(reinterpret_cast<const T*>(intermediate_cache1_),
-                                                         reinterpret_cast<T*>(intermediate_cache2_),
-                                                         reinterpret_cast<const int*>(curr_topk_ids), elements_num,
-                                                         expert_inter_size_, situ_beta_, situ_linear_beta_, stream);
+          llm_kernels::nvidia::InvokeSituAndMul<T, true>(
+              reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size, params_.situ_beta,
+              params_.situ_linear_beta, stream);
         } else {
-          llm_kernels::nvidia::InvokeSituAndMul<T, false>(reinterpret_cast<const T*>(intermediate_cache1_),
-                                                          reinterpret_cast<T*>(intermediate_cache2_),
-                                                          reinterpret_cast<const int*>(curr_topk_ids), elements_num,
-                                                          expert_inter_size_, situ_beta_, situ_linear_beta_, stream);
+          llm_kernels::nvidia::InvokeSituAndMul<T, false>(
+              reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size, params_.situ_beta,
+              params_.situ_linear_beta, stream);
         }
       } else if (use_expert_parallel) {
         if (has_swiglu_limit_) {
           llm_kernels::nvidia::InvokeSiluAndMul<T, true, true>(
               reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, swiglu_limit_, stream);
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size,
+              params_.swiglu_limit, stream);
         } else {
           llm_kernels::nvidia::InvokeSiluAndMul<T, true, false>(
               reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, 0.0f, stream);
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size, 0.0f, stream);
         }
       } else {
         if (has_swiglu_limit_) {
           llm_kernels::nvidia::InvokeSiluAndMul<T, false, true>(
               reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, swiglu_limit_, stream);
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size,
+              params_.swiglu_limit, stream);
         } else {
           llm_kernels::nvidia::InvokeSiluAndMul<T, false, false>(
               reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, 0.0f, stream);
+              reinterpret_cast<const int*>(curr_topk_ids), elements_num, params_.expert_inter_size, 0.0f, stream);
         }
       }
 
       // ----- GEMM 2: intermediate_cache2 × w2 → intermediate_cache3 [tokens*topk, hidden_size] -----
-      int64_t size_k_w2 = static_cast<int64_t>(expert_inter_size_);
+      int64_t size_k_w2 = static_cast<int64_t>(params_.expert_inter_size);
       int64_t size_n_w2 = static_cast<int64_t>(hidden_size);
       int64_t num_groups_w2 = size_k_w2 / 32;
 
@@ -431,54 +409,54 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       if (do_profile) cudaEventRecord(evt_gemm2_start_, stream);
 
       llm_kernels::nvidia::marlin_moe_wna16::moe_wna16_marlin_gemm(
-          intermediate_cache2_,                                  // a
-          intermediate_cache3_,                                  // c
-          c_tmp_,                                                // c_tmp (fp32 global reduce buffer)
-          w2_ptr,                                                // b_q_weight
-          nullptr,                                               // b_bias
-          w2_scales,                                             // b_scales
-          nullptr,                                               // global_scale
-          nullptr,                                               // b_zeros
-          nullptr,                                               // g_idx
-          nullptr,                                               // perm
-          nullptr,                                               // a_tmp
-          sorted_ids_ptr,                                        // sorted_token_ids
-          expert_ids_ptr,                                        // expert_ids
-          num_tokens_post_pad_ptr,                               // num_tokens_past_padded
-          reinterpret_cast<float*>(curr_topk_weights),           // topk_weights
-          marlin_workspace_,                                     // workspace
-          moe_block_size,                                        // moe_block_size
-          1,                                                     // top_k (reading from expanded cache)
-          true,                                                  // mul_topk_weights (apply weights in GEMM)
-          use_expert_parallel,                                   // is_ep
-          ::marlin_moe_wna16::kFE2M1f.id(),                      // b_q_type_id
-          3,                                                     // scale_dtype (fp8_e8m0fnu)
-          static_cast<int64_t>(tokens_in_chunk * expert_topk_),  // size_m
-          size_n_w2,                                             // size_n
-          size_k_w2,                                             // size_k
-          num_groups_w2,                                         // num_groups
-          max_num_tokens_padded,                                 // sorted_token_ids_len
-          0,                                                     // g_idx_len
-          0,                                                     // perm_len
-          0,                                                     // b_zeros_len
-          true,                                                  // is_k_full
-          false,                                                 // use_atomic_add
-          true,                                                  // use_fp32_reduce
-          false,                                                 // is_zp_float
-          marlin_compute_dtype,                                  // compute_dtype
+          intermediate_cache2_,                                         // a
+          intermediate_cache3_,                                         // c
+          c_tmp_,                                                       // c_tmp (fp32 global reduce buffer)
+          w2_ptr,                                                       // b_q_weight
+          nullptr,                                                      // b_bias
+          w2_scales,                                                    // b_scales
+          nullptr,                                                      // global_scale
+          nullptr,                                                      // b_zeros
+          nullptr,                                                      // g_idx
+          nullptr,                                                      // perm
+          nullptr,                                                      // a_tmp
+          sorted_ids_ptr,                                               // sorted_token_ids
+          expert_ids_ptr,                                               // expert_ids
+          num_tokens_post_pad_ptr,                                      // num_tokens_past_padded
+          reinterpret_cast<float*>(curr_topk_weights),                  // topk_weights
+          marlin_workspace_,                                            // workspace
+          moe_block_size,                                               // moe_block_size
+          1,                                                            // top_k (reading from expanded cache)
+          true,                                                         // mul_topk_weights (apply weights in GEMM)
+          use_expert_parallel,                                          // is_ep
+          ::marlin_moe_wna16::kFE2M1f.id(),                             // b_q_type_id
+          3,                                                            // scale_dtype (fp8_e8m0fnu)
+          static_cast<int64_t>(tokens_in_chunk * params_.expert_topk),  // size_m
+          size_n_w2,                                                    // size_n
+          size_k_w2,                                                    // size_k
+          num_groups_w2,                                                // num_groups
+          max_num_tokens_padded,                                        // sorted_token_ids_len
+          0,                                                            // g_idx_len
+          0,                                                            // perm_len
+          0,                                                            // b_zeros_len
+          true,                                                         // is_k_full
+          false,                                                        // use_atomic_add
+          true,                                                         // use_fp32_reduce
+          false,                                                        // is_zp_float
+          marlin_compute_dtype,                                         // compute_dtype
           stream);
 
       if (do_profile) cudaEventRecord(evt_gemm2_end_, stream);
 
       // ----- MoeSum: intermediate_cache3 → output [tokens, hidden_size] -----
       if (use_expert_parallel) {
-        llm_kernels::nvidia::InvokeMoeSum<T, true>(intermediate_cache3_, curr_output, curr_topk_ids,
-                                                   static_cast<int>(tokens_in_chunk), static_cast<int>(expert_topk_),
-                                                   static_cast<int>(hidden_size), stream);
+        llm_kernels::nvidia::InvokeMoeSum<T, true>(
+            intermediate_cache3_, curr_output, curr_topk_ids, static_cast<int>(tokens_in_chunk),
+            static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
       } else {
-        llm_kernels::nvidia::InvokeMoeSum<T, false>(intermediate_cache3_, curr_output, curr_topk_ids,
-                                                    static_cast<int>(tokens_in_chunk), static_cast<int>(expert_topk_),
-                                                    static_cast<int>(hidden_size), stream);
+        llm_kernels::nvidia::InvokeMoeSum<T, false>(
+            intermediate_cache3_, curr_output, curr_topk_ids, static_cast<int>(tokens_in_chunk),
+            static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
       }
 
       // Accumulate per-chunk GEMM times
@@ -500,7 +478,7 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
     const size_t dispatch_num_tokens = workspace->shape[0];
     if (dispatch_num_tokens > 0) {
       expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
-                                                 dispatch_num_tokens * expert_topk_,
+                                                 dispatch_num_tokens * params_.expert_topk,
                                                  context_->device->GetPrimaryComputeStream().Get());
       ProcessChunks(workspace->GetPtr<void>(), workspace->GetPtr<void>(), dispatch_num_tokens);
     }
@@ -510,7 +488,7 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
     // LCOV_EXCL_STOP
   } else if (global_expert_para_size_ > 1) {
     // EP without deepep
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * params_.expert_topk,
                                         context_->device->GetPrimaryComputeStream().Get());
     ProcessChunks(hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
   } else {
@@ -524,15 +502,15 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
 }
 
 template <typename T>
-Status MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
-                                                     const Tensor* eplb_map, Tensor* workspace,
-                                                     const Tensor* e_score_bias) {
+Status MarlinFusedWfp4A16MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
+                                                      const Tensor* eplb_map, Tensor* workspace,
+                                                      const Tensor* e_score_bias) {
   const size_t num_tokens = hidden_states->shape[0];
-  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
-  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, params_.expert_topk}, topk_weights_ptr_);
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, params_.expert_topk}, topk_ids_ptr_);
   Status status = grouped_topk_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, e_score_bias);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer";
+    KLLM_LOG_ERROR << "MarlinFusedWfp4A16MoeLayer::ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer";
     return status;
   }
 
@@ -540,11 +518,11 @@ Status MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(params_.layer_idx)) {
     size_t num_experts = eplb_map->shape[1];
     void* layer_expert_ptr =
-        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + params_.layer_idx * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * params_.expert_topk,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
   }
@@ -563,9 +541,9 @@ Status MarlinFusedFp4A16MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states
 }
 
 template <typename T>
-Status MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
-                                                          const Tensor* eplb_map, Tensor* workspace,
-                                                          const Tensor* e_score_bias, const Tensor* input_ids) {
+Status MarlinFusedWfp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
+                                                           const Tensor* eplb_map, Tensor* workspace,
+                                                           const Tensor* e_score_bias, const Tensor* input_ids) {
   const size_t num_tokens = hidden_states->shape[0];
 
   // aux1: input_ids (hash) or correction_bias; aux2: tid2eid (hash only).
@@ -573,21 +551,21 @@ Status MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_s
   const Tensor* aux2_ptr = nullptr;
   if (use_hash_) {
     KLLM_CHECK_WITH_INFO(input_ids != nullptr,
-                         "MarlinFusedFp4A16MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
+                         "MarlinFusedWfp4A16MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
     aux1_ptr = input_ids;     // input_ids
     aux2_ptr = e_score_bias;  // tid2eid
-  } else if (use_e_score_correction_bias_) {
+  } else if (params_.use_e_score_correction_bias) {
     aux1_ptr = e_score_bias;  // correction_bias
   }
 
-  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(params_.expert_topk)},
                              topk_weights_ptr_);
-  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(params_.expert_topk)},
                          topk_ids_ptr_);
   Status status =
       topk_softplus_sqrt_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, aux1_ptr, aux2_ptr);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
+    KLLM_LOG_ERROR << "MarlinFusedWfp4A16MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
     return status;
   }
 
@@ -595,11 +573,11 @@ Status MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_s
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(params_.layer_idx)) {
     size_t num_experts = eplb_map->shape[1];
     void* layer_expert_ptr =
-        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + params_.layer_idx * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * params_.expert_topk,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
   }
@@ -618,27 +596,27 @@ Status MarlinFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_s
   return Status();
 }
 
-Status MarlinFusedFp4A16MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+Status MarlinFusedWfp4A16MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
+                                            std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Dispatch(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status MarlinFusedFp4A16MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
-                                          std::vector<Tensor>& output_tensors) {
+Status MarlinFusedWfp4A16MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
+                                           std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Combine(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status MarlinFusedFp4A16MoeLayer::DumpEplbData(Tensor& topk_ids) {
+Status MarlinFusedWfp4A16MoeLayer::DumpEplbData(Tensor& topk_ids) {
   topk_ids.SaveToNpyFile(
-      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
+      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, params_.layer_idx, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
 }
 
-Status MarlinFusedFp4A16MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                          const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                          const Tensor* e_score_bias, const Tensor* input_ids,
-                                          const LayerExecContext& exec_ctx) {
+Status MarlinFusedWfp4A16MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                           const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                           const Tensor* e_score_bias, const Tensor* input_ids,
+                                           const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, workspace,
                       e_score_bias, input_ids);
 }

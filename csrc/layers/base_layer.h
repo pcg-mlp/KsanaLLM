@@ -82,7 +82,7 @@ class BaseLayer {
   std::shared_ptr<Tensor> workspace_buffer_;
 
   // For Attention data parallel.
-  int tp_size_;
+  int tp_size_{0};
   int dp_size_;
   int attn_dp_atp_size_;
   int attn_dp_group_id_;

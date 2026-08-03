@@ -19,9 +19,9 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
+class MarlinFusedWfp4A16MoeLayer : public BaseMoeLayer {
  public:
-  virtual ~MarlinFusedFp4A16MoeLayer() {
+  virtual ~MarlinFusedWfp4A16MoeLayer() {
     if (evt_gemm1_start_) cudaEventDestroy(evt_gemm1_start_);
     if (evt_gemm1_end_) cudaEventDestroy(evt_gemm1_end_);
     if (evt_gemm2_start_) cudaEventDestroy(evt_gemm2_start_);
@@ -44,7 +44,7 @@ class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
                          const LayerExecContext& exec_ctx = {}) override;
 
   // Attach a profiling stats output (nullptr = disabled, default).
-  // Non-virtual — MarlinFusedFp4A16MoeLayer owns this API directly.
+  // Non-virtual — MarlinFusedWfp4A16MoeLayer owns this API directly.
   void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
 
  private:
@@ -76,29 +76,8 @@ class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
  protected:
   bool set_workspace_buffer_info_ = true;
 
-  MoeScaleNormMode moe_scale_norm_mode_;
   size_t max_ws_bytes_ = 0;
-  size_t max_token_num_;
-  size_t expert_num_per_node_;
-  size_t expert_hidden_size_;
-  size_t expert_inter_size_;
-  size_t expert_topk_;
-  int tp_size_;
-  int layer_idx_;
-  bool use_vllm_moe_ = false;
-  uint32_t num_expert_group_ = 1;
-  uint32_t expert_groups_topk_ = 1;
-  std::string scoring_func_ = "softmax";
-  std::string topk_method_ = "greedy";
-  bool norm_topk_prob_ = false;
-  float routed_scaling_factor_ = 1.0f;
-  bool use_e_score_correction_bias_ = false;
-  bool enable_full_shared_expert_ = false;
-  bool apply_weight_ = false;
   bool has_swiglu_limit_ = false;
-  float swiglu_limit_ = 0.0f;
-  float situ_beta_ = 0.0f;
-  float situ_linear_beta_ = 0.0f;
 
   void* topk_weights_ptr_ = nullptr;
   size_t topk_weights_ptr_size = 0;
@@ -123,8 +102,6 @@ class MarlinFusedFp4A16MoeLayer : public BaseMoeLayer {
   std::shared_ptr<GroupedTopkLayer> grouped_topk_layer_;
   bool use_topk_softplus_sqrt_ = false;
   bool use_hash_ = false;
-  uint32_t num_hash_layers_ = 0;
-  uint32_t vocab_size_ = 0;
   size_t softplus_sqrt_workspace_size_ = 0;
   std::shared_ptr<TopKSoftplusSqrtLayer> topk_softplus_sqrt_layer_;
 

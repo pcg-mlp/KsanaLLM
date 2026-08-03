@@ -23,10 +23,11 @@ Status Fp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeCon
 
 template <typename T>
 size_t Fp8MoeLayer::GetWorkspaceSizeT() {
-  GetMoeGemmWorkspaceSize<WT, WT, T>(this->max_token_num_, this->expert_num_per_node_, this->expert_hidden_size_,
-                                     this->expert_inter_size_, this->expert_topk_, this->tp_size_, this->rank_,
-                                     this->use_lora_, this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
-  quant_buffer_size_ = this->max_token_num_ * this->expert_hidden_size_ * GetTypeSize(TYPE_FP8_E4M3);
+  GetMoeGemmWorkspaceSize<WT, WT, T>(this->params_.max_token_num, this->params_.expert_num_per_node,
+                                     this->params_.expert_hidden_size, this->params_.expert_inter_size,
+                                     this->params_.expert_topk, this->params_.tp_size, this->rank_, this->use_lora_,
+                                     this->max_ws_bytes_, this->workspace_info_.workspace_sizes);
+  quant_buffer_size_ = this->params_.max_token_num * this->params_.expert_hidden_size * GetTypeSize(TYPE_FP8_E4M3);
   this->max_ws_bytes_ += quant_buffer_size_;
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for Fp8MoeLayer", this->rank_, this->max_ws_bytes_);
   return this->max_ws_bytes_;
@@ -34,9 +35,9 @@ size_t Fp8MoeLayer::GetWorkspaceSizeT() {
 
 Status Fp8MoeLayer::SetWorkspaceBuffer(const std::shared_ptr<Tensor>& workspace_buffer) {
   this->workspace_buffer_ = workspace_buffer;
-  this->scale_probabilities_size_ = this->max_token_num_ * this->expert_num_per_node_ * sizeof(float);
-  this->src_to_dest_map_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);
-  this->selected_expert_size_ = this->expert_topk_ * this->max_token_num_ * sizeof(int);
+  this->scale_probabilities_size_ = this->params_.max_token_num * this->params_.expert_num_per_node * sizeof(float);
+  this->src_to_dest_map_size_ = this->params_.expert_topk * this->params_.max_token_num * sizeof(int);
+  this->selected_expert_size_ = this->params_.expert_topk * this->params_.max_token_num * sizeof(int);
   this->lora_workspace_size_ = 0;  // NO support for lora
   this->moe_workspace_size_ = this->max_ws_bytes_ - this->scale_probabilities_size_ - this->src_to_dest_map_size_ -
                               this->selected_expert_size_ - this->lora_workspace_size_ - quant_buffer_size_;
@@ -89,33 +90,37 @@ Status Fp8MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_o
     KLLM_THROW("Unsupported fp8 moe method, only support both weight_scale and input_scale are not null.");
   }
   void* e_score_correction_bias_weight_void = nullptr;
-  if (this->use_e_score_correction_bias_) {
+  if (this->params_.use_e_score_correction_bias) {
     e_score_correction_bias_weight_void = eplb_map->GetPtr<void>();
   }
-  if (this->moe_scale_norm_mode_ == MoeScaleNormMode::RE_NORM) {
+  if (this->params_.moe_scale_norm_mode == MoeScaleNormMode::RE_NORM) {
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
         input_activations, gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
-        e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_, this->expert_inter_size_,
-        this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
-        static_cast<char*>(this->workspace_info_.workspace), output->GetPtr<void>(), this->workspace_info_.scale_probs,
+        e_score_correction_bias_weight_void, num_tokens, this->params_.expert_hidden_size,
+        this->params_.expert_inter_size, this->params_.expert_num_per_node, this->params_.expert_topk,
+        this->workspace_info_.workspace_sizes, static_cast<char*>(this->workspace_info_.workspace),
+        output->GetPtr<void>(), this->workspace_info_.scale_probs,
         static_cast<int*>(this->workspace_info_.src_to_dest_map),
-        static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
-        best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
-        this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
-        this->use_e_score_correction_bias_, this->context_->device->GetPrimaryComputeStream().Get(), is_fp8,
-        fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);
-  } else if (this->moe_scale_norm_mode_ == MoeScaleNormMode::NO_NORM) {
+        static_cast<int*>(this->workspace_info_.selected_experts), this->params_.tp_size, this->rank_, this->use_lora_,
+        best_config_index_, this->tactics_, this->params_.use_vllm_moe, this->params_.num_expert_group,
+        this->params_.expert_groups_topk, this->params_.scoring_func, this->params_.topk_method,
+        this->params_.norm_topk_prob, this->params_.routed_scaling_factor, this->params_.use_e_score_correction_bias,
+        this->context_->device->GetPrimaryComputeStream().Get(), is_fp8, fc1_dequant_scale, fc2_quant_scale,
+        fc2_dequant_scale);
+  } else if (this->params_.moe_scale_norm_mode == MoeScaleNormMode::NO_NORM) {
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
         input_activations, gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
-        e_score_correction_bias_weight_void, num_tokens, this->expert_hidden_size_, this->expert_inter_size_,
-        this->expert_num_per_node_, this->expert_topk_, this->workspace_info_.workspace_sizes,
-        static_cast<char*>(this->workspace_info_.workspace), output->GetPtr<void>(), this->workspace_info_.scale_probs,
+        e_score_correction_bias_weight_void, num_tokens, this->params_.expert_hidden_size,
+        this->params_.expert_inter_size, this->params_.expert_num_per_node, this->params_.expert_topk,
+        this->workspace_info_.workspace_sizes, static_cast<char*>(this->workspace_info_.workspace),
+        output->GetPtr<void>(), this->workspace_info_.scale_probs,
         static_cast<int*>(this->workspace_info_.src_to_dest_map),
-        static_cast<int*>(this->workspace_info_.selected_experts), this->tp_size_, this->rank_, this->use_lora_,
-        best_config_index_, this->tactics_, this->use_vllm_moe_, this->num_expert_group_, this->expert_groups_topk_,
-        this->scoring_func_, this->topk_method_, this->norm_topk_prob_, this->routed_scaling_factor_,
-        this->use_e_score_correction_bias_, this->context_->device->GetPrimaryComputeStream().Get(), is_fp8,
-        fc1_dequant_scale, fc2_quant_scale, fc2_dequant_scale);
+        static_cast<int*>(this->workspace_info_.selected_experts), this->params_.tp_size, this->rank_, this->use_lora_,
+        best_config_index_, this->tactics_, this->params_.use_vllm_moe, this->params_.num_expert_group,
+        this->params_.expert_groups_topk, this->params_.scoring_func, this->params_.topk_method,
+        this->params_.norm_topk_prob, this->params_.routed_scaling_factor, this->params_.use_e_score_correction_bias,
+        this->context_->device->GetPrimaryComputeStream().Get(), is_fp8, fc1_dequant_scale, fc2_quant_scale,
+        fc2_dequant_scale);
   }
 
   output->shape = hidden_states->shape;

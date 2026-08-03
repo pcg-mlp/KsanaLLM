@@ -1,7 +1,7 @@
 /* Copyright 2025 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "layers/cutlass_moe_layer.h"
+#include "layers/cutlass_group_wint4afp8_moe_layer.h"
 
 #include "configure/environment.h"
 #include "csrc/kernels/nvidia/moe/cutlass_moe/low_latency_adapter.h"
@@ -50,51 +50,24 @@ inline size_t bit_width_dispatch(size_t n) {
   }
 }
 
-Status CutlassMoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                             std::shared_ptr<Context> context, int rank) {
+Status CutlassGroupWint4Afp8MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                           std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
 template <typename T>
-Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                              std::shared_ptr<Context> context, int rank) {
+Status CutlassGroupWint4Afp8MoeLayer::InitT(const std::vector<std::any>& parameters,
+                                            const RuntimeConfig& runtime_config, std::shared_ptr<Context> context,
+                                            int rank) {
   context_ = context;
   rank_ = rank;
 
-  int parameter_index = 0;
-  moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
-  max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  layer_idx_ = std::any_cast<int>(parameters[parameter_index++]);
-  expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_topk_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  tp_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  use_vllm_moe_ = std::any_cast<bool>(parameters[parameter_index++]);
-  num_expert_group_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  expert_groups_topk_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  scoring_func_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  topk_method_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  norm_topk_prob_ = std::any_cast<bool>(parameters[parameter_index++]);
-  routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
-  use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
-  enable_full_shared_expert_ = std::any_cast<bool>(parameters[parameter_index++]);
-  DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  group_size_ = std::any_cast<int>(parameters[parameter_index++]);
-  apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
-  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
+  params_ = std::any_cast<MoeLayerParameters>(parameters.front());
 
-  if (swiglu_limit_ > 0.0f) {
-    swiglu_limit_host_.assign(expert_num_per_node_, swiglu_limit_);
+  if (params_.swiglu_limit > 0.0f) {
+    swiglu_limit_host_.assign(params_.expert_num_per_node, params_.swiglu_limit);
   }
-
-  // Consume remaining params to stay aligned with the factory's 26-param layout.
-  [[maybe_unused]] uint32_t num_hash_layers = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  [[maybe_unused]] uint32_t vocab_size = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  [[maybe_unused]] float situ_beta = std::any_cast<float>(parameters[parameter_index++]);
-  [[maybe_unused]] float situ_linear_beta = std::any_cast<float>(parameters[parameter_index++]);
 
   // 清空tactic
   config_map_.clear();
@@ -102,7 +75,7 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   // 强制要求TP=EP
   if (runtime_config.parallel_basic_config.tensor_parallel_size !=
       runtime_config.parallel_basic_config.expert_parallel_size) {
-    KLLM_THROW("Currently, CutlassMoeLayer strictly enforces TP=EP.");
+    KLLM_THROW("Currently, CutlassGroupWint4Afp8MoeLayer strictly enforces TP=EP.");
   }
 
   // 计算全局ep_size和ep_rank
@@ -124,20 +97,20 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   grouped_topk_layer_ = std::make_shared<GroupedTopkLayer>();
   // 根据配置文件 moe_topk_score_threshold 设置 score 阈值
   float score_threshold = runtime_config.moe_topk_score_threshold;
-  GroupedTopkLayerParameters grouped_topk_params{.topk = expert_topk_,
-                                                 .renormalize = norm_topk_prob_,
-                                                 .num_expert_group = num_expert_group_,
-                                                 .topk_group = expert_groups_topk_,
-                                                 .scoring_func = scoring_func_,
-                                                 .routed_scaling_factor = routed_scaling_factor_,
-                                                 .use_e_score_correction_bias = use_e_score_correction_bias_,
+  GroupedTopkLayerParameters grouped_topk_params{.topk = static_cast<int>(params_.expert_topk),
+                                                 .renormalize = params_.norm_topk_prob,
+                                                 .num_expert_group = static_cast<int>(params_.num_expert_group),
+                                                 .topk_group = static_cast<int>(params_.expert_groups_topk),
+                                                 .scoring_func = params_.scoring_func,
+                                                 .routed_scaling_factor = params_.routed_scaling_factor,
+                                                 .use_e_score_correction_bias = params_.use_e_score_correction_bias,
                                                  .score_threshold = score_threshold};
   grouped_topk_layer_->Init({grouped_topk_params}, runtime_config, context, rank);
 
   // 创建cutlass moe算子
   // DeepEP LowLatency模式下，启用alltoall：finalizeMoeRouting不需要将无效token填零
   cutlass_moe_wrapper_ = std::make_shared<llm_kernels::nvidia::CutlassMoeWrapper>(
-      1, 0, global_expert_para_size_, global_expert_para_rank_, 1, 0, expert_topk_,
+      1, 0, global_expert_para_size_, global_expert_para_rank_, 1, 0, static_cast<int>(params_.expert_topk),
       /*enable_alltoall=*/use_low_latency_mode_);
   cutlass_moe_wrapper_->Init<T>();
 
@@ -150,47 +123,49 @@ Status CutlassMoeLayer::InitT(const std::vector<std::any>& parameters, const Run
   // When EPLB acceleration is enabled or using deepep, initialize the expert_map_.
   enable_load_eplb_config_ = runtime_config.enable_load_eplb_config;
   if (enable_load_eplb_config_ || using_deepep_) {
-    size_t total_expert_num = expert_num_per_node_ * global_expert_para_size_;
+    size_t total_expert_num = params_.expert_num_per_node * global_expert_para_size_;
     expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(global_expert_para_size_,
                                                                         global_expert_para_rank_, total_expert_num);
   }
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassMoeLayer Init", rank_);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassGroupWint4Afp8MoeLayer Init", rank_);
   return Status();
 }
 
-void CutlassMoeLayer::SetExpertParallelManager(std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
+void CutlassGroupWint4Afp8MoeLayer::SetExpertParallelManager(
+    std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
   expert_parallel_manager_ = expert_parallel_manager;
 }
 
-size_t CutlassMoeLayer::GetWorkspaceSize() {
-  topk_weights_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(float), 256);
-  topk_ids_ptr_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(int32_t), 256);
+size_t CutlassGroupWint4Afp8MoeLayer::GetWorkspaceSize() {
+  topk_weights_ptr_size = RoundUp(params_.max_token_num * params_.expert_topk * sizeof(float), 256);
+  topk_ids_ptr_size = RoundUp(params_.max_token_num * params_.expert_topk * sizeof(int32_t), 256);
   // dummy KTensor (null data) — wrapper only reads has_value() to pick SwigluBias sizing
   std::optional<KTensor> swiglu_limit_for_ws;
-  if (swiglu_limit_ > 0.0f) {
-    swiglu_limit_for_ws = KTensor(nullptr, {expert_num_per_node_}, KScalarType::Float);
+  if (params_.swiglu_limit > 0.0f) {
+    swiglu_limit_for_ws = KTensor(nullptr, {params_.expert_num_per_node}, KScalarType::Float);
   }
-  swiglu_limit_ptr_size_ = (swiglu_limit_ > 0.0f) ? RoundUp(expert_num_per_node_ * sizeof(float), 256) : 0;
+  swiglu_limit_ptr_size_ =
+      (params_.swiglu_limit > 0.0f) ? RoundUp(params_.expert_num_per_node * sizeof(float), 256) : 0;
 
   // LowLatency模式需要额外的adapted空间和recv_expert_count空间
   if (use_low_latency_mode_) {
     // LowLatency模式下，Dispatch后的shape为 [local_num_experts, num_ranks * max_token_num, hidden_size]
-    size_t max_dispatch_token_num = expert_num_per_node_ * global_expert_para_size_ * low_latency_max_tokens_;
+    size_t max_dispatch_token_num = params_.expert_num_per_node * global_expert_para_size_ * low_latency_max_tokens_;
 
     // kernel workspace 需要按照 LL 模式的 max_dispatch_token_num 和 topk=1 来计算
     // chunk 大小取 min(CHUNK_SIZE, max_dispatch_token_num)
-    kernel_workspace_size =
-        RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_dispatch_token_num),
-                                                       1,  // LL模式下 effective_topk = 1
-                                                       expert_num_per_node_, expert_hidden_size_, expert_inter_size_,
-                                                       std::nullopt, std::nullopt, swiglu_limit_for_ws),
-                256);
+    kernel_workspace_size = RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(
+                                        std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_dispatch_token_num),
+                                        1,  // LL模式下 effective_topk = 1
+                                        params_.expert_num_per_node, params_.expert_hidden_size,
+                                        params_.expert_inter_size, std::nullopt, std::nullopt, swiglu_limit_for_ws),
+                                    256);
 
     // adapted_topk_weights/ids: [max_dispatch_token_num, topk=1]
     adapted_topk_weights_size_ = RoundUp(max_dispatch_token_num * sizeof(float), 256);
     adapted_topk_ids_size_ = RoundUp(max_dispatch_token_num * sizeof(int32_t), 256);
-    recv_expert_count_size_ = RoundUp(expert_num_per_node_ * sizeof(int32_t), 256);
+    recv_expert_count_size_ = RoundUp(params_.expert_num_per_node * sizeof(int32_t), 256);
 
     max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + adapted_topk_weights_size_ + adapted_topk_ids_size_ +
                     recv_expert_count_size_ + kernel_workspace_size + swiglu_limit_ptr_size_;
@@ -200,26 +175,26 @@ size_t CutlassMoeLayer::GetWorkspaceSize() {
         "(local_experts={} * num_ranks={} * max_tokens={}), "
         "topk_weights={}, topk_ids={}, adapted_weights={}, adapted_ids={}, recv_count={}, kernel={}, swiglu={}, "
         "total={}",
-        rank_, max_dispatch_token_num, expert_num_per_node_, global_expert_para_size_, low_latency_max_tokens_,
+        rank_, max_dispatch_token_num, params_.expert_num_per_node, global_expert_para_size_, low_latency_max_tokens_,
         topk_weights_ptr_size, topk_ids_ptr_size, adapted_topk_weights_size_, adapted_topk_ids_size_,
         recv_expert_count_size_, kernel_workspace_size, swiglu_limit_ptr_size_, max_ws_bytes_);
   } else {
-    kernel_workspace_size =
-        RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(
-                    std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, max_token_num_), expert_topk_, expert_num_per_node_,
-                    expert_hidden_size_, expert_inter_size_, std::nullopt, std::nullopt, swiglu_limit_for_ws),
-                256);
+    kernel_workspace_size = RoundUp(cutlass_moe_wrapper_->GetWorkspaceSize(
+                                        std::min(TRTLLM_CUTLASS_MOE_CHUNK_SIZE, params_.max_token_num),
+                                        params_.expert_topk, params_.expert_num_per_node, params_.expert_hidden_size,
+                                        params_.expert_inter_size, std::nullopt, std::nullopt, swiglu_limit_for_ws),
+                                    256);
     max_ws_bytes_ = topk_weights_ptr_size + topk_ids_ptr_size + kernel_workspace_size + swiglu_limit_ptr_size_;
-    KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for CutlassMoeLayer", rank_, max_ws_bytes_);
+    KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for CutlassGroupWint4Afp8MoeLayer", rank_, max_ws_bytes_);
   }
 
   return max_ws_bytes_;
 }
 
-Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+Status CutlassGroupWint4Afp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   const size_t record_iters = GetEnvAsPositiveInt("QUANT_PROFILE", 15);
   if (record_iters == 0) {
-    KLLM_LOG_DEBUG << "$QUANT_PROFILE==0, Skipping CutlassMoeLayer Preprocess";
+    KLLM_LOG_DEBUG << "$QUANT_PROFILE==0, Skipping CutlassGroupWint4Afp8MoeLayer Preprocess";
     return Status();
   }
   const size_t warmup_iters = std::max(1UL, record_iters / 3);  // warmup不能为0
@@ -231,20 +206,22 @@ Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const Runtim
 
   // 检查是否可以跳过
   if (Singleton<CutlassMoeSearchStatus>::GetInstance()->IsCutlassMoeScheduleContain(
-          expert_topk_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_)) {
+          params_.expert_topk, params_.expert_num_per_node, params_.expert_hidden_size, params_.expert_inter_size)) {
     config_map_ = Singleton<CutlassMoeSearchStatus>::GetInstance()->GetCutlassMoeSchedule(
-        expert_topk_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_);
-    KLLM_LOG_INFO << fmt::format("Reusing Profile CutlassMoeLayer Layer in rank:{}, token=({}~{}),({},{},{},{})", rank_,
-                                 1, TRTLLM_CUTLASS_MOE_CHUNK_SIZE, expert_topk_, expert_num_per_node_,
-                                 expert_hidden_size_, expert_inter_size_);
+        params_.expert_topk, params_.expert_num_per_node, params_.expert_hidden_size, params_.expert_inter_size);
+    KLLM_LOG_INFO << fmt::format(
+        "Reusing Profile CutlassGroupWint4Afp8MoeLayer Layer in rank:{}, token=({}~{}),({},{},{},{})", rank_, 1,
+        TRTLLM_CUTLASS_MOE_CHUNK_SIZE, params_.expert_topk, params_.expert_num_per_node, params_.expert_hidden_size,
+        params_.expert_inter_size);
     return Status();
   }
 
   // 创建一份假权重
-  Tensor w1_w3_weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8,
-                               {expert_num_per_node_, expert_inter_size_ * 2, expert_hidden_size_ / 2});
+  Tensor w1_w3_weight =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8,
+             {params_.expert_num_per_node, params_.expert_inter_size * 2, params_.expert_hidden_size / 2});
   Tensor w2_weight = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT8,
-                            {expert_num_per_node_, expert_hidden_size_, expert_inter_size_ / 2});
+                            {params_.expert_num_per_node, params_.expert_hidden_size, params_.expert_inter_size / 2});
   KTensor fc1_expert_weights = TensorToKTensor(w1_w3_weight);
   KTensor fc2_expert_weights = TensorToKTensor(w2_weight);
 
@@ -274,14 +251,15 @@ Status CutlassMoeLayer::Preprocess(const ModelConfig& model_config, const Runtim
   }
 
   Singleton<CutlassMoeSearchStatus>::GetInstance()->AddCutlassMoeSchedule(
-      expert_topk_, expert_num_per_node_, expert_hidden_size_, expert_inter_size_, config_map_);
+      params_.expert_topk, params_.expert_num_per_node, params_.expert_hidden_size, params_.expert_inter_size,
+      config_map_);
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassMoeLayer Preprocess cost time: {} s", rank_,
+  KLLM_LOG_INFO << fmt::format("Rank[{}] CutlassGroupWint4Afp8MoeLayer Preprocess cost time: {} s", rank_,
                                ProfileTimer::GetCurrentTime() - start_time);
   return Status();
 }
 
-inline std::vector<int64_t> CutlassMoeLayer::GetBestTactic(const size_t& num_rows) {
+inline std::vector<int64_t> CutlassGroupWint4Afp8MoeLayer::GetBestTactic(const size_t& num_rows) {
   if (config_map_.empty()) {
     return {};
   } else {
@@ -293,16 +271,17 @@ inline std::vector<int64_t> CutlassMoeLayer::GetBestTactic(const size_t& num_row
   }
 }
 
-inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor,
-                                             const size_t total_tokens, const KTensor& fc1_expert_weights_ktensor,
-                                             const KTensor& fc2_expert_weights_ktensor,
-                                             const std::vector<KTensor>& quant_scales_ktensors) {
+inline Status CutlassGroupWint4Afp8MoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor& output_tensor,
+                                                           const size_t total_tokens,
+                                                           const KTensor& fc1_expert_weights_ktensor,
+                                                           const KTensor& fc2_expert_weights_ktensor,
+                                                           const std::vector<KTensor>& quant_scales_ktensors) {
   // 在 LowLatency 模式下，使用适配后的 topk_ids 和 topk_weights
   void* topk_weights_to_use = use_low_latency_mode_ ? adapted_topk_weights_ptr_ : topk_weights_ptr_;
   void* topk_ids_to_use = use_low_latency_mode_ ? adapted_topk_ids_ptr_ : topk_ids_ptr_;
 
-  // LowLatency 模式下 topk=1，Normal 模式下 topk=expert_topk_
-  const size_t effective_topk = use_low_latency_mode_ ? 1 : expert_topk_;
+  // LowLatency 模式下 topk=1，Normal 模式下 topk=params_.expert_topk
+  const size_t effective_topk = use_low_latency_mode_ ? 1 : params_.expert_topk;
   for (size_t chunk_token = 0; chunk_token < total_tokens; chunk_token += TRTLLM_CUTLASS_MOE_CHUNK_SIZE) {
     size_t start_token = chunk_token;
     size_t end_token = std::min(chunk_token + TRTLLM_CUTLASS_MOE_CHUNK_SIZE, total_tokens);
@@ -324,8 +303,8 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
     KTensor token_final_scales_ktensor = TensorToKTensor(chunk_topk_weights);
 
     std::optional<KTensor> swiglu_limit_ktensor;
-    if (swiglu_limit_ > 0.0f) {
-      swiglu_limit_ktensor = KTensor(swiglu_limit_ptr_, {expert_num_per_node_}, KScalarType::Float);
+    if (params_.swiglu_limit > 0.0f) {
+      swiglu_limit_ktensor = KTensor(swiglu_limit_ptr_, {params_.expert_num_per_node}, KScalarType::Float);
     }
 
     // TODO(zezhao): GetBestTactic(solve_token) 用于获取最优tactic，LowLatency模式下由于空桶存在，因此传入的该值过大，
@@ -339,12 +318,12 @@ inline Status CutlassMoeLayer::ProcessChunks(const Tensor& input_tensor, Tensor&
   return Status();
 }
 
-Status CutlassMoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
-                                           const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                           const Tensor* e_score_bias) {
+Status CutlassGroupWint4Afp8MoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Tensor* gating_output,
+                                                         const Tensor* eplb_map, Tensor* output, Tensor* workspace,
+                                                         const Tensor* e_score_bias) {
   const size_t num_tokens = hidden_states->shape[0];
-  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, expert_topk_}, topk_weights_ptr_);
-  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, expert_topk_}, topk_ids_ptr_);
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, params_.expert_topk}, topk_weights_ptr_);
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, params_.expert_topk}, topk_ids_ptr_);
   Status status = grouped_topk_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, e_score_bias);
   if (!status.OK()) {
     KLLM_LOG_ERROR << fmt::format("ExecuteGroupedTopk ERROR: failed to forward grouped_topk_layer");
@@ -355,11 +334,11 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Te
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(params_.layer_idx)) {
     size_t num_experts = eplb_map->shape[1];
     void* layer_expert_ptr =
-        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * expert_topk_,
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + params_.layer_idx * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(topk_ids_ptr_), num_tokens * params_.expert_topk,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
   }
@@ -373,8 +352,8 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Te
                                   deepep_input_tensors[1].shape[0]);
 
     if (use_low_latency_mode_) {
-      deepep_output_tensors.emplace_back(gating_output->location, TYPE_INT32, std::vector<size_t>{expert_num_per_node_},
-                                         recv_expert_count_ptr_);
+      deepep_output_tensors.emplace_back(gating_output->location, TYPE_INT32,
+                                         std::vector<size_t>{params_.expert_num_per_node}, recv_expert_count_ptr_);
     }
 
     Dispatch(deepep_input_tensors, deepep_output_tensors);
@@ -389,28 +368,31 @@ Status CutlassMoeLayer::ExecuteGroupedTopk(const Tensor* hidden_states, const Te
   return Status();
 }
 
-Status CutlassMoeLayer::Dispatch(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CutlassGroupWint4Afp8MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
+                                               std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Dispatch(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status CutlassMoeLayer::Combine(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status CutlassGroupWint4Afp8MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
+                                              std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Combine(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status CutlassMoeLayer::DumpEplbData(Tensor& topk_ids) {
+Status CutlassGroupWint4Afp8MoeLayer::DumpEplbData(Tensor& topk_ids) {
   topk_ids.SaveToNpyFile(
-      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
+      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, params_.layer_idx, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
 }
 
-void CutlassMoeLayer::AdaptLowLatencyDispatchOutput(const int* recv_expert_count, int num_experts_per_node,
-                                                    int max_tokens_per_expert, Stream& stream) {
+void CutlassGroupWint4Afp8MoeLayer::AdaptLowLatencyDispatchOutput(const int* recv_expert_count,
+                                                                  int num_experts_per_node, int max_tokens_per_expert,
+                                                                  Stream& stream) {
   // 计算总的 token 数量
   const int total_tokens = num_experts_per_node * max_tokens_per_expert;
 
   // 计算全局的 num_slots (所有 EP rank 的专家总数)
-  const int num_slots = expert_num_per_node_ * global_expert_para_size_;
+  const int num_slots = static_cast<int>(params_.expert_num_per_node) * static_cast<int>(global_expert_para_size_);
 
   KLLM_LOG_DEBUG << fmt::format(
       "Rank[{}] AdaptLowLatencyDispatchOutput: num_experts={}, max_tokens_per_expert={}, "
@@ -425,9 +407,10 @@ void CutlassMoeLayer::AdaptLowLatencyDispatchOutput(const int* recv_expert_count
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] AdaptLowLatencyDispatchOutput completed", rank_);
 }
 
-Status CutlassMoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                const Tensor* e_score_bias, const Tensor* input_ids, const LayerExecContext& exec_ctx) {
+Status CutlassGroupWint4Afp8MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output,
+                                              const Tensor* w1, const Tensor* w2, const Tensor* eplb_map,
+                                              Tensor* output, Tensor* workspace, const Tensor* e_score_bias,
+                                              const Tensor* input_ids, const LayerExecContext& exec_ctx) {
   if (set_workspace_buffer_info_) {
     set_workspace_buffer_info_ = false;
     topk_weights_ptr_ = workspace_buffer_->GetPtr<void>();
@@ -449,13 +432,13 @@ Status CutlassMoeLayer::Forward(const Tensor* hidden_states, const Tensor* gatin
     }
 
     cutlass_moe_wrapper_->SetWorkspacePtr(kernel_workspace_ptr_);
-    if (swiglu_limit_ > 0.0f) {
+    if (params_.swiglu_limit > 0.0f) {
       swiglu_limit_ptr_ = reinterpret_cast<uint8_t*>(kernel_workspace_ptr_) + kernel_workspace_size;
     }
   }
 
-  if (swiglu_limit_ > 0.0f) {
-    cudaMemcpyAsync(swiglu_limit_ptr_, swiglu_limit_host_.data(), expert_num_per_node_ * sizeof(float),
+  if (params_.swiglu_limit > 0.0f) {
+    cudaMemcpyAsync(swiglu_limit_ptr_, swiglu_limit_host_.data(), params_.expert_num_per_node * sizeof(float),
                     cudaMemcpyHostToDevice, context_->device->GetPrimaryComputeStream().Get());
   }
 
@@ -489,29 +472,30 @@ Status CutlassMoeLayer::Forward(const Tensor* hidden_states, const Tensor* gatin
 
     if (dispatch_num_tokens > 0) {
       if (use_low_latency_mode_) {
-        const size_t flat_token_num = expert_num_per_node_ * dispatch_num_tokens;
+        const size_t flat_token_num = params_.expert_num_per_node * dispatch_num_tokens;
         KLLM_LOG_DEBUG << fmt::format(
             "Rank[{}] LowLatency mode: dispatch_num_tokens(per_expert)={}, flat_token_num={}, "
             "expert_num_per_node={}, calling AdaptLowLatencyDispatchOutput",
-            rank_, dispatch_num_tokens, flat_token_num, expert_num_per_node_);
+            rank_, dispatch_num_tokens, flat_token_num, params_.expert_num_per_node);
 
-        AdaptLowLatencyDispatchOutput(static_cast<const int*>(recv_expert_count_ptr_), expert_num_per_node_,
+        AdaptLowLatencyDispatchOutput(static_cast<const int*>(recv_expert_count_ptr_), params_.expert_num_per_node,
                                       dispatch_num_tokens, context_->device->GetPrimaryComputeStream());
 
-        workspace->shape = {flat_token_num, expert_hidden_size_};
+        workspace->shape = {flat_token_num, params_.expert_hidden_size};
         AutoInvoke(*workspace, *workspace, flat_token_num);
       } else {
         expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(topk_ids_ptr_),
-                                                   dispatch_num_tokens * expert_topk_,
+                                                   dispatch_num_tokens * params_.expert_topk,
                                                    context_->device->GetPrimaryComputeStream().Get());
         AutoInvoke(*workspace, *workspace, dispatch_num_tokens);
       }
     }
 
     if (use_low_latency_mode_) {
-      workspace->shape = {expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_};
-      KLLM_LOG_DEBUG << fmt::format("Rank[{}] CutlassMoeLayer: LL mode Combine input shape: [{}, {}, {}]", rank_,
-                                    expert_num_per_node_, dispatch_num_tokens, expert_hidden_size_);
+      workspace->shape = {params_.expert_num_per_node, dispatch_num_tokens, params_.expert_hidden_size};
+      KLLM_LOG_DEBUG << fmt::format("Rank[{}] CutlassGroupWint4Afp8MoeLayer: LL mode Combine input shape: [{}, {}, {}]",
+                                    rank_, params_.expert_num_per_node, dispatch_num_tokens,
+                                    params_.expert_hidden_size);
     }
 
     std::vector<Tensor> combine_inputs = {*workspace};

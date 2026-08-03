@@ -2,7 +2,7 @@
 ==============================================================================*/
 #include "layers/layer_test_base.h"
 
-#include "layers/cutlass_moe_layer.h"
+#include "layers/cutlass_group_wint4afp8_moe_layer.h"
 #include "layers/grouped_topk_layer.h"
 #include "layers/marlin_moe_layer.h"
 #include "layers/moe_layer.h"
@@ -53,33 +53,34 @@ TEST_F(LayerTest, Fp8MoeLayerTest) {
   float situ_beta = 0.0f;
   float situ_linear_beta = 0.0f;
 
-  std::vector<std::any> params;
-  params.push_back(moe_scale_norm_mode);
-  params.push_back(max_token_num);
-  params.push_back(layer_idx);
-  params.push_back(expert_num);
-  params.push_back(expert_hidden_size);
-  params.push_back(expert_inter_size);
-  params.push_back(expert_topk);
-  params.push_back(tp_size);
-  params.push_back(use_vllm_moe);
-  params.push_back(num_expert_group);
-  params.push_back(expert_groups_topk);
-  params.push_back(scoring_func);
-  params.push_back(topk_method);
-  params.push_back(norm_topk_prob);
-  params.push_back(routed_scaling_factor);
-  params.push_back(use_e_score_correction_bias);
-  params.push_back(enable_full_shared_expert);
-  params.push_back(fp8_weight_dtype);
-  params.push_back(int_weight_dtype);
-  params.push_back(group_size);
-  params.push_back(apply_weight);
-  params.push_back(swiglu_limit);
-  params.push_back(num_hash_layers);
-  params.push_back(vocab_size);
-  params.push_back(situ_beta);
-  params.push_back(situ_linear_beta);
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = moe_scale_norm_mode;
+  moe_params.max_token_num = max_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = expert_hidden_size;
+  moe_params.expert_inter_size = expert_inter_size;
+  moe_params.expert_topk = expert_topk;
+  moe_params.tp_size = tp_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = num_expert_group;
+  moe_params.expert_groups_topk = expert_groups_topk;
+  moe_params.scoring_func = scoring_func;
+  moe_params.topk_method = topk_method;
+  moe_params.norm_topk_prob = norm_topk_prob;
+  moe_params.routed_scaling_factor = routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = enable_full_shared_expert;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = int_weight_dtype;
+  moe_params.group_size = group_size;
+  moe_params.apply_weight = apply_weight;
+  moe_params.swiglu_limit = swiglu_limit;
+  moe_params.num_hash_layers = num_hash_layers;
+  moe_params.vocab_size = vocab_size;
+  moe_params.situ_beta = situ_beta;
+  moe_params.situ_linear_beta = situ_linear_beta;
+  std::vector<std::any> params = {moe_params};
 
   int num_tokens = 9;
   auto options = torch::TensorOptions().device(torch::kCUDA, kDeviceRank);
@@ -186,33 +187,34 @@ TEST_F(LayerTest, MarlinMoeLayerTest) {
   float situ_beta = 0.0f;
   float situ_linear_beta = 0.0f;
 
-  std::vector<std::any> params;
-  params.push_back(moe_scale_norm_mode);
-  params.push_back(max_token_num);
-  params.push_back(layer_idx);
-  params.push_back(expert_num);
-  params.push_back(expert_hidden_size);
-  params.push_back(expert_inter_size);
-  params.push_back(expert_topk);
-  params.push_back(tp_size);
-  params.push_back(use_vllm_moe);
-  params.push_back(num_expert_group);
-  params.push_back(expert_groups_topk);
-  params.push_back(scoring_func);
-  params.push_back(topk_method);
-  params.push_back(norm_topk_prob);
-  params.push_back(routed_scaling_factor);
-  params.push_back(use_e_score_correction_bias);
-  params.push_back(enable_full_shared_expert);
-  params.push_back(fp8_weight_dtype);
-  params.push_back(int_weight_dtype);
-  params.push_back(group_size);
-  params.push_back(apply_weight);
-  params.push_back(swiglu_limit);
-  params.push_back(num_hash_layers);
-  params.push_back(vocab_size);
-  params.push_back(situ_beta);
-  params.push_back(situ_linear_beta);
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = moe_scale_norm_mode;
+  moe_params.max_token_num = max_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = expert_hidden_size;
+  moe_params.expert_inter_size = expert_inter_size;
+  moe_params.expert_topk = expert_topk;
+  moe_params.tp_size = tp_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = num_expert_group;
+  moe_params.expert_groups_topk = expert_groups_topk;
+  moe_params.scoring_func = scoring_func;
+  moe_params.topk_method = topk_method;
+  moe_params.norm_topk_prob = norm_topk_prob;
+  moe_params.routed_scaling_factor = routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = enable_full_shared_expert;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = int_weight_dtype;
+  moe_params.group_size = group_size;
+  moe_params.apply_weight = apply_weight;
+  moe_params.swiglu_limit = swiglu_limit;
+  moe_params.num_hash_layers = num_hash_layers;
+  moe_params.vocab_size = vocab_size;
+  moe_params.situ_beta = situ_beta;
+  moe_params.situ_linear_beta = situ_linear_beta;
+  std::vector<std::any> params = {moe_params};
 
   int num_tokens = 9;
   auto options = torch::TensorOptions().device(torch::kCUDA, kDeviceRank);
@@ -328,33 +330,34 @@ TEST_F(LayerTest, MoeLayerTest) {
   float situ_beta = 0.0f;
   float situ_linear_beta = 0.0f;
 
-  std::vector<std::any> params;
-  params.push_back(moe_scale_norm_mode);
-  params.push_back(max_token_num);
-  params.push_back(layer_idx);
-  params.push_back(expert_num);
-  params.push_back(expert_hidden_size);
-  params.push_back(expert_inter_size);
-  params.push_back(expert_topk);
-  params.push_back(tp_size);
-  params.push_back(use_vllm_moe);
-  params.push_back(num_expert_group);
-  params.push_back(expert_groups_topk);
-  params.push_back(scoring_func);
-  params.push_back(topk_method);
-  params.push_back(norm_topk_prob);
-  params.push_back(routed_scaling_factor);
-  params.push_back(use_e_score_correction_bias);
-  params.push_back(enable_full_shared_expert);
-  params.push_back(fp8_weight_dtype);
-  params.push_back(int_weight_dtype);
-  params.push_back(group_size);
-  params.push_back(apply_weight);
-  params.push_back(swiglu_limit);
-  params.push_back(num_hash_layers);
-  params.push_back(vocab_size);
-  params.push_back(situ_beta);
-  params.push_back(situ_linear_beta);
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = moe_scale_norm_mode;
+  moe_params.max_token_num = max_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = expert_hidden_size;
+  moe_params.expert_inter_size = expert_inter_size;
+  moe_params.expert_topk = expert_topk;
+  moe_params.tp_size = tp_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = num_expert_group;
+  moe_params.expert_groups_topk = expert_groups_topk;
+  moe_params.scoring_func = scoring_func;
+  moe_params.topk_method = topk_method;
+  moe_params.norm_topk_prob = norm_topk_prob;
+  moe_params.routed_scaling_factor = routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = enable_full_shared_expert;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = int_weight_dtype;
+  moe_params.group_size = group_size;
+  moe_params.apply_weight = apply_weight;
+  moe_params.swiglu_limit = swiglu_limit;
+  moe_params.num_hash_layers = num_hash_layers;
+  moe_params.vocab_size = vocab_size;
+  moe_params.situ_beta = situ_beta;
+  moe_params.situ_linear_beta = situ_linear_beta;
+  std::vector<std::any> params = {moe_params};
 
   auto int8_option = torch::TensorOptions().dtype(torch::kInt8).device(torch::kCUDA);
   auto int32_option = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
@@ -551,12 +554,12 @@ TEST_F(LayerTest, MoeLayerTest) {
     fc13_weight_scale.copy_(w1_w3_scales_interleaved.contiguous());
     // 创建 cutlass moe layer
     std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
-    CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
-    cutlass_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
-    size_t workspace_size = cutlass_moe_layer.GetWorkspaceSize();
-    KLLM_LOG_INFO << fmt::format("CutlassMoeLayer WorkSpaceSize: {}", workspace_size);
-    cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
-    cutlass_moe_layer.Preprocess(new_model_config, new_runtime_config);
+    CutlassGroupWint4Afp8MoeLayer cutlass_group_wint4afp8_moe_layer = CutlassGroupWint4Afp8MoeLayer();
+    cutlass_group_wint4afp8_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
+    size_t workspace_size = cutlass_group_wint4afp8_moe_layer.GetWorkspaceSize();
+    KLLM_LOG_INFO << fmt::format("CutlassGroupWint4Afp8MoeLayer WorkSpaceSize: {}", workspace_size);
+    cutlass_group_wint4afp8_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
+    cutlass_group_wint4afp8_moe_layer.Preprocess(new_model_config, new_runtime_config);
     // 构建输入 input_tensors: 0.hidden states 1.routing_out 2.up_gate_experts 3.down_experts 4.bias
     std::vector<Tensor> inputs(4);
     inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
@@ -604,8 +607,9 @@ TEST_F(LayerTest, MoeLayerTest) {
                         {static_cast<size_t>(cutlass_output.size(0)), static_cast<size_t>(cutlass_output.size(1))},
                         cutlass_output.data_ptr());
     // 推理
-    EXPECT_TRUE(
-        cutlass_moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
+    EXPECT_TRUE(cutlass_group_wint4afp8_moe_layer
+                    .Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr)
+                    .OK());
     StreamSynchronize(context_->device->GetPrimaryComputeStream());
   }
 
@@ -774,7 +778,7 @@ TEST_F(LayerTest, MoeLayerTest) {
 #endif
 }
 
-TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
+TEST_F(LayerTest, CutlassGroupWint4Afp8MoeLayerOnlyTest) {
 #ifdef ENABLE_CUDA
   if (context_->device->ext->GetComputeCapacity() != 90) {
     return;
@@ -819,33 +823,34 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
   float situ_beta = 0.0f;
   float situ_linear_beta = 0.0f;
 
-  std::vector<std::any> params;
-  params.push_back(moe_scale_norm_mode);
-  params.push_back(max_token_num);
-  params.push_back(layer_idx);
-  params.push_back(expert_num);
-  params.push_back(expert_hidden_size);
-  params.push_back(expert_inter_size);
-  params.push_back(expert_topk);
-  params.push_back(tp_size);
-  params.push_back(use_vllm_moe);
-  params.push_back(num_expert_group);
-  params.push_back(expert_groups_topk);
-  params.push_back(scoring_func);
-  params.push_back(topk_method);
-  params.push_back(norm_topk_prob);
-  params.push_back(routed_scaling_factor);
-  params.push_back(use_e_score_correction_bias);
-  params.push_back(enable_full_shared_expert);
-  params.push_back(fp8_weight_dtype);
-  params.push_back(int_weight_dtype);
-  params.push_back(group_size);
-  params.push_back(apply_weight);
-  params.push_back(swiglu_limit);
-  params.push_back(num_hash_layers);
-  params.push_back(vocab_size);
-  params.push_back(situ_beta);
-  params.push_back(situ_linear_beta);
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = moe_scale_norm_mode;
+  moe_params.max_token_num = max_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = expert_hidden_size;
+  moe_params.expert_inter_size = expert_inter_size;
+  moe_params.expert_topk = expert_topk;
+  moe_params.tp_size = tp_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = num_expert_group;
+  moe_params.expert_groups_topk = expert_groups_topk;
+  moe_params.scoring_func = scoring_func;
+  moe_params.topk_method = topk_method;
+  moe_params.norm_topk_prob = norm_topk_prob;
+  moe_params.routed_scaling_factor = routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = enable_full_shared_expert;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = int_weight_dtype;
+  moe_params.group_size = group_size;
+  moe_params.apply_weight = apply_weight;
+  moe_params.swiglu_limit = swiglu_limit;
+  moe_params.num_hash_layers = num_hash_layers;
+  moe_params.vocab_size = vocab_size;
+  moe_params.situ_beta = situ_beta;
+  moe_params.situ_linear_beta = situ_linear_beta;
+  std::vector<std::any> params = {moe_params};
 
   auto int8_option = torch::TensorOptions().dtype(torch::kInt8).device(torch::kCUDA);
   auto int32_option = torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA);
@@ -1030,12 +1035,12 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
     fc13_weight_scale.copy_(w1_w3_scales_interleaved.contiguous());
     // 创建 cutlass moe layer（只需要创建一次）
     std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
-    CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
-    cutlass_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
-    size_t workspace_size = cutlass_moe_layer.GetWorkspaceSize();
-    KLLM_LOG_INFO << fmt::format("CutlassMoeLayer WorkSpaceSize: {}", workspace_size);
-    cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
-    cutlass_moe_layer.Preprocess(new_model_config, new_runtime_config);
+    CutlassGroupWint4Afp8MoeLayer cutlass_group_wint4afp8_moe_layer = CutlassGroupWint4Afp8MoeLayer();
+    cutlass_group_wint4afp8_moe_layer.Init(params, new_runtime_config, context_, kDeviceRank);
+    size_t workspace_size = cutlass_group_wint4afp8_moe_layer.GetWorkspaceSize();
+    KLLM_LOG_INFO << fmt::format("CutlassGroupWint4Afp8MoeLayer WorkSpaceSize: {}", workspace_size);
+    cutlass_group_wint4afp8_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(workspace_size));
+    cutlass_group_wint4afp8_moe_layer.Preprocess(new_model_config, new_runtime_config);
 
     // 构建权重相关的输入（与 num_tokens 无关，只需要创建一次）
     std::vector<Tensor> scales(2);
@@ -1101,7 +1106,8 @@ TEST_F(LayerTest, CutlassMoeLayerOnlyTest) {
 
       // 推理并测试性能（warmup/iterations 可按需调大以做 benchmark）
       auto forward_func = [&]() {
-        cutlass_moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr);
+        cutlass_group_wint4afp8_moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0],
+                                                  nullptr);
       };
       float avg_time_ms = MeasureCudaExecutionTime(forward_func, context_->device->GetPrimaryComputeStream().Get(),
                                                    /*warmups=*/1, /*iterations=*/1);
@@ -1149,42 +1155,44 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
   float situ_beta = 0.0f;
   float situ_linear_beta = 0.0f;
 
-  std::vector<std::any> params;
-  params.push_back(moe_scale_norm_mode);
-  params.push_back(max_token_num);
-  params.push_back(layer_idx);
-  params.push_back(expert_num);
-  params.push_back(expert_hidden_size);
-  params.push_back(expert_inter_size);
-  params.push_back(expert_topk);
-  params.push_back(tp_size);
-  params.push_back(use_vllm_moe);
-  params.push_back(num_expert_group);
-  params.push_back(expert_groups_topk);
-  params.push_back(scoring_func);
-  params.push_back(topk_method);
-  params.push_back(norm_topk_prob);
-  params.push_back(routed_scaling_factor);
-  params.push_back(use_e_score_correction_bias);
-  params.push_back(enable_full_shared_expert);
-  params.push_back(fp8_weight_dtype);
-  params.push_back(int_weight_dtype);
-  params.push_back(group_size);
-  params.push_back(apply_weight);
-  params.push_back(swiglu_limit);
-  params.push_back(num_hash_layers);
-  params.push_back(vocab_size);
-  params.push_back(situ_beta);
-  params.push_back(situ_linear_beta);
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = moe_scale_norm_mode;
+  moe_params.max_token_num = max_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = expert_hidden_size;
+  moe_params.expert_inter_size = expert_inter_size;
+  moe_params.expert_topk = expert_topk;
+  moe_params.tp_size = tp_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = num_expert_group;
+  moe_params.expert_groups_topk = expert_groups_topk;
+  moe_params.scoring_func = scoring_func;
+  moe_params.topk_method = topk_method;
+  moe_params.norm_topk_prob = norm_topk_prob;
+  moe_params.routed_scaling_factor = routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = enable_full_shared_expert;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = int_weight_dtype;
+  moe_params.group_size = group_size;
+  moe_params.apply_weight = apply_weight;
+  moe_params.swiglu_limit = swiglu_limit;
+  moe_params.num_hash_layers = num_hash_layers;
+  moe_params.vocab_size = vocab_size;
+  moe_params.situ_beta = situ_beta;
+  moe_params.situ_linear_beta = situ_linear_beta;
+  std::vector<std::any> params = {moe_params};
 
   std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
   auto t1 = std::chrono::high_resolution_clock::now();
   Singleton<CutlassMoeSearchStatus>::GetInstance()->ClearCutlassMoeSchedule();
   {
-    CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
-    cutlass_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-    cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(cutlass_moe_layer.GetWorkspaceSize()));
-    cutlass_moe_layer.Preprocess(model_config, runtime_config);
+    CutlassGroupWint4Afp8MoeLayer cutlass_group_wint4afp8_moe_layer = CutlassGroupWint4Afp8MoeLayer();
+    cutlass_group_wint4afp8_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
+    cutlass_group_wint4afp8_moe_layer.SetWorkspaceBuffer(
+        workspace_mgr->GetWorkspace(cutlass_group_wint4afp8_moe_layer.GetWorkspaceSize()));
+    cutlass_group_wint4afp8_moe_layer.Preprocess(model_config, runtime_config);
   }
 
   auto t2 = std::chrono::high_resolution_clock::now();
@@ -1194,10 +1202,11 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
     constexpr int kNumThreads = 2;
     auto func = [&]() {
       for (size_t layer_idx = 0; layer_idx < kNumLayers; layer_idx++) {
-        CutlassMoeLayer cutlass_moe_layer = CutlassMoeLayer();
-        cutlass_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
-        cutlass_moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(cutlass_moe_layer.GetWorkspaceSize()));
-        cutlass_moe_layer.Preprocess(model_config, runtime_config);
+        CutlassGroupWint4Afp8MoeLayer cutlass_group_wint4afp8_moe_layer = CutlassGroupWint4Afp8MoeLayer();
+        cutlass_group_wint4afp8_moe_layer.Init(params, runtime_config, context_, kDeviceRank);
+        cutlass_group_wint4afp8_moe_layer.SetWorkspaceBuffer(
+            workspace_mgr->GetWorkspace(cutlass_group_wint4afp8_moe_layer.GetWorkspaceSize()));
+        cutlass_group_wint4afp8_moe_layer.Preprocess(model_config, runtime_config);
       }
     };
     std::vector<std::thread> threads;

@@ -27,7 +27,7 @@ namespace ksana_llm {
 // hierarchy.  It is only included in *_test.cpp and in the concrete MoE layer
 // headers that opt into profiling support.
 //
-// Fields marked "humming-only" are left at 0/nullptr by MarlinFusedFp4A16MoeLayer.
+// Fields marked "humming-only" are left at 0/nullptr by MarlinFusedWfp4A16MoeLayer.
 // ===========================================================================
 struct MoePerfStats {
   // Aggregated times in milliseconds for the profiling window since last Reset().

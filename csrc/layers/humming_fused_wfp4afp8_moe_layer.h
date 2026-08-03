@@ -16,7 +16,7 @@
 #  include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "csrc/utils/search_status.h"
-#  include "layers/humming_fp4_moe_jit_cache.h"
+#  include "layers/humming_jit_cache.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"
@@ -28,9 +28,9 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
+class HummingFusedWfp4Afp8MoeLayer : public BaseMoeLayer {
  public:
-  virtual ~HummingFusedFp4A8MoeLayer() {
+  virtual ~HummingFusedWfp4Afp8MoeLayer() {
     for (auto& e : events_) {
       if (e) cudaEventDestroy(e);
     }
@@ -52,7 +52,7 @@ class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
                          const LayerExecContext& exec_ctx = {}) override;
 
   // Attach a profiling stats output (nullptr = disabled, default).
-  // Non-virtual — HummingFusedFp4A8MoeLayer owns this API directly.
+  // Non-virtual — HummingFusedWfp4Afp8MoeLayer owns this API directly.
   void SetPerfStats(MoePerfStats* stats) { perf_stats_ = stats; }
 
   // Test-only: when true, Forward records profiling events but defers the
@@ -70,8 +70,8 @@ class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
 
   // Expose the JIT compiler's kernel table for test/inspection (nullptr if no compiler).
   // The table contains all JIT-compiled kernel variants for all shapes/dtypes compiled
-  // by any HummingFusedFp4A8MoeLayer instance (compiler is the process-global singleton
-  // from humming_fp4_moe_jit_cache.h, shared across instances).
+  // by any HummingFusedWfp4Afp8MoeLayer instance (compiler is the process-global singleton
+  // from humming_jit_cache.h, shared across instances).
   static const std::vector<llm_kernels::nvidia::humming::KernelMeta>* GetJitKernelTable();
 
  private:
@@ -220,26 +220,7 @@ class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
  protected:
   bool set_workspace_buffer_info_ = true;
 
-  // MoE configuration
-  MoeScaleNormMode moe_scale_norm_mode_;
-  size_t max_token_num_;
-  size_t expert_num_per_node_;
-  size_t expert_hidden_size_;
-  size_t expert_inter_size_;
-  size_t expert_topk_;
-  int tp_size_;
-  int layer_idx_;
-  bool use_vllm_moe_ = false;
-  std::string scoring_func_;
-  bool norm_topk_prob_ = false;
-  float routed_scaling_factor_ = 1.0f;
-  bool use_e_score_correction_bias_ = false;
-  bool enable_full_shared_expert_ = false;
-  bool apply_weight_ = false;
   bool has_swiglu_limit_ = false;
-  float swiglu_limit_ = 0.0f;
-  float situ_beta_ = 0.0f;
-  float situ_linear_beta_ = 0.0f;
 
   llm_kernels::nvidia::humming::ComputeDtype humming_compute_dtype_;
 
@@ -317,8 +298,6 @@ class HummingFusedFp4A8MoeLayer : public BaseMoeLayer {
 
   std::shared_ptr<TopKSoftplusSqrtLayer> topk_softplus_sqrt_layer_;
   bool use_hash_ = false;
-  uint32_t num_hash_layers_ = 0;
-  uint32_t vocab_size_ = 0;
 
   bool enable_load_eplb_config_ = false;
   bool enable_dump_eplb_data_ = false;

@@ -139,14 +139,10 @@ float RtnMethod::ComputeMaxInputScale(std::unordered_map<std::string, Tensor>& d
 }
 
 Status RtnMethod::ProcessExpertProj(std::unordered_map<std::string, Tensor>& device_model_weights,
-                                    const std::string& weight_prefix_name,
-                                    const std::vector<int>& local_expert_indices,
-                                    const std::string& proj_name,
-                                    const std::vector<std::string>& sub_proj_suffixes,
-                                    const std::vector<size_t>& reshape_dims,
-                                    size_t interleave_k_dim,
-                                    bool has_input_scale,
-                                    int dev_rank) {
+                                    const std::string& weight_prefix_name, const std::vector<int>& local_expert_indices,
+                                    const std::string& proj_name, const std::vector<std::string>& sub_proj_suffixes,
+                                    const std::vector<size_t>& reshape_dims, size_t interleave_k_dim,
+                                    bool has_input_scale, int dev_rank) {
 #ifdef ENABLE_CUDA
   const size_t local_num_experts = local_expert_indices.size();
 
@@ -172,8 +168,7 @@ Status RtnMethod::ProcessExpertProj(std::unordered_map<std::string, Tensor>& dev
   std::vector<std::string> expert_scale_names;
   for (int expert_idx : local_expert_indices) {
     for (const auto& suffix : sub_proj_suffixes) {
-      expert_scale_names.push_back(
-          fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, suffix));
+      expert_scale_names.push_back(fmt::format("{}{}.{}.weight_scale", weight_prefix_name, expert_idx, suffix));
     }
   }
   // Verify all scale tensors exist before merging
@@ -205,7 +200,7 @@ Status RtnMethod::ProcessExpertProj(std::unordered_map<std::string, Tensor>& dev
   // invalidating all pointers obtained via &device_model_weights[key].
   // All pointer bindings are deferred to the end of process_experts_proj.
 
-  // Process input_scale and alpha for CutlassMoeLayer
+  // Process input_scale and alpha for CutlassGroupWint4Afp8MoeLayer
   if (has_input_scale) {
     float max_input_scale =
         ComputeMaxInputScale(device_model_weights, weight_prefix_name, local_expert_indices, sub_proj_suffixes);
@@ -228,8 +223,7 @@ Status RtnMethod::ProcessExpertProj(std::unordered_map<std::string, Tensor>& dev
 }
 
 void RtnMethod::BindProjPointers(std::unordered_map<std::string, Tensor>& device_model_weights,
-                                 const std::string& weight_prefix_name,
-                                 const std::string& proj_name,
+                                 const std::string& weight_prefix_name, const std::string& proj_name,
                                  bool has_input_scale) {
   const std::string weight_name = weight_prefix_name + proj_name + ".weight";
   const std::string scales_name = weight_prefix_name + proj_name + ".weight_scale";
@@ -302,10 +296,9 @@ Status RtnMethod::process_experts_proj(std::unordered_map<std::string, Tensor>& 
     // Order: [gate, up] for each expert
     // The CUTLASS MoE TMA-warp-specialized kernel (doActivationKernel) expects [gate, up]:
     //   front half (offset 0) = gate_proj (SiLu applied), back half = up_proj (multiplied)
-    Status status = ProcessExpertProj(device_model_weights, weight_prefix_name, local_expert_indices,
-                                     "up_gate_proj", {"gate_proj", "up_proj"},
-                                     {local_num_experts, 2 * inter_size, hidden_size_packed},
-                                     hidden_size, has_input_scale, dev_rank);
+    Status status = ProcessExpertProj(device_model_weights, weight_prefix_name, local_expert_indices, "up_gate_proj",
+                                      {"gate_proj", "up_proj"}, {local_num_experts, 2 * inter_size, hidden_size_packed},
+                                      hidden_size, has_input_scale, dev_rank);
     if (!status.OK()) {
       return status;
     }
@@ -321,10 +314,9 @@ Status RtnMethod::process_experts_proj(std::unordered_map<std::string, Tensor>& 
     // inter_size = inter_size_packed * 2 (for int8 packed as int4)
     const size_t inter_size_real = down_inter_size_packed * 2;
 
-    Status status = ProcessExpertProj(device_model_weights, weight_prefix_name, local_expert_indices,
-                                     "down_proj", {"down_proj"},
-                                     {local_num_experts, down_hidden_units, down_inter_size_packed},
-                                     inter_size_real, has_input_scale, dev_rank);
+    Status status = ProcessExpertProj(device_model_weights, weight_prefix_name, local_expert_indices, "down_proj",
+                                      {"down_proj"}, {local_num_experts, down_hidden_units, down_inter_size_packed},
+                                      inter_size_real, has_input_scale, dev_rank);
     if (!status.OK()) {
       return status;
     }

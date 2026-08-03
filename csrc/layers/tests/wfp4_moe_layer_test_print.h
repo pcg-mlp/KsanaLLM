@@ -6,7 +6,7 @@
 // selected-kernel schedule, and humming non-GEMM breakdown tables.
 //
 // Expected to be included after the layer/kernel/torch headers from
-// fp4_moe_layer_test.cpp's ENABLE_CUDA block.
+// wfp4_moe_layer_test.cpp's ENABLE_CUDA block.
 
 #include <sys/stat.h>
 #include <algorithm>
@@ -19,8 +19,8 @@
 #include <tuple>
 #include <vector>
 
-#include "fp4_moe_layer_test_config.h"
-#include "fp4_moe_layer_test_perf.h"
+#include "wfp4_moe_layer_test_config.h"
+#include "wfp4_moe_layer_test_perf.h"
 
 namespace ksana_llm {
 
@@ -165,7 +165,7 @@ void PrintExpertRoutingSummary(const std::string& config_name, const Fp4MoeTestC
 // Called once per config, after the performance tables.
 // ===========================================================================
 void PrintJitKernelTable(const std::string& config_name, const Fp4MoeTestConfig& cfg) {
-  const auto* table = HummingFusedFp4A16MoeLayer::GetJitKernelTable();
+  const auto* table = HummingFusedWfp4A16MoeLayer::GetJitKernelTable();
   if (table == nullptr || table->empty()) {
     std::cout << "\n=== " << config_name << " JIT Kernel Table: EMPTY (no JIT compiler) ===" << std::endl;
     return;
@@ -292,14 +292,14 @@ void PrintHummingNonGemmBreakdown(const std::string& config_name,
 // ===========================================================================
 
 // Write all CSV files for one config. Called by the driver after terminal printing.
-// Output directory: ./fp4_moe_layers_test/ (created if missing).
+// Output directory: ./wfp4_moe_layers_test/ (created if missing).
 void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
                   const std::vector<std::vector<BenchResult>>& all_results, const std::vector<BackendSpec>& backends) {
   const char* env = std::getenv("FP4_PERF_CSV");
   if (env == nullptr || std::string(env) != "1") return;
 
   // Create output directory (ignore EEXIST — dir may already exist)
-  const std::string dir = "fp4_moe_layers_test";
+  const std::string dir = "wfp4_moe_layers_test";
   mkdir(dir.c_str(), 0755);
 
   auto path = [&](const std::string& suffix) -> std::string { return dir + "/" + config_name + suffix; };

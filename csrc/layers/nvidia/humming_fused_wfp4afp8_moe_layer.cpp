@@ -1,8 +1,8 @@
 /* Copyright 2026 Tencent Inc.  All rights reserved.
 
 ==============================================================================*/
-#include "layers/humming_fused_fp4_a16_moe_layer.h"
-#include "layers/humming_fp4_moe_jit_cache.h"
+#include "layers/humming_fused_wfp4afp8_moe_layer.h"
+#include "layers/humming_jit_cache.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/torch.h>
@@ -31,7 +31,7 @@
 
 namespace ksana_llm {
 
-const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFusedFp4A16MoeLayer::GetJitKernelTable() {
+const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFusedWfp4Afp8MoeLayer::GetJitKernelTable() {
   auto& compiler = GetHummingFp4JitCompiler();
   if (!compiler) return nullptr;
   return &compiler->GetKernelTable();
@@ -44,46 +44,21 @@ const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFusedFp4A16M
 // the actual max block_m rather than a hardcoded constant.
 static constexpr int64_t kHummingMoeMaxBlockSize = 8;
 
-Status HummingFusedFp4A16MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                        std::shared_ptr<Context> context, int rank) {
+Status HummingFusedWfp4Afp8MoeLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                          std::shared_ptr<Context> context, int rank) {
   inter_data_type_ = runtime_config.inter_data_type;
   DISPATCH_BY_3_DTYPE(inter_data_type_, InitT, parameters, runtime_config, context, rank);
 }
 
 template <typename T>
-Status HummingFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
-                                         std::shared_ptr<Context> context, int rank) {
+Status HummingFusedWfp4Afp8MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
+                                           std::shared_ptr<Context> context, int rank) {
   context_ = context;
   rank_ = rank;
 
-  int parameter_index = 0;
-  moe_scale_norm_mode_ = std::any_cast<const MoeScaleNormMode>(parameters[parameter_index++]);
-  max_token_num_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  layer_idx_ = std::any_cast<int>(parameters[parameter_index++]);
-  expert_num_per_node_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_hidden_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_inter_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  expert_topk_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  tp_size_ = std::any_cast<const size_t>(parameters[parameter_index++]);
-  use_vllm_moe_ = std::any_cast<bool>(parameters[parameter_index++]);
-  [[maybe_unused]] uint32_t num_expert_group = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  [[maybe_unused]] uint32_t expert_groups_topk = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  scoring_func_ = std::any_cast<std::string>(parameters[parameter_index++]);
-  [[maybe_unused]] std::string topk_method = std::any_cast<std::string>(parameters[parameter_index++]);
-  norm_topk_prob_ = std::any_cast<bool>(parameters[parameter_index++]);
-  routed_scaling_factor_ = std::any_cast<float>(parameters[parameter_index++]);
-  use_e_score_correction_bias_ = std::any_cast<bool>(parameters[parameter_index++]);
-  enable_full_shared_expert_ = std::any_cast<bool>(parameters[parameter_index++]);
-  [[maybe_unused]] DataType fp8_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  [[maybe_unused]] DataType int_weight_dtype = std::any_cast<DataType>(parameters[parameter_index++]);
-  [[maybe_unused]] int group_size = std::any_cast<int>(parameters[parameter_index++]);
-  apply_weight_ = std::any_cast<bool>(parameters[parameter_index++]);
-  swiglu_limit_ = std::any_cast<float>(parameters[parameter_index++]);
-  has_swiglu_limit_ = (swiglu_limit_ > 0.0f);
-  num_hash_layers_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  vocab_size_ = std::any_cast<uint32_t>(parameters[parameter_index++]);
-  situ_beta_ = std::any_cast<float>(parameters[parameter_index++]);
-  situ_linear_beta_ = std::any_cast<float>(parameters[parameter_index++]);
+  params_ = std::any_cast<MoeLayerParameters>(parameters.front());
+
+  has_swiglu_limit_ = (params_.swiglu_limit > 0.0f);
 
   // Compute global EP size and rank
   global_expert_para_size_ = runtime_config.parallel_basic_config.expert_parallel_size *
@@ -95,10 +70,10 @@ Status HummingFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters
                   runtime_config.parallel_basic_config.expert_parallel_size > 1;
 
   KLLM_CHECK_WITH_INFO(
-      scoring_func_ == "sqrtsoftplus",
-      fmt::format("HummingFusedFp4A16MoeLayer requires scoring_func='sqrtsoftplus', got '{}'", scoring_func_));
+      params_.scoring_func == "sqrtsoftplus",
+      fmt::format("HummingFusedWfp4Afp8MoeLayer requires scoring_func='sqrtsoftplus', got '{}'", params_.scoring_func));
 
-  use_hash_ = (layer_idx_ < static_cast<int>(num_hash_layers_));
+  use_hash_ = (params_.layer_idx < static_cast<int>(params_.num_hash_layers));
   InitTopkSoftplusSqrt(runtime_config, rank);
 
   // EPLB data dump configuration
@@ -114,11 +89,11 @@ Status HummingFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters
                                          runtime_config.parallel_basic_config.expert_parallel_size +
                                      rank_;
     expert_map_ = std::make_shared<llm_kernels::nvidia::moe::ExpertMap>(
-        global_expert_para_size_, global_expert_para_rank, expert_num_per_node_ * global_expert_para_size_);
+        global_expert_para_size_, global_expert_para_rank, params_.expert_num_per_node * global_expert_para_size_);
   }
 
-  // W4A16: BF16 compute dtype (hardcoded — no runtime routing)
-  humming_compute_dtype_ = llm_kernels::nvidia::humming::ComputeDtype::BF16;
+  // W4A8: FP8 compute dtype (hardcoded — no runtime routing)
+  humming_compute_dtype_ = llm_kernels::nvidia::humming::ComputeDtype::FP8;
 
   // Read profiling iteration count once here (default 15).  When 0, profiling is
   // disabled and only heuristic kernels are compiled (no extend/variant configs).
@@ -140,29 +115,29 @@ Status HummingFusedFp4A16MoeLayer::InitT(const std::vector<std::any>& parameters
     }
   }
   // JIT compiler handles shape-level dedup internally — no layer-side flag needed.
-  int64_t n1 = expert_inter_size_ * 2, k1 = expert_hidden_size_;  // w1: gate+up
-  int64_t n2 = expert_hidden_size_, k2 = expert_inter_size_;      // w2: down
+  int64_t n1 = params_.expert_inter_size * 2, k1 = params_.expert_hidden_size;  // w1: gate+up
+  int64_t n2 = params_.expert_hidden_size, k2 = params_.expert_inter_size;      // w2: down
   auto gemm_type = llm_kernels::nvidia::humming::GemmType::INDEXED;
 
   auto& jit_compiler = GetHummingFp4JitCompiler();
-  jit_compiler->CompileKernels(n1, k1, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type,
-                               compile_extend);
-  jit_compiler->CompileKernels(n2, k2, static_cast<int64_t>(expert_num_per_node_), humming_compute_dtype_, gemm_type,
-                               compile_extend);
+  jit_compiler->CompileKernels(n1, k1, static_cast<int64_t>(params_.expert_num_per_node), humming_compute_dtype_,
+                               gemm_type, compile_extend);
+  jit_compiler->CompileKernels(n2, k2, static_cast<int64_t>(params_.expert_num_per_node), humming_compute_dtype_,
+                               gemm_type, compile_extend);
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedFp4A16MoeLayer Init", rank_);
+  KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer Init", rank_);
   return Status();
 }
 
-void HummingFusedFp4A16MoeLayer::InitTopkSoftplusSqrt(const RuntimeConfig& runtime_config, int rank) {
+void HummingFusedWfp4Afp8MoeLayer::InitTopkSoftplusSqrt(const RuntimeConfig& runtime_config, int rank) {
   TopKSoftplusSqrtLayerParameters softplus_sqrt_params{
-      .topk = static_cast<uint32_t>(expert_topk_),
-      .num_experts = static_cast<uint32_t>(expert_num_per_node_ * global_expert_para_size_),
-      .max_token_num = static_cast<uint32_t>(max_token_num_),
-      .renormalize = norm_topk_prob_,
-      .routed_scaling_factor = routed_scaling_factor_,
+      .topk = static_cast<uint32_t>(params_.expert_topk),
+      .num_experts = static_cast<uint32_t>(params_.expert_num_per_node * global_expert_para_size_),
+      .max_token_num = static_cast<uint32_t>(params_.max_token_num),
+      .renormalize = params_.norm_topk_prob,
+      .routed_scaling_factor = params_.routed_scaling_factor,
       .use_hash = use_hash_,
-      .use_correction_bias = !use_hash_ && use_e_score_correction_bias_,
+      .use_correction_bias = !use_hash_ && params_.use_e_score_correction_bias,
       .topk_ids_dtype = TYPE_INT32,
   };
 
@@ -171,22 +146,22 @@ void HummingFusedFp4A16MoeLayer::InitTopkSoftplusSqrt(const RuntimeConfig& runti
   softplus_sqrt_workspace_size_ = topk_softplus_sqrt_layer_->GetWorkspaceSize();
 }
 
-void HummingFusedFp4A16MoeLayer::SetExpertParallelManager(
+void HummingFusedWfp4Afp8MoeLayer::SetExpertParallelManager(
     std::shared_ptr<ExpertParallelManager> expert_parallel_manager) {
   expert_parallel_manager_ = expert_parallel_manager;
 }
 
-size_t HummingFusedFp4A16MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
+size_t HummingFusedWfp4Afp8MoeLayer::GetWorkspaceSize() { DISPATCH_BY_3_DTYPE(inter_data_type_, GetWorkspaceSizeT); }
 
 template <typename T>
-size_t HummingFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
-  size_t m = max_token_num_;
+size_t HummingFusedWfp4Afp8MoeLayer::GetWorkspaceSizeT() {
+  size_t m = params_.max_token_num;
 
-  ws_.gating.topk_weights_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(float), 256);
-  ws_.gating.topk_ids_size = RoundUp(max_token_num_ * expert_topk_ * sizeof(int32_t), 256);
+  ws_.gating.topk_weights_size = RoundUp(params_.max_token_num * params_.expert_topk * sizeof(float), 256);
+  ws_.gating.topk_ids_size = RoundUp(params_.max_token_num * params_.expert_topk * sizeof(int32_t), 256);
 
   // fused_id_buffer: fill_info_vec(4) + sorted_ids + expert_ids + num_tokens_post_pad + cumsum
-  size_t numel = m * expert_topk_;
+  size_t numel = m * params_.expert_topk;
 
   // Determine the max BLOCK_SHAPE_M from compiled JIT kernels.
   // The heuristic may produce block_m values larger than kHummingMoeMaxBlockSize (e.g. up to
@@ -203,41 +178,42 @@ size_t HummingFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
     }
   }
 
-  size_t max_num_tokens_padded = numel + expert_num_per_node_ * (max_block_m - 1);
+  size_t max_num_tokens_padded = numel + params_.expert_num_per_node * (max_block_m - 1);
   size_t max_num_m_blocks = (max_num_tokens_padded + max_block_m - 1) / max_block_m;
   // fill_info(4) + sorted_ids(max_num_tokens_padded) + expert_ids(max_num_m_blocks) + num_tokens_post_pad(1) +
   // cumsum(expert_num_per_node+1)
-  ws_.align_gemm1.total_size =
-      RoundUp((SGL_MOE_ALIGN_BLOCK_VEC_SIZE + max_num_tokens_padded + max_num_m_blocks + 1 + expert_num_per_node_ + 1) *
-                  sizeof(int32_t),
-              256);
+  ws_.align_gemm1.total_size = RoundUp(
+      (SGL_MOE_ALIGN_BLOCK_VEC_SIZE + max_num_tokens_padded + max_num_m_blocks + 1 + params_.expert_num_per_node + 1) *
+          sizeof(int32_t),
+      256);
 
   // GEMM2 fused_id_buffer: same sizing as GEMM1 (max_block_m covers both GEMMs)
   ws_.align_gemm2.total_size = ws_.align_gemm1.total_size;
 
   // Intermediate caches
   // cache1: [m * topk, inter_size * 2] — output of w1 GEMM (gate+up)
-  ws_.cache.gemm1_size = RoundUp(m * expert_topk_ * expert_inter_size_ * 2 * sizeof(T), 256);
+  ws_.cache.gemm1_size = RoundUp(m * params_.expert_topk * params_.expert_inter_size * 2 * sizeof(T), 256);
   // cache2: [m * topk, inter_size] — output of SiluAndMul
-  ws_.cache.silu_size = RoundUp(m * expert_topk_ * expert_inter_size_ * sizeof(T), 256);
+  ws_.cache.silu_size = RoundUp(m * params_.expert_topk * params_.expert_inter_size * sizeof(T), 256);
   // cache3: [m * topk, hidden_size] — output of w2 GEMM
   // NOTE: cache3 reuses cache1's memory (P5 optimization) since their lifetimes don't overlap:
   //   cache1 is consumed by SiluAndMul before cache3 is produced by GEMM2.
-  ws_.cache.gemm2_size = RoundUp(m * expert_topk_ * expert_hidden_size_ * sizeof(T), 256);
+  ws_.cache.gemm2_size = RoundUp(m * params_.expert_topk * params_.expert_hidden_size * sizeof(T), 256);
 
   // Humming workspace: sized for the larger of the two GEMMs
-  int64_t max_n = std::max(expert_inter_size_ * 2, expert_hidden_size_);
-  int64_t max_k = std::max(expert_hidden_size_, expert_inter_size_);
-  ws_.kernel.locks_size = RoundUp(llm_kernels::nvidia::humming::get_locks_size(max_token_num_ * expert_topk_, max_n,
-                                                                               max_k, humming_compute_dtype_) *
-                                      sizeof(int32_t),
-                                  256);
+  int64_t max_n = std::max(params_.expert_inter_size * 2, params_.expert_hidden_size);
+  int64_t max_k = std::max(params_.expert_hidden_size, params_.expert_inter_size);
+  ws_.kernel.locks_size =
+      RoundUp(llm_kernels::nvidia::humming::get_locks_size(params_.max_token_num * params_.expert_topk, max_n, max_k,
+                                                           humming_compute_dtype_) *
+                  sizeof(int32_t),
+              256);
 
   // Compute workspace size based on actual max num_ctas_per_sm from compiled kernels.
   // The humming heuristic may produce kernels with num_ctas_per_sm > 3 (e.g. 4 for
   // small-K, large-N MoE GEMMs), which the hardcoded get_workspace_size() doesn't account for.
   // Locks buffer has 4x over-provision so it's safe, but the TMA descriptor buffer is exact-sized.
-  int max_ctas_per_sm = 2;  // BF16
+  int max_ctas_per_sm = 3;  // FP8
   if (jit_compiler) {
     for (const auto& meta : jit_compiler->GetKernelTable()) {
       if (meta.compute_dtype != humming_compute_dtype_) continue;
@@ -249,19 +225,27 @@ size_t HummingFusedFp4A16MoeLayer::GetWorkspaceSizeT() {
   int64_t total_ctas = static_cast<int64_t>(max_ctas_per_sm) * sm_count;
   ws_.kernel.tma_size = RoundUp(total_ctas * 128, 256);
 
+  // FP8 activation buffers (W4A8)
+  ws_.fp8.activation_size =
+      RoundUp(std::max(static_cast<int64_t>(m * params_.expert_hidden_size),
+                       static_cast<int64_t>(m * params_.expert_topk * params_.expert_inter_size)) *
+                  sizeof(uint8_t),
+              256);
+  ws_.fp8.scale_size = RoundUp(static_cast<int64_t>(m * params_.expert_topk) * sizeof(float), 256);
+
   ws_.softplus_sqrt_size = RoundUp(softplus_sqrt_workspace_size_, 256);
 
   // Total workspace: cache1 is shared with cache3, so we use max(cache1, cache3) instead of sum
   size_t cache13_size = std::max(ws_.cache.gemm1_size, ws_.cache.gemm2_size);
   ws_.total_size = ws_.gating.topk_weights_size + ws_.gating.topk_ids_size + ws_.align_gemm1.total_size +
                    ws_.align_gemm2.total_size + cache13_size + ws_.cache.silu_size + ws_.kernel.locks_size +
-                   ws_.kernel.tma_size + ws_.softplus_sqrt_size;
+                   ws_.kernel.tma_size + ws_.softplus_sqrt_size + ws_.fp8.activation_size + ws_.fp8.scale_size;
 
-  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for HummingFusedFp4A16MoeLayer", rank_, ws_.total_size);
+  KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for HummingFusedWfp4Afp8MoeLayer", rank_, ws_.total_size);
   return ws_.total_size;
 }
 
-Status HummingFusedFp4A16MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
+Status HummingFusedWfp4Afp8MoeLayer::Preprocess(const ModelConfig& model_config, const RuntimeConfig& runtime_config) {
   // Reuse profile_iters_/warmup_iters_ read in Init() to avoid inconsistent reads of QUANT_PROFILE.
   if (profile_iters_ == 0) {
     KLLM_LOG_DEBUG << "QUANT_PROFILE==0, skipping humming profiling";
@@ -273,35 +257,36 @@ Status HummingFusedFp4A16MoeLayer::Preprocess(const ModelConfig& model_config, c
 
   int dt = static_cast<int>(humming_compute_dtype_);
   int gt = static_cast<int>(llm_kernels::nvidia::humming::GemmType::INDEXED);
-  size_t E = expert_num_per_node_;
+  size_t E = params_.expert_num_per_node;
 
   // GEMM1: N=inter*2, K=hidden, top_k=expert_topk, size_m=tokens
-  int64_t n1 = static_cast<int64_t>(expert_inter_size_ * 2);
-  int64_t k1 = static_cast<int64_t>(expert_hidden_size_);
+  int64_t n1 = static_cast<int64_t>(params_.expert_inter_size * 2);
+  int64_t k1 = static_cast<int64_t>(params_.expert_hidden_size);
   if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n1, k1, E, dt, gt)) {
-    auto schedule = ProfileAllBuckets(n1, k1, E, expert_topk_, warmup_iters_, profile_iters_, /*size_m_multiplier=*/1);
+    auto schedule =
+        ProfileAllBuckets(n1, k1, E, params_.expert_topk, warmup_iters_, profile_iters_, /*size_m_multiplier=*/1);
     Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n1, k1, E, dt, gt, schedule);
-    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedFp4A16MoeLayer GEMM1 profiled (N={},K={})", rank_, n1, k1);
+    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer GEMM1 profiled (N={},K={})", rank_, n1, k1);
   } else {
     KLLM_LOG_INFO << fmt::format("Rank[{}] Reusing profiled GEMM1 (N={},K={})", rank_, n1, k1);
   }
 
   // GEMM2: N=hidden, K=inter, top_k=1, size_m=tokens*topk
-  int64_t n2 = static_cast<int64_t>(expert_hidden_size_);
-  int64_t k2 = static_cast<int64_t>(expert_inter_size_);
+  int64_t n2 = static_cast<int64_t>(params_.expert_hidden_size);
+  int64_t k2 = static_cast<int64_t>(params_.expert_inter_size);
   if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n2, k2, E, dt, gt)) {
-    auto schedule =
-        ProfileAllBuckets(n2, k2, E, /*top_k=*/1, warmup_iters_, profile_iters_, /*size_m_multiplier=*/expert_topk_);
+    auto schedule = ProfileAllBuckets(n2, k2, E, /*top_k=*/1, warmup_iters_, profile_iters_,
+                                      /*size_m_multiplier=*/params_.expert_topk);
     Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n2, k2, E, dt, gt, schedule);
-    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedFp4A16MoeLayer GEMM2 profiled (N={},K={})", rank_, n2, k2);
+    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer GEMM2 profiled (N={},K={})", rank_, n2, k2);
   } else {
     KLLM_LOG_INFO << fmt::format("Rank[{}] Reusing profiled GEMM2 (N={},K={})", rank_, n2, k2);
   }
   return Status();
 }
 
-HummingFusedFp4A16MoeLayer::ProfAlignBuffers::ProfAlignBuffers(int64_t max_num_tokens_padded, int64_t max_num_m_blocks,
-                                                               int64_t num_experts) {
+HummingFusedWfp4Afp8MoeLayer::ProfAlignBuffers::ProfAlignBuffers(int64_t max_num_tokens_padded,
+                                                                 int64_t max_num_m_blocks, int64_t num_experts) {
   auto opt_i32 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
   sorted_ids = torch::empty({max_num_tokens_padded}, opt_i32);
   expert_ids = torch::empty({max_num_m_blocks}, opt_i32);
@@ -309,8 +294,8 @@ HummingFusedFp4A16MoeLayer::ProfAlignBuffers::ProfAlignBuffers(int64_t max_num_t
   cumsum = torch::empty({num_experts + 1}, opt_i32);
 }
 
-torch::Tensor HummingFusedFp4A16MoeLayer::MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts,
-                                                           int64_t ep_size) {
+torch::Tensor HummingFusedWfp4Afp8MoeLayer::MakeDummyTopkIds(int64_t num_tokens, int64_t top_k, int64_t num_experts,
+                                                             int64_t ep_size) {
   // Random uniform sampling with fixed seed — matches the benchmark's expert distribution
   // (benchmark uses torch::randn for gate values, then topk → random uniform expert assignment).
   // The previous round-robin distribution (i+j)%E was perfectly uniform, which is unrealistic:
@@ -340,12 +325,14 @@ torch::Tensor HummingFusedFp4A16MoeLayer::MakeDummyTopkIds(int64_t num_tokens, i
   return torch::from_blob(host_ids.data(), {num_tokens * top_k}, cpu_opts).to(gpu_opts);
 }
 
-HummingFusedFp4A16MoeLayer::ProfWeights HummingFusedFp4A16MoeLayer::PrepareDummyWeights(int64_t size_n, int64_t size_k,
-                                                                                        int64_t num_experts,
-                                                                                        cudaStream_t stream) {
+HummingFusedWfp4Afp8MoeLayer::ProfWeights HummingFusedWfp4Afp8MoeLayer::PrepareDummyWeights(int64_t size_n,
+                                                                                            int64_t size_k,
+                                                                                            int64_t num_experts,
+                                                                                            cudaStream_t stream) {
   using namespace llm_kernels::nvidia::humming;
 
   auto opt_u8 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kUInt8);
+  auto opt_f32 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
 
   // Generate raw FP4 weights: random [0, 256)
   torch::Tensor b_raw = torch::empty({num_experts, size_n, size_k / 2}, opt_u8).random_(0, 256);
@@ -355,10 +342,15 @@ HummingFusedFp4A16MoeLayer::ProfWeights HummingFusedFp4A16MoeLayer::PrepareDummy
   ProfWeights out;
   out.b = torch::empty({num_experts, size_n, size_k / 2}, opt_u8);
   out.b_scale = torch::empty({num_experts, size_k / 32, size_n}, opt_u8);
+  out.global_scale = torch::empty({num_experts}, opt_f32);
 
-  // W4A16: repack + process_scales directly
-  repack_weight_wgmma(stream, b_raw.data_ptr(), out.b.data_ptr(), num_experts, size_n, size_k, humming_compute_dtype_);
-  process_scales(stream, b_scale_raw.data_ptr(), out.b_scale.data_ptr(), num_experts, size_n, size_k, 32,
+  // W4A8: process_mxfp4_w4a8 modifies weight+scale in-place, outputs global_scale
+  torch::Tensor b_copy = b_raw.clone();
+  torch::Tensor s_copy = b_scale_raw.clone();
+  process_mxfp4_w4a8_weight(stream, b_copy.data_ptr(), s_copy.data_ptr(), out.global_scale.data_ptr<float>(),
+                            num_experts, size_n, size_k, 32);
+  repack_weight_wgmma(stream, b_copy.data_ptr(), out.b.data_ptr(), num_experts, size_n, size_k, humming_compute_dtype_);
+  process_scales(stream, s_copy.data_ptr(), out.b_scale.data_ptr(), num_experts, size_n, size_k, 32,
                  humming_compute_dtype_);
   cudaStreamSynchronize(stream);
   return out;
@@ -366,11 +358,12 @@ HummingFusedFp4A16MoeLayer::ProfWeights HummingFusedFp4A16MoeLayer::PrepareDummy
 
 // --- Deduplicated helpers ---
 
-HummingFusedFp4A16MoeLayer::GemmMetaSelection HummingFusedFp4A16MoeLayer::SelectGemmMeta(int64_t size_n, int64_t size_k,
-                                                                                         int64_t size_m) const {
+HummingFusedWfp4Afp8MoeLayer::GemmMetaSelection HummingFusedWfp4Afp8MoeLayer::SelectGemmMeta(int64_t size_n,
+                                                                                             int64_t size_k,
+                                                                                             int64_t size_m) const {
   GemmMetaSelection sel;
   sel.meta = Singleton<HummingMoeSearchStatus>::GetInstance()->GetProfiledMeta(
-      size_n, size_k, expert_num_per_node_, static_cast<int>(humming_compute_dtype_),
+      size_n, size_k, params_.expert_num_per_node, static_cast<int>(humming_compute_dtype_),
       static_cast<int>(llm_kernels::nvidia::humming::GemmType::INDEXED), size_m);
 
   if (sel.meta != nullptr) {
@@ -389,23 +382,23 @@ HummingFusedFp4A16MoeLayer::GemmMetaSelection HummingFusedFp4A16MoeLayer::Select
   return sel;
 }
 
-void HummingFusedFp4A16MoeLayer::InvokeAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids, int32_t* expert_ids,
-                                                      int32_t* num_tokens_post_pad, int32_t* cumsum,
-                                                      int32_t max_num_tokens_padded, size_t numel,
-                                                      int32_t moe_block_size, bool use_expert_parallel,
-                                                      cudaStream_t stream) {
+void HummingFusedWfp4Afp8MoeLayer::InvokeAlignBlockSize(int32_t* topk_ids, int32_t* sorted_ids, int32_t* expert_ids,
+                                                        int32_t* num_tokens_post_pad, int32_t* cumsum,
+                                                        int32_t max_num_tokens_padded, size_t numel,
+                                                        int32_t moe_block_size, bool use_expert_parallel,
+                                                        cudaStream_t stream) {
   if (use_expert_parallel) {
     llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t, true>(
         topk_ids, sorted_ids, expert_ids, num_tokens_post_pad, max_num_tokens_padded,
-        static_cast<int32_t>(expert_num_per_node_), moe_block_size, numel, cumsum, stream);
+        static_cast<int32_t>(params_.expert_num_per_node), moe_block_size, numel, cumsum, stream);
   } else {
     llm_kernels::nvidia::InvokeSglMoeAlignBlockSize<int32_t, false>(
         topk_ids, sorted_ids, expert_ids, num_tokens_post_pad, max_num_tokens_padded,
-        static_cast<int32_t>(expert_num_per_node_), moe_block_size, numel, cumsum, stream);
+        static_cast<int32_t>(params_.expert_num_per_node), moe_block_size, numel, cumsum, stream);
   }
 }
 
-void HummingFusedFp4A16MoeLayer::InvokeMergedAlignBlockSize(
+void HummingFusedWfp4Afp8MoeLayer::InvokeMergedAlignBlockSize(
     int32_t* topk_ids, int32_t* sorted_ids1, int32_t* expert_ids1, int32_t* num_tokens_post_pad1, int32_t* sorted_ids2,
     int32_t* expert_ids2, int32_t* num_tokens_post_pad2, int32_t max_num_tokens_padded1, int32_t max_num_tokens_padded2,
     int32_t moe_block_size1, int32_t moe_block_size2, size_t numel, int32_t* cumsum1, int32_t* cumsum2,
@@ -413,17 +406,28 @@ void HummingFusedFp4A16MoeLayer::InvokeMergedAlignBlockSize(
   if (use_expert_parallel) {
     llm_kernels::nvidia::InvokeSglMoeAlignBlockSizeMerged<int32_t, true>(
         topk_ids, sorted_ids1, expert_ids1, num_tokens_post_pad1, sorted_ids2, expert_ids2, num_tokens_post_pad2,
-        max_num_tokens_padded1, max_num_tokens_padded2, static_cast<int32_t>(expert_num_per_node_), moe_block_size1,
-        moe_block_size2, numel, cumsum1, cumsum2, stream);
+        max_num_tokens_padded1, max_num_tokens_padded2, static_cast<int32_t>(params_.expert_num_per_node),
+        moe_block_size1, moe_block_size2, numel, cumsum1, cumsum2, stream);
   } else {
     llm_kernels::nvidia::InvokeSglMoeAlignBlockSizeMerged<int32_t, false>(
         topk_ids, sorted_ids1, expert_ids1, num_tokens_post_pad1, sorted_ids2, expert_ids2, num_tokens_post_pad2,
-        max_num_tokens_padded1, max_num_tokens_padded2, static_cast<int32_t>(expert_num_per_node_), moe_block_size1,
-        moe_block_size2, numel, cumsum1, cumsum2, stream);
+        max_num_tokens_padded1, max_num_tokens_padded2, static_cast<int32_t>(params_.expert_num_per_node),
+        moe_block_size1, moe_block_size2, numel, cumsum1, cumsum2, stream);
   }
 }
 
-const llm_kernels::nvidia::humming::KernelMeta* HummingFusedFp4A16MoeLayer::ProfileSingleGemm(
+template <typename T>
+bool HummingFusedWfp4Afp8MoeLayer::QuantizeToFp8(const void* input, int size_k, int num_tokens, cudaStream_t stream,
+                                                 const void*& out_a, const void*& out_a_scale) {
+  if (humming_compute_dtype_ != llm_kernels::nvidia::humming::ComputeDtype::FP8) return false;
+  Singleton<TritonWrapper>::GetInstance()->InvokeHummingFp8Quant<T>(reinterpret_cast<const T*>(input), ws_.fp8.scales,
+                                                                    ws_.fp8.activation, size_k, num_tokens, stream);
+  out_a = ws_.fp8.activation;
+  out_a_scale = ws_.fp8.scales;
+  return true;
+}
+
+const llm_kernels::nvidia::humming::KernelMeta* HummingFusedWfp4Afp8MoeLayer::ProfileSingleGemm(
     int64_t size_m, int64_t size_n, int64_t size_k, int64_t num_experts, int64_t top_k, size_t warmup,
     size_t profile_iters, cudaStream_t stream, const ProfWeights& weights) {
   using namespace llm_kernels::nvidia::humming;
@@ -457,16 +461,17 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFusedFp4A16MoeLayer::Prof
   at::cuda::setCurrentCUDAStream(at::cuda::getStreamFromExternal(stream, original_stream.device_index()));
 
   auto opt_u8 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kUInt8);
+  auto opt_f32 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kFloat32);
   auto opt_i32 = torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32);
 
   // Weights are pre-prepared by caller (PrepareDummyWeights), reused across buckets.
   void* b_ptr = weights.b.data_ptr();
   void* b_scale_ptr = weights.b_scale.data_ptr();
-  void* global_scale_ptr = nullptr;
+  void* global_scale_ptr = weights.global_scale.data_ptr();
 
   // 3. Allocate dummy activation + output buffers
-  // BF16: 2 bytes/element.
-  int64_t a_bytes = size_m * size_k * 2;
+  // FP8: 1 byte/element.
+  int64_t a_bytes = size_m * size_k * 1;
   torch::Tensor a_buf = torch::zeros({a_bytes}, opt_u8);
   // Output C: must hold num_tokens_post_pad rows (after MoE alignment padding).
   // Output is always BF16 (2 bytes/element).
@@ -478,8 +483,11 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFusedFp4A16MoeLayer::Prof
   int64_t max_num_tokens_padded = numel + num_experts * (max_block_m_for_c - 1);
   torch::Tensor c_buf = torch::empty({max_num_tokens_padded, size_n * 2}, opt_u8);
 
+  // Activation scale for W4A8: 1.0 (valid FP8 per-token scale)
+  torch::Tensor a_scale_buf = torch::full({size_m}, 1.0f, opt_f32);
+
   // locks and workspace — sized for max num_ctas_per_sm among candidates
-  int max_ctas_per_sm = 2;
+  int max_ctas_per_sm = 3;  // FP8
   for (const auto* m : candidates) {
     max_ctas_per_sm = std::max(max_ctas_per_sm, m->num_ctas_per_sm);
   }
@@ -517,7 +525,7 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFusedFp4A16MoeLayer::Prof
 
   void* a_ptr = a_buf.data_ptr();
   void* c_ptr = c_buf.data_ptr();
-  void* a_scale_ptr = nullptr;
+  void* a_scale_ptr = a_scale_buf.data_ptr();
   int32_t* locks_ptr = locks_buf.data_ptr<int32_t>();
   void* workspace_ptr = workspace_buf.data_ptr();
 
@@ -567,10 +575,8 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFusedFp4A16MoeLayer::Prof
   return best_meta;
 }
 
-HummingMoeSearchStatus::ProfiledSchedule HummingFusedFp4A16MoeLayer::ProfileAllBuckets(int64_t n, int64_t k, int64_t e,
-                                                                                       int64_t top_k, size_t warmup,
-                                                                                       size_t profile_iters,
-                                                                                       int64_t size_m_multiplier) {
+HummingMoeSearchStatus::ProfiledSchedule HummingFusedWfp4Afp8MoeLayer::ProfileAllBuckets(
+    int64_t n, int64_t k, int64_t e, int64_t top_k, size_t warmup, size_t profile_iters, int64_t size_m_multiplier) {
   using llm_kernels::nvidia::humming::FormatKernelMeta;
   HummingMoeSearchStatus::ProfiledSchedule result;
   cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
@@ -585,7 +591,7 @@ HummingMoeSearchStatus::ProfiledSchedule HummingFusedFp4A16MoeLayer::ProfileAllB
                                                        1536, 2048, 3072, 4096, 6144, 8192, 10240, 12288, 14336, 16384};
   int num_buckets = static_cast<int>(kBuckets.size());
 
-  KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedFp4A16MoeLayer profiling {} buckets for N={} K={}", rank_,
+  KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer profiling {} buckets for N={} K={}", rank_,
                                num_buckets, n, k);
 
   // Prepare dummy weights once — repack/process is expensive and only depends on (N, K, E, dtype).
@@ -614,13 +620,13 @@ HummingMoeSearchStatus::ProfiledSchedule HummingFusedFp4A16MoeLayer::ProfileAllB
       result.metas.push_back(best);
       result.block_ms.push_back(best->block_m);
     }
-    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedFp4A16MoeLayer rep_m={} done best={} iter={}", rank_, rep_m,
+    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer rep_m={} done best={} iter={}", rank_, rep_m,
                                  (best != nullptr) ? FormatKernelMeta(*best) : std::string("none"), iter);
   }
   return result;
 }
 
-void HummingFusedFp4A16MoeLayer::FlushPerfStats(size_t iterations) {
+void HummingFusedWfp4Afp8MoeLayer::FlushPerfStats(size_t iterations) {
   if (perf_stats_ == nullptr || !defer_perf_flush_) {
     return;
   }
@@ -634,7 +640,8 @@ void HummingFusedFp4A16MoeLayer::FlushPerfStats(size_t iterations) {
   perf_stats_->gating_time_ms = ElapsedMs(Evt::GateStart, Evt::GateEnd) * scale;
   perf_stats_->align_time_ms =
       (ElapsedMs(Evt::Align1Start, Evt::Align1End) + ElapsedMs(Evt::Align2Start, Evt::Align2End)) * scale;
-  perf_stats_->quant_time_ms = 0.f;  // W4A16: quant is a no-op
+  perf_stats_->quant_time_ms =
+      (ElapsedMs(Evt::Quant1Start, Evt::Quant1End) + ElapsedMs(Evt::Quant2Start, Evt::Quant2End)) * scale;
   perf_stats_->gemm1_time_ms = ElapsedMs(Evt::Gemm1Start, Evt::Gemm1End) * scale;
   perf_stats_->silu_time_ms = ElapsedMs(Evt::SiluStart, Evt::SiluEnd) * scale;
   perf_stats_->gemm2_time_ms = ElapsedMs(Evt::Gemm2Start, Evt::Gemm2End) * scale;
@@ -642,9 +649,10 @@ void HummingFusedFp4A16MoeLayer::FlushPerfStats(size_t iterations) {
 }
 
 template <typename T>
-Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                            const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                            const Tensor* e_score_bias, const Tensor* input_ids) {
+Status HummingFusedWfp4Afp8MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_output,
+                                              const Tensor* w1, const Tensor* w2, const Tensor* eplb_map,
+                                              Tensor* output, Tensor* workspace, const Tensor* e_score_bias,
+                                              const Tensor* input_ids) {
   // Lazy creation of profiling CUDA events (created once, reused across forwards)
   bool do_profile = (perf_stats_ != nullptr);
   if (do_profile) {
@@ -673,6 +681,11 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     p += ws_.kernel.locks_size;
     ws_.kernel.tma_descriptors = p;
     p += ws_.kernel.tma_size;
+    // FP8 activation buffers (after kernel workspace)
+    ws_.fp8.activation = p;
+    p += ws_.fp8.activation_size;
+    ws_.fp8.scales = reinterpret_cast<float*>(p);
+    p += ws_.fp8.scale_size;
 
     if (ws_.softplus_sqrt_size > 0) {
       const size_t slice_offset = ws_.total_size - ws_.softplus_sqrt_size;
@@ -704,6 +717,14 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
   void* w1_scales = (w1->weight_scales != nullptr) ? w1->weight_scales->GetPtr<void>() : nullptr;
   void* w2_scales = (w2->weight_scales != nullptr) ? w2->weight_scales->GetPtr<void>() : nullptr;
 
+  // W4A8: Get per-expert global_scale from weight tensors
+  if (w1->weight_global_scale != nullptr) {
+    w1_global_scale_ = w1->weight_global_scale->GetPtr<float>();
+  }
+  if (w2->weight_global_scale != nullptr) {
+    w2_global_scale_ = w2->weight_global_scale->GetPtr<float>();
+  }
+
   auto ProcessTokens = [&](void* hidden_states_ptr, void* output_ptr, size_t total_tokens) {
     cudaStream_t stream = context_->device->GetPrimaryComputeStream().Get();
     const bool use_expert_parallel = (global_expert_para_size_ > 1 && !using_deepep_);
@@ -713,7 +734,7 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     void* curr_topk_weights = ws_.gating.topk_weights;
 
     // ----- Determine moe_block_size from GEMM1's kernel BLOCK_SHAPE_M -----
-    int64_t size_n_w1 = static_cast<int64_t>(expert_inter_size_ * 2);
+    int64_t size_n_w1 = static_cast<int64_t>(params_.expert_inter_size * 2);
     int64_t size_k_w1 = static_cast<int64_t>(hidden_size);
 
     // Profiled kernel selection: right-align lookup (smallest profiled size_m >= actual).
@@ -723,8 +744,8 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
 
     // Pre-compute GEMM2's block_m to enable merged align
     int64_t size_n_w2 = static_cast<int64_t>(hidden_size);
-    int64_t size_k_w2 = static_cast<int64_t>(expert_inter_size_);
-    int64_t size_m_gemm2 = static_cast<int64_t>(total_tokens * expert_topk_);
+    int64_t size_k_w2 = static_cast<int64_t>(params_.expert_inter_size);
+    int64_t size_m_gemm2 = static_cast<int64_t>(total_tokens * params_.expert_topk);
     auto sel2 = SelectGemmMeta(size_n_w2, size_k_w2, size_m_gemm2);
     int32_t moe_block_size_gemm2 = sel2.block_m;
     if (do_profile) {
@@ -732,8 +753,8 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
       perf_stats_->last_moe_block_size_2 = moe_block_size_gemm2;
     }
 
-    int64_t numel = static_cast<int64_t>(total_tokens * expert_topk_);
-    int64_t max_num_tokens_padded = numel + expert_num_per_node_ * (moe_block_size - 1);
+    int64_t numel = static_cast<int64_t>(total_tokens * params_.expert_topk);
+    int64_t max_num_tokens_padded = numel + params_.expert_num_per_node * (moe_block_size - 1);
     int64_t max_num_m_blocks = (max_num_tokens_padded + moe_block_size - 1) / moe_block_size;
 
     // Layout within fused_id_buffer: [fill_info(4)] [sorted_ids] [expert_ids] [num_tokens_post_pad] [cumsum]
@@ -750,7 +771,7 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     int32_t* cumsum_ptr = nullptr;
 
     // Prepare GEMM2 align buffers (needed if block_m differs)
-    int64_t max_num_tokens_padded_g2 = numel + expert_num_per_node_ * (moe_block_size_gemm2 - 1);
+    int64_t max_num_tokens_padded_g2 = numel + params_.expert_num_per_node * (moe_block_size_gemm2 - 1);
     int64_t max_num_m_blocks_g2 = (max_num_tokens_padded_g2 + moe_block_size_gemm2 - 1) / moe_block_size_gemm2;
 
     void* fill_info_g2 = ws_.align_gemm2.base;
@@ -808,10 +829,17 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
 
     // ----- GEMM 1: hidden_states × w1 → intermediate_cache1 [tokens*topk, inter_size*2] -----
 
-    // W4A16: no activation quantization — use BF16 activations directly
+    // W4A8: Quantize activations to FP8 before GEMM1
     const void* gemm1_a = hidden_states_ptr;
     const void* gemm1_a_scale = nullptr;
     const void* gemm1_global_scale = nullptr;
+
+    if (do_profile) RecordEvent(Evt::Quant1Start, stream);
+    if (QuantizeToFp8<T>(hidden_states_ptr, static_cast<int>(size_k_w1), static_cast<int>(total_tokens), stream,
+                         gemm1_a, gemm1_a_scale)) {
+      gemm1_global_scale = w1_global_scale_;
+    }
+    if (do_profile) RecordEvent(Evt::Quant1End, stream);
 
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(ws_.kernel.locks, 0, ws_.kernel.locks_size, stream);
@@ -825,7 +853,7 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
         gemm1_a,                                            // a
         w1_ptr,                                             // b (FP4 WGMMA layout)
         ws_.cache.gemm1_output,                             // c
-        gemm1_a_scale,                                      // a_scale (nullptr for W4A16)
+        gemm1_a_scale,                                      // a_scale (FP8 per-token scale)
         w1_scales,                                          // b_scale
         gemm1_global_scale,                                 // global_scale
         nullptr,                                            // b_zero_point
@@ -838,40 +866,32 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
         ws_.kernel.locks,                                   // locks
         ws_.kernel.tma_descriptors,                         // workspace
         llm_kernels::nvidia::humming::GemmType::INDEXED, humming_compute_dtype_,
-        static_cast<int64_t>(total_tokens),          // size_m
-        size_n_w1,                                   // size_n
-        size_k_w1,                                   // size_k
-        static_cast<int64_t>(expert_num_per_node_),  // num_experts
-        static_cast<int64_t>(expert_topk_),          // top_k
-        32,                                          // group_size
+        static_cast<int64_t>(total_tokens),                 // size_m
+        size_n_w1,                                          // size_n
+        size_k_w1,                                          // size_k
+        static_cast<int64_t>(params_.expert_num_per_node),  // num_experts
+        static_cast<int64_t>(params_.expert_topk),          // top_k
+        32,                                                 // group_size
         stream,
         sel1.required_block_m,  // >0 falls back to block_m search when no meta
         sel1.meta);             // forced_meta (profiled/selected, or nullptr)
 
     if (do_profile) RecordEvent(Evt::Gemm1End, stream);
 
-    const size_t elements_num = total_tokens * expert_topk_ * expert_inter_size_ * 2;
     if (do_profile) RecordEvent(Evt::SiluStart, stream);
+    // W4A8: fused SiluAndMul + FP8 Quant in one Triton kernel.
+    // Reads [M*topk, inter*2] BF16, writes [M*topk, inter] FP8 + [M*topk] FP32 scale.
+    const int num_silu_tokens = static_cast<int>(total_tokens * params_.expert_topk);
     if (use_expert_parallel) {
-      if (has_swiglu_limit_) {
-        llm_kernels::nvidia::InvokeSiluAndMul<T, true, true>(
-            reinterpret_cast<const T*>(ws_.cache.gemm1_output), reinterpret_cast<T*>(ws_.cache.silu_output),
-            reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, swiglu_limit_, stream);
-      } else {
-        llm_kernels::nvidia::InvokeSiluAndMul<T, true, false>(
-            reinterpret_cast<const T*>(ws_.cache.gemm1_output), reinterpret_cast<T*>(ws_.cache.silu_output),
-            reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, 0.0f, stream);
-      }
+      // EP: use variant with topk_ids skip to avoid processing -1 (non-local) rows.
+      Singleton<TritonWrapper>::GetInstance()->InvokeHummingFusedSiluAndMulFp8QuantEp<T>(
+          reinterpret_cast<const T*>(ws_.cache.gemm1_output), ws_.fp8.scales, ws_.fp8.activation,
+          reinterpret_cast<const int32_t*>(curr_topk_ids), static_cast<int>(params_.expert_inter_size), num_silu_tokens,
+          params_.swiglu_limit, stream);
     } else {
-      if (has_swiglu_limit_) {
-        llm_kernels::nvidia::InvokeSiluAndMul<T, false, true>(
-            reinterpret_cast<const T*>(ws_.cache.gemm1_output), reinterpret_cast<T*>(ws_.cache.silu_output),
-            reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, swiglu_limit_, stream);
-      } else {
-        llm_kernels::nvidia::InvokeSiluAndMul<T, false, false>(
-            reinterpret_cast<const T*>(ws_.cache.gemm1_output), reinterpret_cast<T*>(ws_.cache.silu_output),
-            reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, 0.0f, stream);
-      }
+      Singleton<TritonWrapper>::GetInstance()->InvokeHummingFusedSiluAndMulFp8Quant<T>(
+          reinterpret_cast<const T*>(ws_.cache.gemm1_output), ws_.fp8.scales, ws_.fp8.activation,
+          static_cast<int>(params_.expert_inter_size), num_silu_tokens, params_.swiglu_limit, stream);
     }
     if (do_profile) RecordEvent(Evt::SiluEnd, stream);
 
@@ -883,8 +903,8 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     if (!use_merged_align) {
       if (do_profile) RecordEvent(Evt::Align2Start, stream);
       if (moe_block_size_gemm2 != moe_block_size_i32) {
-        int64_t numel_g2 = static_cast<int64_t>(total_tokens * expert_topk_);
-        int64_t max_num_tokens_padded_g2_def = numel_g2 + expert_num_per_node_ * (moe_block_size_gemm2 - 1);
+        int64_t numel_g2 = static_cast<int64_t>(total_tokens * params_.expert_topk);
+        int64_t max_num_tokens_padded_g2_def = numel_g2 + params_.expert_num_per_node * (moe_block_size_gemm2 - 1);
         int64_t max_num_m_blocks_g2_def =
             (max_num_tokens_padded_g2_def + moe_block_size_gemm2 - 1) / moe_block_size_gemm2;
 
@@ -915,10 +935,12 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
       if (do_profile) RecordEvent(Evt::Align2End, stream);
     }
 
-    // W4A16: no activation quantization — use BF16 SiluAndMul output directly
-    const void* gemm2_a = ws_.cache.silu_output;
-    const void* gemm2_a_scale = nullptr;
-    const void* gemm2_global_scale = nullptr;
+    // W4A8: Quantize activations to FP8 before GEMM2
+    const void* gemm2_a = ws_.fp8.activation;  // fused path: SiluAndMul + FP8 quant already done
+    const void* gemm2_a_scale = ws_.fp8.scales;
+    const void* gemm2_global_scale = w2_global_scale_;
+    if (do_profile) RecordEvent(Evt::Quant2Start, stream);
+    if (do_profile) RecordEvent(Evt::Quant2End, stream);
 
     // Zero locks buffer before kernel launch to prevent deadlock from stale lock values
     cudaMemsetAsync(ws_.kernel.locks, 0, ws_.kernel.locks_size, stream);
@@ -928,17 +950,17 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
       perf_stats_->last_gemm2_meta = sel2.meta;
     }
 
-    // NOTE: For GEMM2, top_k must be 1 (not expert_topk_). The activation tensor
+    // NOTE: For GEMM2, top_k must be 1 (not params_.expert_topk). The activation tensor
     // intermediate_cache2 is already expanded to [tokens*topk, inter_size] — each row is
     // one token-expert pair. With top_k=1, the kernel uses sorted_ids[i] directly as the
-    // row index into intermediate_cache2 (no division by top_k). Using expert_topk_ here
+    // row index into intermediate_cache2 (no division by top_k). Using params_.expert_topk here
     // would cause the kernel to divide sorted_ids by topk, reading only 1/topk of the rows.
 
     llm_kernels::nvidia::humming::humming_moe_gemm(
         gemm2_a,                     // a
         w2_ptr,                      // b (FP4 WGMMA layout)
         ws_.cache.gemm2_output,      // c
-        gemm2_a_scale,               // a_scale (nullptr for W4A16)
+        gemm2_a_scale,               // a_scale (FP8 per-token scale)
         w2_scales,                   // b_scale
         gemm2_global_scale,          // global_scale
         nullptr,                     // b_zero_point
@@ -951,12 +973,12 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
         ws_.kernel.locks,            // locks
         ws_.kernel.tma_descriptors,  // workspace
         llm_kernels::nvidia::humming::GemmType::INDEXED, humming_compute_dtype_,
-        static_cast<int64_t>(total_tokens * expert_topk_),  // size_m (already expanded)
-        size_n_w2,                                          // size_n
-        size_k_w2,                                          // size_k
-        static_cast<int64_t>(expert_num_per_node_),         // num_experts
-        1,                                                  // top_k = 1 (data already expanded)
-        32,                                                 // group_size
+        static_cast<int64_t>(total_tokens * params_.expert_topk),  // size_m (already expanded)
+        size_n_w2,                                                 // size_n
+        size_k_w2,                                                 // size_k
+        static_cast<int64_t>(params_.expert_num_per_node),         // num_experts
+        1,                                                         // top_k = 1 (data already expanded)
+        32,                                                        // group_size
         stream,
         sel2.required_block_m,  // >0 falls back to block_m search when no meta
         sel2.meta);             // forced_meta (profiled/selected, or nullptr)
@@ -968,11 +990,11 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     if (use_expert_parallel) {
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, true>(
           ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
-          static_cast<int>(total_tokens), static_cast<int>(expert_topk_), static_cast<int>(hidden_size), stream);
+          static_cast<int>(total_tokens), static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
     } else {
       llm_kernels::nvidia::InvokeMoeFusedMulSum<T, false>(
           ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
-          static_cast<int>(total_tokens), static_cast<int>(expert_topk_), static_cast<int>(hidden_size), stream);
+          static_cast<int>(total_tokens), static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
     }
     if (do_profile) RecordEvent(Evt::MulSumEnd, stream);
 
@@ -984,7 +1006,8 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
       perf_stats_->gating_time_ms += ElapsedMs(Evt::GateStart, Evt::GateEnd);
       perf_stats_->align_time_ms +=
           ElapsedMs(Evt::Align1Start, Evt::Align1End) + ElapsedMs(Evt::Align2Start, Evt::Align2End);
-      // W4A16: quant is a no-op, skip quant_time_ms
+      perf_stats_->quant_time_ms +=
+          ElapsedMs(Evt::Quant1Start, Evt::Quant1End) + ElapsedMs(Evt::Quant2Start, Evt::Quant2End);
       perf_stats_->gemm1_time_ms += ElapsedMs(Evt::Gemm1Start, Evt::Gemm1End);
       perf_stats_->silu_time_ms += ElapsedMs(Evt::SiluStart, Evt::SiluEnd);
       perf_stats_->gemm2_time_ms += ElapsedMs(Evt::Gemm2Start, Evt::Gemm2End);
@@ -997,7 +1020,7 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     const size_t dispatch_num_tokens = workspace->shape[0];
     if (dispatch_num_tokens > 0) {
       expert_map_->InvokeExpertMapInverseInplace(static_cast<int32_t*>(ws_.gating.topk_ids),
-                                                 dispatch_num_tokens * expert_topk_,
+                                                 dispatch_num_tokens * params_.expert_topk,
                                                  context_->device->GetPrimaryComputeStream().Get());
       ProcessTokens(workspace->GetPtr<void>(), workspace->GetPtr<void>(), dispatch_num_tokens);
     }
@@ -1007,7 +1030,7 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
     // LCOV_EXCL_STOP
   } else if (global_expert_para_size_ > 1) {
     // EP without deepep
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(ws_.gating.topk_ids), num_tokens * expert_topk_,
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(ws_.gating.topk_ids), num_tokens * params_.expert_topk,
                                         context_->device->GetPrimaryComputeStream().Get());
     ProcessTokens(hidden_states->GetPtr<void>(), output->GetPtr<void>(), num_tokens);
   } else {
@@ -1021,9 +1044,9 @@ Status HummingFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const T
 }
 
 template <typename T>
-Status HummingFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
-                                                           const Tensor* eplb_map, Tensor* workspace,
-                                                           const Tensor* e_score_bias, const Tensor* input_ids) {
+Status HummingFusedWfp4Afp8MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_states, const Tensor* gating_output,
+                                                             const Tensor* eplb_map, Tensor* workspace,
+                                                             const Tensor* e_score_bias, const Tensor* input_ids) {
   const size_t num_tokens = hidden_states->shape[0];
 
   // aux1: input_ids (hash) or correction_bias; aux2: tid2eid (hash only).
@@ -1031,21 +1054,21 @@ Status HummingFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_
   const Tensor* aux2_ptr = nullptr;
   if (use_hash_) {
     KLLM_CHECK_WITH_INFO(input_ids != nullptr,
-                         "HummingFusedFp4A16MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
+                         "HummingFusedWfp4Afp8MoeLayer: hash path requires input_ids and e_score_bias (tid2eid)");
     aux1_ptr = input_ids;     // input_ids
     aux2_ptr = e_score_bias;  // tid2eid
-  } else if (use_e_score_correction_bias_) {
+  } else if (params_.use_e_score_correction_bias) {
     aux1_ptr = e_score_bias;  // correction_bias
   }
 
-  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_weights_tensor(gating_output->location, TYPE_FP32, {num_tokens, static_cast<size_t>(params_.expert_topk)},
                              ws_.gating.topk_weights);
-  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(expert_topk_)},
+  Tensor topk_ids_tensor(gating_output->location, TYPE_INT32, {num_tokens, static_cast<size_t>(params_.expert_topk)},
                          ws_.gating.topk_ids);
   Status status =
       topk_softplus_sqrt_layer_->Forward(gating_output, &topk_weights_tensor, &topk_ids_tensor, aux1_ptr, aux2_ptr);
   if (!status.OK()) {
-    KLLM_LOG_ERROR << "HummingFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
+    KLLM_LOG_ERROR << "HummingFusedWfp4Afp8MoeLayer::ExecuteTopkSoftplusSqrt ERROR: forward failed";
     return status;
   }
 
@@ -1053,11 +1076,11 @@ Status HummingFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_
     DumpEplbData(topk_ids_tensor);
   }
 
-  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(layer_idx_)) {
+  if (enable_load_eplb_config_ && eplb_map->shape[0] > static_cast<size_t>(params_.layer_idx)) {
     size_t num_experts = eplb_map->shape[1];
     void* layer_expert_ptr =
-        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + layer_idx_ * num_experts * sizeof(int);
-    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(ws_.gating.topk_ids), num_tokens * expert_topk_,
+        reinterpret_cast<uint8_t*>(eplb_map->GetPtr<void>()) + params_.layer_idx * num_experts * sizeof(int);
+    expert_map_->InvokeExpertMapInplace(static_cast<int32_t*>(ws_.gating.topk_ids), num_tokens * params_.expert_topk,
                                         reinterpret_cast<int32_t*>(layer_expert_ptr),
                                         context_->device->GetPrimaryComputeStream().Get());
   }
@@ -1076,27 +1099,27 @@ Status HummingFusedFp4A16MoeLayer::ExecuteTopkSoftplusSqrt(const Tensor* hidden_
   return Status();
 }
 
-Status HummingFusedFp4A16MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
-                                            std::vector<Tensor>& output_tensors) {
+Status HummingFusedWfp4Afp8MoeLayer::Dispatch(const std::vector<Tensor>& input_tensors,
+                                              std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Dispatch(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status HummingFusedFp4A16MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
-                                           std::vector<Tensor>& output_tensors) {
+Status HummingFusedWfp4Afp8MoeLayer::Combine(const std::vector<Tensor>& input_tensors,
+                                             std::vector<Tensor>& output_tensors) {
   return expert_parallel_manager_->Combine(input_tensors, output_tensors, context_->device->GetPrimaryComputeStream());
 }
 
-Status HummingFusedFp4A16MoeLayer::DumpEplbData(Tensor& topk_ids) {
+Status HummingFusedWfp4Afp8MoeLayer::DumpEplbData(Tensor& topk_ids) {
   topk_ids.SaveToNpyFile(
-      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, layer_idx_, eplb_dump_step_, rank_));
+      fmt::format("{}/layer_{}/topk_ids_{}_{}.npy", eplb_dump_path_, params_.layer_idx, eplb_dump_step_, rank_));
   eplb_dump_step_ += 1;
   return Status();
 }
 
-Status HummingFusedFp4A16MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
-                                           const Tensor* w2, const Tensor* eplb_map, Tensor* output, Tensor* workspace,
-                                           const Tensor* e_score_bias, const Tensor* input_ids,
-                                           const LayerExecContext& exec_ctx) {
+Status HummingFusedWfp4Afp8MoeLayer::Forward(const Tensor* hidden_states, const Tensor* gating_output, const Tensor* w1,
+                                             const Tensor* w2, const Tensor* eplb_map, Tensor* output,
+                                             Tensor* workspace, const Tensor* e_score_bias, const Tensor* input_ids,
+                                             const LayerExecContext& exec_ctx) {
   DISPATCH_BY_3_DTYPE(inter_data_type_, ForwardT, hidden_states, gating_output, w1, w2, eplb_map, output, workspace,
                       e_score_bias, input_ids);
 }

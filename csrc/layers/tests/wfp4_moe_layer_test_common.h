@@ -9,9 +9,10 @@
 // and persistent-input setup.
 //
 // Expected to be included after the layer/kernel/torch headers from
-// fp4_moe_layer_test.cpp's ENABLE_CUDA block.
+// wfp4_moe_layer_test.cpp's ENABLE_CUDA block.
 
-#include "fp4_moe_layer_test_config.h"
+#include "layers/base_moe_layer.h"
+#include "wfp4_moe_layer_test_config.h"
 
 namespace ksana_llm {
 
@@ -358,41 +359,41 @@ void DeepCopyTensorInto(const Tensor& src, Tensor& dst, cudaStream_t stream) {
 }
 
 // ===========================================================================
-// Build 26-parameter Init list
+// Build MoeLayerParameters Init struct
 // ===========================================================================
 std::vector<std::any> BuildMoeParams(const Fp4MoeTestConfig& cfg, size_t max_token_num) {
   size_t inter_per_rank = ComputeInterPerRank(cfg);
   size_t experts_per_rank = ComputeExpertsPerRank(cfg);
   size_t moe_tp = ComputeMoeTp(cfg);
 
-  std::vector<std::any> params;
-  params.push_back(MoeScaleNormMode::NO_NORM);        // 0
-  params.push_back(max_token_num);                    // 1
-  params.push_back(0);                                // 2: layer_idx
-  params.push_back(experts_per_rank);                 // 3
-  params.push_back(cfg.hidden_size());                // 4: expert_hidden_size
-  params.push_back(inter_per_rank);                   // 5: expert_inter_size
-  params.push_back(cfg.topk());                       // 6: expert_topk
-  params.push_back(moe_tp);                           // 7: tp_size
-  params.push_back(true);                             // 8: use_vllm_moe
-  params.push_back(uint32_t(1));                      // 9
-  params.push_back(uint32_t(1));                      // 10
-  params.push_back(std::string(cfg.scoring_func()));  // 11: scoring_func ("sqrtsoftplus" or "sigmoid")
-  params.push_back(std::string("noaux_tc"));           // 12: topk_method
-  params.push_back(true);                             // 13: norm_topk_prob
-  params.push_back(cfg.routed_scaling_factor());       // 14: routed_scaling_factor
-  params.push_back(true);                             // 15: use_e_score_correction_bias
-  params.push_back(false);                            // 16
-  params.push_back(DataType::TYPE_INVALID);           // 17
-  params.push_back(DataType::TYPE_FP4_E2M1FN_x2);     // 18: int_weight_dtype
-  params.push_back(128);                              // 19: group_size
-  params.push_back(false);                            // 20: apply_weight
-  params.push_back(cfg.swiglu_limit());               // 21: swiglu_limit
-  params.push_back(uint32_t(0));                      // 22: num_hash_layers
-  params.push_back(uint32_t(0));                      // 23: vocab_size
-  params.push_back(cfg.situ_beta());                  // 24: situ_beta (K3: 4.0, DSv4: 0.0)
-  params.push_back(cfg.situ_linear_beta());           // 25: situ_linear_beta (K3: 25.0, DSv4: 0.0)
-  return params;
+  MoeLayerParameters p;
+  p.moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;
+  p.max_token_num = max_token_num;
+  p.layer_idx = 0;
+  p.expert_num_per_node = experts_per_rank;
+  p.expert_hidden_size = cfg.hidden_size();
+  p.expert_inter_size = inter_per_rank;
+  p.expert_topk = cfg.topk();
+  p.tp_size = moe_tp;
+  p.use_vllm_moe = true;
+  p.num_expert_group = 1;
+  p.expert_groups_topk = 1;
+  p.scoring_func = std::string(cfg.scoring_func());
+  p.topk_method = std::string("noaux_tc");
+  p.norm_topk_prob = true;
+  p.routed_scaling_factor = cfg.routed_scaling_factor();
+  p.use_e_score_correction_bias = true;
+  p.enable_full_shared_expert = false;
+  p.fp8_weight_dtype = DataType::TYPE_INVALID;
+  p.int_weight_dtype = DataType::TYPE_FP4_E2M1FN_x2;
+  p.group_size = 128;
+  p.apply_weight = false;
+  p.swiglu_limit = cfg.swiglu_limit();
+  p.num_hash_layers = 0;
+  p.vocab_size = 0;
+  p.situ_beta = cfg.situ_beta();
+  p.situ_linear_beta = cfg.situ_linear_beta();
+  return {p};
 }
 
 // ===========================================================================
@@ -417,13 +418,13 @@ std::unique_ptr<BaseLayer> CreateLayer(Fp4Backend backend, const std::vector<std
   std::unique_ptr<BaseLayer> layer;
   switch (backend) {
     case Fp4Backend::kMarlin:
-      layer = std::make_unique<MarlinFusedFp4A16MoeLayer>();
+      layer = std::make_unique<MarlinFusedWfp4A16MoeLayer>();
       break;
     case Fp4Backend::kHummingW4A16:
-      layer = std::make_unique<HummingFusedFp4A16MoeLayer>();
+      layer = std::make_unique<HummingFusedWfp4A16MoeLayer>();
       break;
     case Fp4Backend::kHummingW4A8:
-      layer = std::make_unique<HummingFusedFp4A8MoeLayer>();
+      layer = std::make_unique<HummingFusedWfp4Afp8MoeLayer>();
       break;
     case Fp4Backend::kTriton:
       break;  // unused

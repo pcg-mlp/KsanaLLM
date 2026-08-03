@@ -16,7 +16,7 @@
 namespace ksana_llm {
 
 #ifdef ENABLE_CUDA
-class CutlassMoeLayer : public BaseMoeLayer {
+class CutlassGroupWint4Afp8MoeLayer : public BaseMoeLayer {
  public:
   virtual Status Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                       std::shared_ptr<Context> context, int rank) override;
@@ -60,26 +60,7 @@ class CutlassMoeLayer : public BaseMoeLayer {
  protected:
   bool set_workspace_buffer_info_ = true;
 
-  MoeScaleNormMode moe_scale_norm_mode_;
   size_t max_ws_bytes_;
-  size_t max_token_num_;
-  size_t expert_num_per_node_;
-  size_t expert_hidden_size_;
-  size_t expert_inter_size_;
-  size_t expert_topk_;
-  int tp_size_;
-  int layer_idx_;
-  bool use_vllm_moe_ = false;
-  uint32_t num_expert_group_ = 1;
-  uint32_t expert_groups_topk_ = 1;
-  std::string scoring_func_ = "softmax";
-  std::string topk_method_ = "greedy";
-  bool norm_topk_prob_ = false;
-  float routed_scaling_factor_ = 1.0f;
-  bool use_e_score_correction_bias_ = false;
-  bool enable_full_shared_expert_ = false;
-  int group_size_;
-  bool apply_weight_ = false;
 
   void* topk_weights_ptr_;
   size_t topk_weights_ptr_size;
@@ -123,8 +104,6 @@ class CutlassMoeLayer : public BaseMoeLayer {
 
   std::shared_ptr<ExpertParallelManager> expert_parallel_manager_;
 
-  // Swiglu-limit contract fields (strict isolation — own members, not from MoeLayer).
-  float swiglu_limit_ = 0.0f;
   std::vector<float> swiglu_limit_host_;
   size_t swiglu_limit_ptr_size_ = 0;
   void* swiglu_limit_ptr_ = nullptr;

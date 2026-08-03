@@ -12,17 +12,17 @@ class MoeLayerWorkspaceTest : public testing::Test {
   void SetupLayerMembers(MoeLayer& layer, bool low_latency_mode, DataType compute_dtype) {
     // inter_data_type_ 用于 DISPATCH_BY_3_DTYPE 选择模板参数 T，始终用 BF16
     layer.inter_data_type_ = DataType::TYPE_BF16;
-    layer.max_token_num_ = kMaxTokenNum;
-    layer.expert_topk_ = kExpertTopk;
-    layer.expert_num_per_node_ = kExpertNumPerNode;
-    layer.expert_hidden_size_ = kExpertHiddenSize;
-    layer.expert_inter_size_ = kExpertInterSize;
-    layer.use_vllm_moe_ = true;
+    layer.params_.max_token_num = kMaxTokenNum;
+    layer.params_.expert_topk = kExpertTopk;
+    layer.params_.expert_num_per_node = kExpertNumPerNode;
+    layer.params_.expert_hidden_size = kExpertHiddenSize;
+    layer.params_.expert_inter_size = kExpertInterSize;
+    layer.params_.use_vllm_moe = true;
     layer.low_latency_mode_ = low_latency_mode;
     layer.using_deepep_ = low_latency_mode;
     layer.low_latency_max_tokens_ = low_latency_mode ? kLowLatencyMaxTokens : 0;
     layer.rank_ = 0;
-    layer.tp_size_ = 1;
+    layer.params_.tp_size = 1;
     layer.use_lora_ = false;
     layer.max_ws_bytes_ = 0;
     layer.compute_dtype_ = compute_dtype;

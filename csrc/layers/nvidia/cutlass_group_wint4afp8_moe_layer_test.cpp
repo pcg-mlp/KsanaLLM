@@ -4,13 +4,13 @@
 
 #include <cuda_runtime.h>
 
-#include "layers/cutlass_moe_layer.h"
+#include "layers/cutlass_group_wint4afp8_moe_layer.h"
 #include "test.h"
 #include "utils/memory_utils.h"
 
 namespace ksana_llm {
 
-class CutlassMoeLayerWorkspaceTest : public testing::Test {
+class CutlassGroupWint4Afp8MoeLayerWorkspaceTest : public testing::Test {
  protected:
   void SetUp() override {
     cudaDeviceProp prop;
@@ -18,12 +18,12 @@ class CutlassMoeLayerWorkspaceTest : public testing::Test {
     sm_ = prop.major * 10 + prop.minor;
   }
 
-  void SetupLayerMembers(CutlassMoeLayer& layer, bool low_latency_mode) {
-    layer.max_token_num_ = kMaxTokenNum;
-    layer.expert_topk_ = kExpertTopk;
-    layer.expert_num_per_node_ = kExpertNumPerNode;
-    layer.expert_hidden_size_ = kExpertHiddenSize;
-    layer.expert_inter_size_ = kExpertInterSize;
+  void SetupLayerMembers(CutlassGroupWint4Afp8MoeLayer& layer, bool low_latency_mode) {
+    layer.params_.max_token_num = kMaxTokenNum;
+    layer.params_.expert_topk = kExpertTopk;
+    layer.params_.expert_num_per_node = kExpertNumPerNode;
+    layer.params_.expert_hidden_size = kExpertHiddenSize;
+    layer.params_.expert_inter_size = kExpertInterSize;
     layer.use_low_latency_mode_ = low_latency_mode;
     layer.rank_ = 0;
 
@@ -49,10 +49,10 @@ class CutlassMoeLayerWorkspaceTest : public testing::Test {
   static constexpr size_t kDeepEpMaxNumTokens = 256;
 };
 
-TEST_F(CutlassMoeLayerWorkspaceTest, NormalModeWorkspaceSize) {
+TEST_F(CutlassGroupWint4Afp8MoeLayerWorkspaceTest, NormalModeWorkspaceSize) {
   if (sm_ < 90) GTEST_SKIP() << "Requires SM90+";
 
-  CutlassMoeLayer layer;
+  CutlassGroupWint4Afp8MoeLayer layer;
   SetupLayerMembers(layer, /*low_latency_mode=*/false);
 
   size_t ws = layer.GetWorkspaceSize();
@@ -67,10 +67,10 @@ TEST_F(CutlassMoeLayerWorkspaceTest, NormalModeWorkspaceSize) {
   EXPECT_EQ(layer.recv_expert_count_size_, size_t(0));
 }
 
-TEST_F(CutlassMoeLayerWorkspaceTest, LowLatencyModeWorkspaceSize) {
+TEST_F(CutlassGroupWint4Afp8MoeLayerWorkspaceTest, LowLatencyModeWorkspaceSize) {
   if (sm_ < 90) GTEST_SKIP() << "Requires SM90+";
 
-  CutlassMoeLayer layer;
+  CutlassGroupWint4Afp8MoeLayer layer;
   SetupLayerMembers(layer, /*low_latency_mode=*/true);
 
   size_t ws = layer.GetWorkspaceSize();

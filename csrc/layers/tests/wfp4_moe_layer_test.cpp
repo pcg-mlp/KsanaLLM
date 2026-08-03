@@ -23,19 +23,19 @@
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "device/nvidia/cuda_utils.h"
 #  include "layers/base_moe_layer.h"
-#  include "layers/humming_fused_fp4_a16_moe_layer.h"
-#  include "layers/humming_fused_fp4_a8_moe_layer.h"
-#  include "layers/marlin_fused_fp4_a16_moe_layer.h"
+#  include "layers/humming_fused_wfp4a16_moe_layer.h"
+#  include "layers/humming_fused_wfp4afp8_moe_layer.h"
+#  include "layers/marlin_fused_wfp4a16_moe_layer.h"
 #  include "layers/moe_layer.h"
 #  include "layers/moe_layer_factory.h"
 #  include "layers/moe_perf_stats.h"
 #  include "utils/tensor.h"
 
-#  include "fp4_moe_layer_test_common.h"
-#  include "fp4_moe_layer_test_config.h"
-#  include "fp4_moe_layer_test_perf.h"
-#  include "fp4_moe_layer_test_print.h"
-#  include "fp4_moe_layer_test_ref.h"
+#  include "wfp4_moe_layer_test_common.h"
+#  include "wfp4_moe_layer_test_config.h"
+#  include "wfp4_moe_layer_test_perf.h"
+#  include "wfp4_moe_layer_test_print.h"
+#  include "wfp4_moe_layer_test_ref.h"
 
 namespace ksana_llm {
 
@@ -170,18 +170,18 @@ void RunBenchmarkForConfig(const Fp4MoeTestConfig& cfg, std::shared_ptr<Context>
     cudaStreamSynchronize(stream);
 
     if (backend == Fp4Backend::kMarlin) {
-      auto [results, outputs] = RunBenchmark(static_cast<MarlinFusedFp4A16MoeLayer*>(layer.get()), inputs, cfg, stream,
+      auto [results, outputs] = RunBenchmark(static_cast<MarlinFusedWfp4A16MoeLayer*>(layer.get()), inputs, cfg, stream,
                                              hs_ptr, gate_ptr, routing_stats, backend, e_score_bias);
       all_results.push_back(std::move(results));
       all_outputs.push_back(std::move(outputs));
     } else if (backend == Fp4Backend::kHummingW4A16) {
-      auto [results, outputs] = RunBenchmark(static_cast<HummingFusedFp4A16MoeLayer*>(layer.get()), inputs, cfg, stream,
-                                             hs_ptr, gate_ptr, routing_stats, backend, e_score_bias);
+      auto [results, outputs] = RunBenchmark(static_cast<HummingFusedWfp4A16MoeLayer*>(layer.get()), inputs, cfg,
+                                             stream, hs_ptr, gate_ptr, routing_stats, backend, e_score_bias);
       all_results.push_back(std::move(results));
       all_outputs.push_back(std::move(outputs));
     } else if (backend == Fp4Backend::kHummingW4A8) {
-      auto [results, outputs] = RunBenchmark(static_cast<HummingFusedFp4A8MoeLayer*>(layer.get()), inputs, cfg, stream,
-                                             hs_ptr, gate_ptr, routing_stats, backend, e_score_bias);
+      auto [results, outputs] = RunBenchmark(static_cast<HummingFusedWfp4Afp8MoeLayer*>(layer.get()), inputs, cfg,
+                                             stream, hs_ptr, gate_ptr, routing_stats, backend, e_score_bias);
       all_results.push_back(std::move(results));
       all_outputs.push_back(std::move(outputs));
     }

@@ -5,14 +5,14 @@
 
 #include "layers/batched_matmul_layer.h"
 #include "layers/blockwise_matmul_layer.h"
+#include "layers/cutlass_group_wint4afp8_moe_layer.h"
 #include "layers/cutlass_matmul_layer.h"
-#include "layers/cutlass_moe_layer.h"
 #include "layers/fp8_matmul_layer.h"
 #include "layers/fp8_moe_layer.h"
-#include "layers/humming_fused_fp4_a16_moe_layer.h"
-#include "layers/humming_fused_fp4_a8_moe_layer.h"
+#include "layers/humming_fused_wfp4a16_moe_layer.h"
+#include "layers/humming_fused_wfp4afp8_moe_layer.h"
 #include "layers/machete_matmul_layer.h"
-#include "layers/marlin_fused_fp4_a16_moe_layer.h"
+#include "layers/marlin_fused_wfp4a16_moe_layer.h"
 #include "layers/marlin_matmul_layer.h"
 #include "layers/marlin_moe_layer.h"
 #include "layers/matmul_layer.h"
@@ -65,9 +65,9 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
 
   // for deepseek w4afp8 (and compressed-tensors which uses TYPE_INT8 to route here)
   builder_map_[{TYPE_INT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
+      &MoeLayerFactory::BuildLayer<CutlassGroupWint4Afp8MoeLayer>;
   builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, CUTLASS_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<CutlassMoeLayer>;
+      &MoeLayerFactory::BuildLayer<CutlassGroupWint4Afp8MoeLayer>;
 
   // for deepseek w4afp8 triton
   // NOTE(jinxcwu) fast than CUTLASS_MOE_BACKEND when prefill
@@ -84,21 +84,21 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
 
   // for deepseek v4 FP4 MoE experts — Marlin W4A16 path
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<MarlinFusedFp4A16MoeLayer>;
+      &MoeLayerFactory::BuildLayer<MarlinFusedWfp4A16MoeLayer>;
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, MARLIN_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<MarlinFusedFp4A16MoeLayer>;
+      &MoeLayerFactory::BuildLayer<MarlinFusedWfp4A16MoeLayer>;
 
   // for deepseek v4 FP4 MoE experts — Humming W4A16 path
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_W4A16_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFusedFp4A16MoeLayer>;
+      &MoeLayerFactory::BuildLayer<HummingFusedWfp4A16MoeLayer>;
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_W4A16_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFusedFp4A16MoeLayer>;
+      &MoeLayerFactory::BuildLayer<HummingFusedWfp4A16MoeLayer>;
 
   // for deepseek v4 FP4 MoE experts — Humming W4A8 path
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, HUMMING_W4A8_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFusedFp4A8MoeLayer>;
+      &MoeLayerFactory::BuildLayer<HummingFusedWfp4Afp8MoeLayer>;
   builder_map_[{TYPE_FP4_E2M1FN_x2, TYPE_BF16, TYPE_BF16, MOE_QUANT_GPTQ, HUMMING_W4A8_MOE_BACKEND}] =
-      &MoeLayerFactory::BuildLayer<HummingFusedFp4A8MoeLayer>;
+      &MoeLayerFactory::BuildLayer<HummingFusedWfp4Afp8MoeLayer>;
 #  endif
 #endif
 }
@@ -189,44 +189,42 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   KLLM_CHECK_WITH_INFO(down_weight_type == weight_type,
                        fmt::format("down_experts dtype {} != up_gate_experts dtype {}", down_weight_type, weight_type));
 
-  std::vector<std::any> moe_matmul_param = init_params;               // moe_scale_norm_mode
-  moe_matmul_param.push_back(runtime_config_.max_step_token_num);     // max_token_num
-  moe_matmul_param.push_back(layer_idx);                              // layer_idx
-  moe_matmul_param.push_back(expert_num_per_node);                    // expert_num_per_node
-  moe_matmul_param.push_back(moe_hidden_size);                        // hidden_size (latent or model)
-  moe_matmul_param.push_back(moe_inter_size_per_rank);                // Inter_size
-  moe_matmul_param.push_back(model_config_.moe_config.experts_topk);  // experts topk
-  moe_matmul_param.push_back(runtime_config_.parallel_basic_config.tensor_parallel_size);  // TP_size
-  moe_matmul_param.push_back(use_vllm_moe);                                                // use_vllm_moe
-  moe_matmul_param.push_back(model_config_.moe_config.num_expert_group);                   // num_expert_group
-  moe_matmul_param.push_back(model_config_.moe_config.expert_groups_topk);                 // expert_groups_topk
-  moe_matmul_param.push_back(model_config_.moe_config.scoring_func);                       // scoring_func
-  moe_matmul_param.push_back(model_config_.moe_config.topk_method);                        // topk_method
-  moe_matmul_param.push_back(model_config_.moe_config.norm_topk_prob);                     // norm_topk_prob
-  moe_matmul_param.push_back(model_config_.moe_config.routed_scaling_factor);              // routed_scaling_factor
-  moe_matmul_param.push_back(model_config_.moe_config.use_e_score_correction_bias);  // use_e_score_correction_bias
-  moe_matmul_param.push_back(runtime_config_.enable_full_shared_expert);             // dp = ep
-  // Set fp8_weight_dtype: distinguish between blockwise FP8 and per-tensor FP8
-  // When FP4 is enabled, experts use FP4 weights not FP8, so fp8_weight_dtype must be INVALID
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = std::any_cast<MoeScaleNormMode>(init_params[0]);
+  moe_params.max_token_num = runtime_config_.max_step_token_num;
+  moe_params.layer_idx = layer_idx;
+  moe_params.expert_num_per_node = expert_num_per_node;
+  moe_params.expert_hidden_size = moe_hidden_size;
+  moe_params.expert_inter_size = moe_inter_size_per_rank;
+  moe_params.expert_topk = model_config_.moe_config.experts_topk;
+  moe_params.tp_size = runtime_config_.parallel_basic_config.tensor_parallel_size;
+  moe_params.use_vllm_moe = use_vllm_moe;
+  moe_params.num_expert_group = model_config_.moe_config.num_expert_group;
+  moe_params.expert_groups_topk = model_config_.moe_config.expert_groups_topk;
+  moe_params.scoring_func = model_config_.moe_config.scoring_func;
+  moe_params.topk_method = model_config_.moe_config.topk_method;
+  moe_params.norm_topk_prob = model_config_.moe_config.norm_topk_prob;
+  moe_params.routed_scaling_factor = model_config_.moe_config.routed_scaling_factor;
+  moe_params.use_e_score_correction_bias = model_config_.moe_config.use_e_score_correction_bias;
+  moe_params.enable_full_shared_expert = runtime_config_.enable_full_shared_expert;
   if (!enable_moe_int4 && !enable_moe_fp4 && model_config_.quant_config.is_fp8_blockwise) {
-    moe_matmul_param.push_back(DataType::TYPE_BLOCK_FP8_E4M3);  // fp8_weight_dtype: blockwise FP8
+    moe_params.fp8_weight_dtype = DataType::TYPE_BLOCK_FP8_E4M3;
   } else if (!enable_moe_int4 && !enable_moe_fp4 && weight_type == TYPE_FP8_E4M3) {
-    moe_matmul_param.push_back(DataType::TYPE_FP8_E4M3);  // fp8_weight_dtype: per-tensor FP8
+    moe_params.fp8_weight_dtype = DataType::TYPE_FP8_E4M3;
   } else {
-    moe_matmul_param.push_back(DataType::TYPE_INVALID);  // fp8_weight_dtype: not FP8
+    moe_params.fp8_weight_dtype = DataType::TYPE_INVALID;
   }
   if (enable_moe_fp4) {
-    moe_matmul_param.push_back(DataType::TYPE_FP4_E2M1FN_x2);  // int_weight_dtype: FP4
-    moe_matmul_param.push_back(static_cast<int>(128));         // group_size: 128 for merged FP4 scales
+    moe_params.int_weight_dtype = DataType::TYPE_FP4_E2M1FN_x2;
+    moe_params.group_size = 128;
   } else if (enable_moe_int4) {
     if (weight_type == TYPE_UINT8) {
-      moe_matmul_param.push_back(TYPE_UINT4x2);  // int_weight_dtype
+      moe_params.int_weight_dtype = TYPE_UINT4x2;
     } else if (weight_type == TYPE_INT8) {
-      moe_matmul_param.push_back(TYPE_INT4x2);  // int_weight_dtype
+      moe_params.int_weight_dtype = TYPE_INT4x2;
     } else {
-      moe_matmul_param.push_back(TYPE_I4_GROUP);  // int_weight_dtype
+      moe_params.int_weight_dtype = TYPE_I4_GROUP;
     }
-    // For mixed quantization (FP8 default + W4A8_AWQ/GPTQ for experts), get group_size from sub_quant_config
     size_t group_size = model_config_.quant_config.group_size;
     for (const auto& sub_config : model_config_.sub_quant_configs) {
       if (sub_config.method == QUANT_W4A8_AWQ || sub_config.method == QUANT_GPTQ) {
@@ -234,17 +232,19 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
         break;
       }
     }
-    moe_matmul_param.push_back(static_cast<int>(group_size));  // group_size
+    moe_params.group_size = static_cast<int>(group_size);
   } else {
-    moe_matmul_param.push_back(DataType::TYPE_INVALID);  // int_weight_dtype
-    moe_matmul_param.push_back(0);                       // group_size
+    moe_params.int_weight_dtype = DataType::TYPE_INVALID;
+    moe_params.group_size = 0;
   }
-  moe_matmul_param.push_back(model_config_.moe_config.apply_weight);
-  moe_matmul_param.push_back(model_config_.swiglu_limit);  // swiglu_limit (>0 means enabled)
-  moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.num_hash_layers));
-  moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.vocab_size));
-  moe_matmul_param.push_back(model_config_.situ_beta);         // situ_beta
-  moe_matmul_param.push_back(model_config_.situ_linear_beta);  // situ_linear_beta
+  moe_params.apply_weight = model_config_.moe_config.apply_weight;
+  moe_params.swiglu_limit = model_config_.swiglu_limit;
+  moe_params.num_hash_layers = static_cast<uint32_t>(model_config_.num_hash_layers);
+  moe_params.vocab_size = static_cast<uint32_t>(model_config_.vocab_size);
+  moe_params.situ_beta = model_config_.situ_beta;
+  moe_params.situ_linear_beta = model_config_.situ_linear_beta;
+
+  std::vector<std::any> moe_matmul_param = {moe_params};
 
   // FP4 MoE layer creation
   if (enable_moe_fp4) {

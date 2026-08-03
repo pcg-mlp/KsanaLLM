@@ -13,7 +13,7 @@ namespace ksana_llm {
 // W4A16 and W4A8 kernels compile into the SAME compiler table (the ops dispatch
 // layer stores one global compiler via SetJitCompiler); separate instances would
 // clobber each other.  This header is precision-agnostic infrastructure — the
-// only shared piece between HummingFusedFp4A16MoeLayer and HummingFusedFp4A8MoeLayer.
+// only shared piece between HummingFusedWfp4A16MoeLayer and HummingFusedWfp4Afp8MoeLayer.
 inline std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler>& GetHummingFp4JitCompiler() {
   static std::shared_ptr<llm_kernels::nvidia::humming::HummingJitCompiler> instance;
   return instance;

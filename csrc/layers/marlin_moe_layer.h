@@ -29,25 +29,7 @@ class MarlinMoeLayer : public BaseMoeLayer {
   size_t GetWorkspaceSizeT();
 
  private:
-  MoeScaleNormMode moe_scale_norm_mode_;
-  size_t max_token_num_;
-  size_t expert_num_;
-  size_t expert_hidden_size_;
-  size_t expert_inter_size_;
-  size_t expert_topk_;
-  int tp_size_;
   bool use_lora_ = false;
-  bool use_vllm_moe_ = false;
-  uint32_t num_expert_group_ = 1;
-  uint32_t expert_groups_topk_ = 1;
-  std::string scoring_func_ = "softmax";
-  std::string topk_method_ = "greedy";
-  bool norm_topk_prob_ = false;
-  float routed_scaling_factor_ = 1.0f;
-  bool use_e_score_correction_bias_ = false;
-  bool enable_full_shared_expert_ = false;
-  size_t group_size_ = 128;
-  bool apply_weight_ = false;
   size_t num_bits_ = 4;
 
   size_t max_ws_bytes_;

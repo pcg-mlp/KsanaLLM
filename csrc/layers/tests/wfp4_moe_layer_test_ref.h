@@ -7,9 +7,9 @@
 // cosine-similarity helper.
 //
 // Expected to be included after the layer/kernel/torch headers from
-// fp4_moe_layer_test.cpp's ENABLE_CUDA block.
+// wfp4_moe_layer_test.cpp's ENABLE_CUDA block.
 
-#include "fp4_moe_layer_test_config.h"
+#include "wfp4_moe_layer_test_config.h"
 
 namespace ksana_llm {
 
@@ -89,8 +89,8 @@ torch::Tensor Fp8QuantDequantGpu(torch::Tensor x) {
 // Accepts pre-dequantized weights to avoid redundant dequant across token sizes.
 // ===========================================================================
 torch::Tensor GpuRefFp4MoeForward(const torch::Tensor& w1_dequant, const torch::Tensor& w2_dequant,
-                                   const Fp4MoeTestConfig& cfg, torch::Tensor hs_gpu, torch::Tensor gate_gpu,
-                                   Fp4Backend backend, torch::Tensor e_score_bias = {}) {
+                                  const Fp4MoeTestConfig& cfg, torch::Tensor hs_gpu, torch::Tensor gate_gpu,
+                                  Fp4Backend backend, torch::Tensor e_score_bias = {}) {
   size_t E = ComputeExpertsPerRank(cfg);
   size_t N = ComputeInterPerRank(cfg);
   size_t K = cfg.hidden_size();
@@ -117,8 +117,8 @@ torch::Tensor GpuRefFp4MoeForward(const torch::Tensor& w1_dequant, const torch::
   auto scores_with_bias = scores + e_score_bias.to(torch::kFloat32).unsqueeze(0);
   auto topk_result = torch::topk(scores_with_bias, static_cast<int64_t>(topk), /*dim=*/-1, /*largest=*/true,
                                  /*sorted=*/true);
-  topk_ids = std::get<1>(topk_result).to(torch::kInt64);  // [M, topk]
-  topk_weights = scores.gather(1, topk_ids);              // unbiased weights
+  topk_ids = std::get<1>(topk_result).to(torch::kInt64);                 // [M, topk]
+  topk_weights = scores.gather(1, topk_ids);                             // unbiased weights
   topk_weights = topk_weights / topk_weights.sum(-1, /*keepdim=*/true);  // renormalize
   topk_weights = topk_weights * cfg.routed_scaling_factor();             // scale
 

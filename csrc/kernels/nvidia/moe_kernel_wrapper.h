@@ -63,7 +63,7 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
 
 // @param score_threshold  专家舍弃阈值，用于控制 topk weight 的专家筛选。
 //                         仅对 DeepSeek 类模型的 grouped topk 生效，
-//                         目前只能在 cutlass_moe_layer 中使用。
+//                         目前只能在 cutlass_group_wint4afp8_moe_layer 中使用。
 template <typename T>
 void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_ids_ptr, int num_rows, int num_experts,
                        int topk, bool renormalize, int num_expert_group, int topk_group, std::string scoring_func,
