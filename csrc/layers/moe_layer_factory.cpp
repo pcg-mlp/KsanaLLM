@@ -111,6 +111,9 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   // moe layer   (weight_names[0]: up_gate_experts, weight_names[1]: down_experts)
   bool use_vllm_moe = model_config_.moe_config.use_vllm_moe;
   size_t hidden_size = static_cast<size_t>(model_config_.hidden_units);
+  size_t moe_hidden_size = model_config_.moe_config.routed_expert_hidden_size > 0
+                               ? model_config_.moe_config.routed_expert_hidden_size
+                               : hidden_size;
   size_t moe_inter_size_per_rank = static_cast<size_t>(
       DivRoundUp(model_config_.moe_config.moe_inter_size, runtime_config_.parallel_basic_config.moe_tensor_para_size));
   size_t expert_num_per_node =
@@ -156,8 +159,8 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
     // Marlin FP4: weights are repacked to Marlin tile format [E, K/16, N*2],
     // so shape-based hidden_size derivation is not applicable.
     // Use model config values directly (already computed above).
-    up_gate_hidden_size = hidden_size;
-    down_hidden_size = hidden_size;
+    up_gate_hidden_size = moe_hidden_size;
+    down_hidden_size = moe_hidden_size;
   } else if (enable_moe_fp4) {
     // FP4: 2 values per byte (same packing ratio as INT4)
     up_gate_hidden_size = base_weight->GetModelWeights(weight_names[0]).shape[2] * 2;
@@ -186,13 +189,13 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   KLLM_CHECK_WITH_INFO(down_weight_type == weight_type,
                        fmt::format("down_experts dtype {} != up_gate_experts dtype {}", down_weight_type, weight_type));
 
-  std::vector<std::any> moe_matmul_param = init_params;                                    // moe_scale_norm_mode
-  moe_matmul_param.push_back(runtime_config_.max_step_token_num);                          // max_token_num
-  moe_matmul_param.push_back(layer_idx);                                                   // layer_idx
-  moe_matmul_param.push_back(expert_num_per_node);                                         // expert_num_per_node
-  moe_matmul_param.push_back(hidden_size);                                                 // hidden_size
-  moe_matmul_param.push_back(moe_inter_size_per_rank);                                     // Inter_size
-  moe_matmul_param.push_back(model_config_.moe_config.experts_topk);                       // experts topk
+  std::vector<std::any> moe_matmul_param = init_params;               // moe_scale_norm_mode
+  moe_matmul_param.push_back(runtime_config_.max_step_token_num);     // max_token_num
+  moe_matmul_param.push_back(layer_idx);                              // layer_idx
+  moe_matmul_param.push_back(expert_num_per_node);                    // expert_num_per_node
+  moe_matmul_param.push_back(moe_hidden_size);                        // hidden_size (latent or model)
+  moe_matmul_param.push_back(moe_inter_size_per_rank);                // Inter_size
+  moe_matmul_param.push_back(model_config_.moe_config.experts_topk);  // experts topk
   moe_matmul_param.push_back(runtime_config_.parallel_basic_config.tensor_parallel_size);  // TP_size
   moe_matmul_param.push_back(use_vllm_moe);                                                // use_vllm_moe
   moe_matmul_param.push_back(model_config_.moe_config.num_expert_group);                   // num_expert_group
@@ -240,7 +243,7 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   moe_matmul_param.push_back(model_config_.swiglu_limit);  // swiglu_limit (>0 means enabled)
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.num_hash_layers));
   moe_matmul_param.push_back(static_cast<uint32_t>(model_config_.vocab_size));
-  moe_matmul_param.push_back(model_config_.situ_beta);        // situ_beta
+  moe_matmul_param.push_back(model_config_.situ_beta);         // situ_beta
   moe_matmul_param.push_back(model_config_.situ_linear_beta);  // situ_linear_beta
 
   // FP4 MoE layer creation

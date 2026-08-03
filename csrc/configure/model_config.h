@@ -232,6 +232,13 @@ struct MoeConfig {
   bool use_e_score_correction_bias = false;
   float routed_scaling_factor = 1.0f;
 
+  // Kimi K3 LatentMoE: routed experts operate in a compressed latent space.
+  // When > 0, the MoE hidden_size is this latent dim (e.g. 3584) instead of
+  // model hidden_units (e.g. 7168). down_proj/up_proj bridge the two spaces.
+  size_t routed_expert_hidden_size = 0;
+  // Whether to apply RMSNorm on the latent space after MoE combine + all-reduce.
+  bool latent_moe_use_norm = false;
+
   // TODO(winminkong): 增加临时算子选择项，后期改为配置项
   bool use_vllm_moe = false;
 

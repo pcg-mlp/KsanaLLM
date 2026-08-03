@@ -8,6 +8,7 @@
 #include "models/base/forwarding_context.h"
 #include "modules/basic/linear.h"
 #include "modules/basic/silu_mul.h"
+#include "modules/basic/situ_mul.h"
 
 namespace ksana_llm {
 
@@ -33,8 +34,7 @@ class SharedExpertLayer {
    * @param model_creation_config The model creation configuration.
    * @param weight_name_format The weight name format string (e.g. ".mlp.shared_expert.{}.weight").
    */
-  SharedExpertLayer(int layer_idx, LayerCreationContext& creation_context,
-                    ModelCreationConfig& model_creation_config,
+  SharedExpertLayer(int layer_idx, LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config,
                     const std::string& weight_name_format);
 
   ~SharedExpertLayer() = default;
@@ -81,6 +81,8 @@ class SharedExpertLayer {
   std::shared_ptr<Linear> up_proj_;
   std::shared_ptr<Linear> down_proj_;
   std::shared_ptr<SiluMul> silu_mul_;
+  std::shared_ptr<SituMul> situ_mul_;
+  bool use_situ_ = false;
 
   // Independent buffers for multi-stream parallel (optional, set via SetParallelBuffers).
   // When non-null, Forward uses these instead of shared hidden_buffer_1.

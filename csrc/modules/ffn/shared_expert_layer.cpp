@@ -55,7 +55,12 @@ SharedExpertLayer::SharedExpertLayer(int layer_idx, LayerCreationContext& creati
                                         linear_compute_backend);
 
   if (!fuse_silu_mul_) {
-    silu_mul_ = std::make_shared<SiluMul>(ctx);
+    if (creation_context.model_config.activation_function == "situ") {
+      situ_mul_ = std::make_shared<SituMul>(ctx);
+      use_situ_ = true;
+    } else {
+      silu_mul_ = std::make_shared<SiluMul>(ctx);
+    }
   }
 }
 
@@ -84,7 +89,11 @@ Status SharedExpertLayer::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
       STATUS_CHECK_RETURN(gate_up_proj_->Forward(hidden_buffer_tensors_0[0], inter_tensors[0], exec_ctx));
       // std::swap(inter_tensors, hidden_buffer_tensors_0);
       if (!fuse_silu_mul_) {
-        STATUS_CHECK_RETURN(silu_mul_->Forward(inter_tensors[0], output_tensors, exec_ctx));
+        if (use_situ_) {
+          STATUS_CHECK_RETURN(situ_mul_->Forward(inter_tensors[0], output_tensors, exec_ctx));
+        } else {
+          STATUS_CHECK_RETURN(silu_mul_->Forward(inter_tensors[0], output_tensors, exec_ctx));
+        }
         // std::swap(hidden_buffer_tensors_0, inter_tensors);
       }
     } else {
@@ -107,7 +116,11 @@ Status SharedExpertLayer::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
       STATUS_CHECK_RETURN(gate_up_proj_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
       std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
       if (!fuse_silu_mul_) {
-        STATUS_CHECK_RETURN(silu_mul_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1));
+        if (use_situ_) {
+          STATUS_CHECK_RETURN(situ_mul_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1));
+        } else {
+          STATUS_CHECK_RETURN(silu_mul_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1));
+        }
         std::swap(hidden_buffer_tensors_0, hidden_buffer_tensors_1);
       }
     } else {

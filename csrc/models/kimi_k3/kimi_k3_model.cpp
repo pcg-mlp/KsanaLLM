@@ -20,6 +20,7 @@ KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreation
           layer_idx %
               static_cast<int>(model_creation_config.attn_config.model_config.attn_res_config.attn_res_block_size) ==
           0),
+      enable_full_shared_expert_(creation_context.runtime_config.enable_full_shared_expert),
       layer_idx_(layer_idx),
       rank_(creation_context.rank),
       mla_buffers_(mla_buffers),
@@ -36,24 +37,37 @@ KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreation
   add_ = std::make_unique<Add>(creation_context);
 
   if (is_moe) {
-    shared_mlp_ = std::make_unique<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config,
-                                                  ".mlp.shared_expert.{}.weight");
-    expert_gate_ = std::make_unique<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
+    expert_gate_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
                                             model_creation_config.attn_config.model_config.quant_config.backend);
+
+    LinearComputeBackend linear_backend = model_creation_config.attn_config.model_config.quant_config.backend;
+    routed_expert_down_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.routed_expert_down_proj.weight",
+                                                        creation_context, linear_backend, /*skip_quant=*/true);
+    routed_expert_up_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.routed_expert_up_proj.weight",
+                                                      creation_context, linear_backend, /*skip_quant=*/true);
+
+    if (model_creation_config.attn_config.model_config.moe_config.latent_moe_use_norm) {
+      routed_expert_norm_ =
+          std::make_shared<Layernorm>(layer_prefix + ".mlp.routed_expert_norm.weight",
+                                      model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+    }
+
     if (model_creation_config.attn_config.model_config.moe_config.use_e_score_correction_bias) {
-      moe_ = std::make_unique<MoE>(
+      moe_ = std::make_shared<MoE>(
           layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight", layer_prefix + ".mlp.experts.down_proj.weight",
           layer_prefix + ".mlp.gate.e_score_correction_bias", creation_context, moe_scale_norm_mode);
     } else {
       moe_ =
-          std::make_unique<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
+          std::make_shared<MoE>(layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight",
                                 layer_prefix + ".mlp.experts.down_proj.weight", creation_context, moe_scale_norm_mode);
     }
+
+    shared_expert_ = std::make_shared<SharedExpertLayer>(layer_idx, creation_context, model_creation_config,
+                                                         ".mlp.shared_expert.{}.weight");
   } else {
     mlp_ = std::make_unique<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   }
 
-  // MLA must be initialized after Linear layers so it can reuse their workspace.
   mla_ = std::make_unique<MultiHeadLatentAttention>(layer_idx, /*is_neox*/ false, creation_context,
                                                     model_creation_config, mla_buffers_);
 
@@ -67,7 +81,6 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
   CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context.GetForwardingBuffers()->shared_buffer);
 
   // ==================== ATTN block start ====================
-  // ATTN residual + fused RMSNorm
   std::vector<Tensor> attn_res_tensors{prefix_buffer[0], residual_buffer[0]};
   if (!is_first_layer) {
     attn_res_tensors.push_back(hidden_buffer_tensors_0[0]);
@@ -78,7 +91,6 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
     ++residual_buffer[0].shape[1];
   }
 
-  // ATTN core
   MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, attn_t);
   mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
   STATUS_CHECK_RETURN(
@@ -87,7 +99,6 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
   // ==================== ATTN block end ======================
 
   // ==================== FFN block start =====================
-  // FFN residual + fused RMSNorm
   std::vector<Tensor> mlp_res_tensors{prefix_buffer[0], residual_buffer[0]};
   if (is_block_write_layer_) {
     MemcpyAsync(prefix_buffer[0].GetPtr<void>(), hidden_buffer_tensors_0[0].GetPtr<void>(),
@@ -98,12 +109,9 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
   }
   STATUS_CHECK_RETURN(mlp_res_->Forward(mlp_res_tensors, hidden_buffer_tensors_0, /*write_block=*/false));
 
-  // FFN core
   MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, ffn_t);
   STATUS_CHECK_RETURN(
       CommonMlp(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
-  STATUS_CHECK_RETURN(
-      tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context));
   MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kFfn, ffn_t);
   // ==================== FFN block end ======================
   return Status();
@@ -112,15 +120,7 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
 Status KimiK3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                      std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                      ForwardingContext& forwarding_context) {
-  const size_t seq_len = hidden_buffer_tensors_0[0].shape[0];
-  const size_t hidden_units = hidden_buffer_tensors_0[0].shape[1];
-
-  PROFILE_EVENT_SCOPE(K3_CommonMlp_seq_len_,
-                      fmt::format("K3_CommonMlp_seq_len_{}_hidden_units_{}", seq_len, hidden_units),
-                      forwarding_context.GetCurrentRank());
-
   if (!is_moe_) {
-    PROFILE_EVENT_SCOPE(CommonMlp, "CommonMlp", forwarding_context.GetCurrentRank());
     mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
     return Status();
   }
@@ -133,22 +133,49 @@ Status KimiK3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_
     STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
   }
 
+  CREATE_BUFFER_SCOPE(latent_buffer, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+  {
+    PROFILE_EVENT_SCOPE(down_proj, "routed_expert_down_proj", forwarding_context.GetCurrentRank());
+    STATUS_CHECK_RETURN(routed_expert_down_proj_->Forward(hidden_buffer_tensors_0[0], latent_buffer[0]));
+  }
+
   {
     PROFILE_EVENT_SCOPE(moe, "MOE", forwarding_context.GetCurrentRank());
     STATUS_CHECK_RETURN(
-        moe_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors));
+        moe_->Forward(latent_buffer[0], gated_buffer_[0], reduce_buffer_tensors[0], moe_buffer_tensors));
+  }
+
+  {
+    PROFILE_EVENT_SCOPE(latent_ar, "AllReduce_latent", forwarding_context.GetCurrentRank());
+    tp_comm_->AllReduce(moe_buffer_tensors, latent_buffer, is_multi_token_forward, forwarding_context);
+  }
+
+  if (routed_expert_norm_) {
+    PROFILE_EVENT_SCOPE(routed_norm, "routed_expert_norm", forwarding_context.GetCurrentRank());
+    STATUS_CHECK_RETURN(routed_expert_norm_->Forward(latent_buffer[0], latent_buffer[0]));
+  }
+
+  {
+    PROFILE_EVENT_SCOPE(up_proj, "routed_expert_up_proj", forwarding_context.GetCurrentRank());
+    STATUS_CHECK_RETURN(routed_expert_up_proj_->Forward(latent_buffer[0], moe_buffer_tensors[0]));
   }
 
   {
     PROFILE_EVENT_SCOPE(CommonShareMlp, "CommonShareMlp", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(shared_mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward,
-                                             forwarding_context));
+    STATUS_CHECK_RETURN(shared_expert_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward,
+                                                forwarding_context));
   }
 
-  {
+  if (forwarding_context.GetModelCommunicator() && !enable_full_shared_expert_) {
+    PROFILE_EVENT_SCOPE(shared_ar, "AllReduce_shared", forwarding_context.GetCurrentRank());
+    STATUS_CHECK_RETURN(tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward,
+                                            forwarding_context));
+    STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
+  } else {
     PROFILE_EVENT_SCOPE(add_layer, "add_layer", forwarding_context.GetCurrentRank());
-    STATUS_CHECK_RETURN(add_->Forward(reduce_buffer_tensors[0], moe_buffer_tensors[0], reduce_buffer_tensors));
+    STATUS_CHECK_RETURN(add_->Forward(hidden_buffer_tensors_0[0], moe_buffer_tensors[0], hidden_buffer_tensors_0));
   }
+
   return Status();
 }
 
@@ -212,8 +239,6 @@ Status KimiK3Model::LayerForward(ForwardingContext& forwarding_context, const Ru
   Stream& stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
 
   if (is_first_pp) {
-    // First PP: incoming residual_buffer holds [num_tokens, H] embeddings. Seed prefix, then
-    // reinterpret residual_buffer as the empty bank [num_tokens, max_blocks, H].
     KLLM_CHECK(residual_buffer[0].shape.size() == 2 && residual_buffer[0].shape[1] == hidden_units);
     const size_t slot_bytes = hidden_units * GetTypeSize(residual_buffer[0].dtype);
     MemcpyAsync(prefix_buffer[0].GetPtr<void>(), residual_buffer[0].GetPtr<void>(), num_tokens * slot_bytes,
@@ -242,7 +267,6 @@ Status KimiK3Model::LayerForward(ForwardingContext& forwarding_context, const Ru
     MemcpyAsync(residual_buffer[0].GetPtr<void>(), hidden_buffer_tensors_0[0].GetPtr<void>(),
                 hidden_buffer_tensors_0[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE, stream);
   } else {
-    // Flatten bank back to [num_tokens, max_blocks * H] for downstream/PP handoff.
     residual_buffer[0].shape = {num_tokens, cur_valid_blocks * hidden_units};
   }
   return Status();

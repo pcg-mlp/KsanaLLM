@@ -3,6 +3,7 @@
 ==============================================================================*/
 #include "layers/marlin_fused_fp4_a16_moe_layer.h"
 
+#include "csrc/kernels/nvidia/moe_utils/moe_activation.h"
 #include "csrc/kernels/nvidia/moe_utils/moe_utils.h"
 #include "csrc/kernels/nvidia/others/sglang/main/marlin_moe_wna16/marlin_moe_wna16_wrapper.h"
 #include "csrc/kernels/nvidia/others/sglang/main/marlin_moe_wna16/ops.h"
@@ -387,15 +388,15 @@ Status MarlinFusedFp4A16MoeLayer::ForwardT(const Tensor* hidden_states, const Te
       const size_t elements_num = tokens_in_chunk * expert_topk_ * expert_inter_size_ * 2;
       if (situ_beta_ > 0.0f) {
         if (use_expert_parallel) {
-          llm_kernels::nvidia::InvokeSituAndMul<T, true>(
-              reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, situ_beta_,
-              situ_linear_beta_, stream);
+          llm_kernels::nvidia::InvokeSituAndMul<T, true>(reinterpret_cast<const T*>(intermediate_cache1_),
+                                                         reinterpret_cast<T*>(intermediate_cache2_),
+                                                         reinterpret_cast<const int*>(curr_topk_ids), elements_num,
+                                                         expert_inter_size_, situ_beta_, situ_linear_beta_, stream);
         } else {
-          llm_kernels::nvidia::InvokeSituAndMul<T, false>(
-              reinterpret_cast<const T*>(intermediate_cache1_), reinterpret_cast<T*>(intermediate_cache2_),
-              reinterpret_cast<const int*>(curr_topk_ids), elements_num, expert_inter_size_, situ_beta_,
-              situ_linear_beta_, stream);
+          llm_kernels::nvidia::InvokeSituAndMul<T, false>(reinterpret_cast<const T*>(intermediate_cache1_),
+                                                          reinterpret_cast<T*>(intermediate_cache2_),
+                                                          reinterpret_cast<const int*>(curr_topk_ids), elements_num,
+                                                          expert_inter_size_, situ_beta_, situ_linear_beta_, stream);
         }
       } else if (use_expert_parallel) {
         if (has_swiglu_limit_) {

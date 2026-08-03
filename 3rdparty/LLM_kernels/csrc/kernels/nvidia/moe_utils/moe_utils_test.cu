@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
+#include "moe_activation.h"
 #include "moe_utils.h"
 #include "tests/kernels/nvidia/utils/testsuit_base.h"
 
@@ -149,35 +150,30 @@ void LlamaNvidiaMoeTestSuit::TestSiluAndMulSwigluLimit(cudaStream_t stream) {
   const size_t elements_num = num_tokens * topk * inter_size;
   const float swiglu_limit = 10.0f;
 
-  BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU,
-                                           {num_tokens, topk, 2 * inter_size},
-                                           /*is_random_init*/ true);
+  BufferMeta input_meta = CreateBuffer<T>(MemoryType::MEMORY_GPU, {num_tokens, topk, 2 * inter_size},
+                                          /*is_random_init*/ true);
   // 让前 16 个 gate 元素 = +20 (> limit, clamp 生效),
   // 让前 16 个 up 元素 = -15 (clamp 到 -10)
   {
     std::vector<T> host(num_tokens * topk * 2 * inter_size);
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(host.data(), input_meta.data_ptr, host.size() * sizeof(T),
-               cudaMemcpyDeviceToHost));
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(host.data(), input_meta.data_ptr, host.size() * sizeof(T), cudaMemcpyDeviceToHost));
     for (int i = 0; i < 16; ++i) {
-      host[i] = static_cast<T>(20.0f);                                    // gate half of token 0, expert 0
-      host[inter_size + i] = static_cast<T>(-15.0f);                      // up half of token 0, expert 0
+      host[i] = static_cast<T>(20.0f);                // gate half of token 0, expert 0
+      host[inter_size + i] = static_cast<T>(-15.0f);  // up half of token 0, expert 0
     }
-    CHECK_NVIDIA_CUDA_ERROR(cudaMemcpy(input_meta.data_ptr, host.data(), host.size() * sizeof(T),
-               cudaMemcpyHostToDevice));
+    CHECK_NVIDIA_CUDA_ERROR(
+        cudaMemcpy(input_meta.data_ptr, host.data(), host.size() * sizeof(T), cudaMemcpyHostToDevice));
   }
 
-  BufferMeta output_clamped = CreateBuffer<T>(MemoryType::MEMORY_GPU,
-                                                {num_tokens, topk, inter_size}, false);
-  BufferMeta output_noclamp = CreateBuffer<T>(MemoryType::MEMORY_GPU,
-                                                {num_tokens, topk, inter_size}, false);
+  BufferMeta output_clamped = CreateBuffer<T>(MemoryType::MEMORY_GPU, {num_tokens, topk, inter_size}, false);
+  BufferMeta output_noclamp = CreateBuffer<T>(MemoryType::MEMORY_GPU, {num_tokens, topk, inter_size}, false);
 
   InvokeSiluAndMul<T, /*UseExpertParallel*/ false, /*HAS_SWIGLU_LIMIT*/ true>(
-      reinterpret_cast<T*>(input_meta.data_ptr),
-      reinterpret_cast<T*>(output_clamped.data_ptr),
+      reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<T*>(output_clamped.data_ptr),
       /*topk_ids*/ nullptr, elements_num, inter_size, swiglu_limit, stream);
   InvokeSiluAndMul<T, /*UseExpertParallel*/ false, /*HAS_SWIGLU_LIMIT*/ false>(
-      reinterpret_cast<T*>(input_meta.data_ptr),
-      reinterpret_cast<T*>(output_noclamp.data_ptr),
+      reinterpret_cast<T*>(input_meta.data_ptr), reinterpret_cast<T*>(output_noclamp.data_ptr),
       /*topk_ids*/ nullptr, elements_num, inter_size, 0.0f, stream);
   cudaStreamSynchronize(stream);
 
@@ -202,12 +198,8 @@ void LlamaNvidiaMoeTestSuit::TestSiluAndMulSwigluLimit(cudaStream_t stream) {
   DeleteBuffer(input_meta);
 }
 
-TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitHalfTest) {
-  TestSiluAndMulSwigluLimit<half>(stream);
-}
-TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitBf16Test) {
-  TestSiluAndMulSwigluLimit<__nv_bfloat16>(stream);
-}
+TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitHalfTest) { TestSiluAndMulSwigluLimit<half>(stream); }
+TEST_F(LlamaNvidiaMoeTestSuit, SiluAndMulSwigluLimitBf16Test) { TestSiluAndMulSwigluLimit<__nv_bfloat16>(stream); }
 
 TEST_F(LlamaNvidiaMoeTestSuit, halfSiluKernelTest) {
   SiluMulKernelAccTest<half>();
@@ -467,17 +459,15 @@ TEST_F(LlamaNvidiaMoeTestSuit, SituAndMulTest) {
   auto f32_input = input.to(torch::kFloat32);
   auto gate = f32_input.slice(1, 0, inter_size);
   auto up = f32_input.slice(1, inter_size, 2 * inter_size);
-  auto ref = (beta * torch::tanh(gate / beta) * torch::sigmoid(gate) *
-              linear_beta * torch::tanh(up / linear_beta)).to(torch::kBFloat16);
+  auto ref = (beta * torch::tanh(gate / beta) * torch::sigmoid(gate) * linear_beta * torch::tanh(up / linear_beta))
+                 .to(torch::kBFloat16);
 
-  InvokeSituAndMul<__nv_bfloat16, false>(
-      static_cast<const __nv_bfloat16*>(input.data_ptr()),
-      static_cast<__nv_bfloat16*>(output.data_ptr()), nullptr,
-      num_tokens * 2 * inter_size, inter_size, beta, linear_beta, stream);
+  InvokeSituAndMul<__nv_bfloat16, false>(static_cast<const __nv_bfloat16*>(input.data_ptr()),
+                                         static_cast<__nv_bfloat16*>(output.data_ptr()), nullptr,
+                                         num_tokens * 2 * inter_size, inter_size, beta, linear_beta, stream);
   cudaStreamSynchronize(stream);
 
-  ASSERT_TRUE(torch::allclose(output, ref, /*rtol=*/1e-2, /*atol=*/2e-2))
-      << "SiTU kernel output mismatch";
+  ASSERT_TRUE(torch::allclose(output, ref, /*rtol=*/1e-2, /*atol=*/2e-2)) << "SiTU kernel output mismatch";
 }
 
 }  // namespace test

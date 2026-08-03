@@ -10,8 +10,10 @@
 #include "modules/attention/multihead_latent_attention.h"
 #include "modules/basic/add.h"
 #include "modules/basic/attn_res.h"
+#include "modules/basic/layernorm.h"
 #include "modules/basic/linear.h"
 #include "modules/basic/moe.h"
+#include "modules/ffn/shared_expert_layer.h"
 #include "modules/ffn/two_layered_ffn.h"
 
 namespace ksana_llm {
@@ -47,9 +49,15 @@ class KimiK3DecoderLayer {
   std::unique_ptr<MultiHeadLatentAttention> mla_;
 
   std::unique_ptr<TwoLayeredFFN> mlp_;
-  std::unique_ptr<TwoLayeredFFN> shared_mlp_;
-  std::unique_ptr<Linear> expert_gate_;
-  std::unique_ptr<MoE> moe_;
+  std::shared_ptr<SharedExpertLayer> shared_expert_;
+  std::shared_ptr<Linear> expert_gate_;
+  std::shared_ptr<MoE> moe_;
+
+  std::shared_ptr<Linear> routed_expert_down_proj_;
+  std::shared_ptr<Layernorm> routed_expert_norm_;
+  std::shared_ptr<Linear> routed_expert_up_proj_;
+
+  bool enable_full_shared_expert_;
 
   MlaBuffers& mla_buffers_;
   TensorBuffer* const moe_buffer_;
