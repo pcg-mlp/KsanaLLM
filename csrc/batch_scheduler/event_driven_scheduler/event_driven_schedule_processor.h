@@ -145,8 +145,11 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   bool ApplyBackendEventsToState(const std::vector<ScheduleBackendEvent>& backend_events);
   bool ProcessDelayedBackendEvents();
 
-  // Print a read-only snapshot of state-machine queues and planning batches.
-  void ReportEventDrivenState(const char* phase) const;
+  // Ops load snapshot every 10s (INFO), field names/format aligned with
+  // BatchScheduler::ReportTotalState for the same online monitoring path.
+  // Mapping today is transitional; will later switch to event-driven-native
+  // counters (see implementation comment for running/decoding overlap).
+  void ReportEventDrivenState() const;
 
   void RunScheduleForBatches();
   bool TryBuildAndLaunchScheduleResult(ScheduleContext& ctx);
