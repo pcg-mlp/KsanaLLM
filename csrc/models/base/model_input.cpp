@@ -20,6 +20,31 @@ namespace ksana_llm {
 
 Stream& ModelInput::GetParseH2DStream() { return context_->device->GetH2DStreamForSlot(parse_slot_); }
 
+void ModelInput::BindInputPackDeviceViews() {
+  uint8_t* pack = input_pack_device_.GetPtr<uint8_t>();
+  const auto& layout = input_pack_layout_;
+  const size_t max_batch_size = runtime_config_.max_batch_size;
+  const size_t max_token_num = runtime_config_.max_step_token_num;
+  const size_t max_logits_tokens = layout.logits_idx_bytes / sizeof(uint64_t);
+
+  // shared view：挂到统一 device pack 的固定偏移，析构时不释放底层内存。
+  cur_batch_pairs_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {2 * max_batch_size}, pack + layout.off_cur_batch_pairs);
+  logits_idx_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_logits_tokens}, pack + layout.off_logits_idx);
+  input_offset_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_input_offset);
+  input_prefix_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_input_prefix);
+  dp_input_offset_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_dp_input_offset);
+  dp_input_prefix_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_dp_input_prefix);
+  dp_prefill_q_offset_uint64_tensor =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_dp_prefill_q_offset);
+  input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, pack + layout.off_input_ids);
+}
+
 ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                        std::shared_ptr<Context> context, std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
     : model_config_(model_config),
@@ -94,20 +119,35 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   }
   KLLM_LOG_INFO << "max_table_block_num: " << max_table_block_num;
 
-  input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-  cur_batch_pairs_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {2 * max_batch_size});
-  input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  dp_input_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
-  dp_input_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  dp_prefill_q_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
-  dp_prefill_q_offset_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-  dp_input_prefix_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1});
-
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
   const size_t max_logits_tokens = max_batch_size * batch_scheduler_config.max_decode_tokens_per_req;
-  logits_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_logits_tokens});
+
+  // 统一 H2D pack：meta 固定全量在前，input_ids 预留在末尾（传输时按实际长度截断）。
+  {
+    auto& layout = input_pack_layout_;
+    layout.cur_batch_pairs_bytes = 2 * max_batch_size * sizeof(int64_t);
+    layout.logits_idx_bytes = max_logits_tokens * sizeof(uint64_t);
+    layout.batch_offset_bytes = (max_batch_size + 1) * sizeof(uint64_t);
+
+    layout.off_cur_batch_pairs = 0;
+    layout.off_logits_idx = layout.off_cur_batch_pairs + layout.cur_batch_pairs_bytes;
+    layout.off_input_offset = layout.off_logits_idx + layout.logits_idx_bytes;
+    layout.off_input_prefix = layout.off_input_offset + layout.batch_offset_bytes;
+    layout.off_dp_input_offset = layout.off_input_prefix + layout.batch_offset_bytes;
+    layout.off_dp_input_prefix = layout.off_dp_input_offset + layout.batch_offset_bytes;
+    layout.off_dp_prefill_q_offset = layout.off_dp_input_prefix + layout.batch_offset_bytes;
+    layout.meta_pack_bytes = layout.off_dp_prefill_q_offset + layout.batch_offset_bytes;
+    layout.off_input_ids = layout.meta_pack_bytes;
+    layout.total_pack_bytes = layout.meta_pack_bytes + max_token_num * sizeof(int32_t);
+
+    input_pack_host_ = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT8, {layout.total_pack_bytes});
+    input_pack_device_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT8, {layout.total_pack_bytes});
+    BindInputPackDeviceViews();
+  }
+
+  dp_input_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
+  dp_prefill_q_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
 
   nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num});
 
@@ -988,19 +1028,13 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   KLLM_LOG_DEBUG << "input_prefix_list_uint64 " << input_prefix_list_uint64;
   KLLM_LOG_DEBUG << "dp_input_prefix_list_uint64 " << dp_input_prefix_list_uint64;
 
+  // 更新各 view 的本步有效 shape（底层仍指向统一 device pack）。
   input_ids.shape = {input_ids_cpu.size()};
   input_ids.dtype = TYPE_INT32;
-  MemcpyAsync(input_ids.GetPtr<void>(), input_ids_cpu.data(),
-              input_ids_cpu.size() * sizeof(decltype(input_ids_cpu)::value_type), MEMCPY_HOST_TO_DEVICE,
-              GetParseH2DStream());
 
   if (fill_cur_batch_pairs) {
     cur_batch_pairs_tensor.shape = {cur_batch_pairs_cpu_.size()};
     cur_batch_pairs_tensor.dtype = TYPE_INT64;
-    if (!cur_batch_pairs_cpu_.empty()) {
-      MemcpyAsync(cur_batch_pairs_tensor.GetPtr<void>(), cur_batch_pairs_cpu_.data(),
-                  cur_batch_pairs_cpu_.size() * sizeof(int64_t), MEMCPY_HOST_TO_DEVICE, GetParseH2DStream());
-    }
   } else {
     cur_batch_pairs_tensor.shape = {0};
   }
@@ -1023,39 +1057,61 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
 
   logits_idx_uint64_tensor.shape = {logits_idx_list.size()};
   logits_idx_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(logits_idx_uint64_tensor.GetPtr<void>(), logits_idx_list.data(),
-              logits_idx_list.size() * sizeof(decltype(logits_idx_list)::value_type), MEMCPY_HOST_TO_DEVICE,
-              GetParseH2DStream());
 
   dp_prefill_q_offset_uint64_host.shape = {forward_reqs.size() + 1};
   dp_prefill_q_offset_uint64_tensor.shape = {dp_prefill_q_offset_uint64_host.shape[0]};
-  MemcpyAsync(dp_prefill_q_offset_uint64_tensor.GetPtr<void>(), dp_prefill_q_offset_uint64_host.GetPtr<void>(),
-              dp_prefill_q_offset_uint64_host.shape[0] * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
 
   input_offset_uint64_tensor.shape = {input_offset_list_uint64.size()};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(input_offset_uint64_tensor.GetPtr<void>(), input_offset_list_uint64.data(),
-              input_offset_list_uint64.size() * sizeof(decltype(input_offset_list_uint64)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 
   dp_input_offset_uint64_host.shape = {forward_reqs.size() + 1};
   dp_input_offset_uint64_tensor.shape = {dp_input_offset_uint64_host.shape[0]};
-  MemcpyAsync(dp_input_offset_uint64_tensor.GetPtr<void>(), dp_input_offset_uint64_host.GetPtr<void>(),
-              dp_input_offset_uint64_host.shape[0] * sizeof(size_t), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
 
   input_prefix_uint64_tensor.shape = {input_prefix_list_uint64.size()};
   input_prefix_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(input_prefix_uint64_tensor.GetPtr<void>(), input_prefix_list_uint64.data(),
-              input_prefix_list_uint64.size() * sizeof(decltype(input_prefix_list_uint64)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 
   dp_input_prefix_uint64_tensor.shape = {dp_input_prefix_list_uint64.size()};
   dp_input_prefix_uint64_tensor.dtype = TYPE_UINT64;
-  MemcpyAsync(dp_input_prefix_uint64_tensor.GetPtr<void>(), dp_input_prefix_list_uint64.data(),
-              dp_input_prefix_list_uint64.size() * sizeof(decltype(dp_input_prefix_list_uint64)::value_type),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+
+  // CPU 侧结果拼进固定布局 host_pack，再一次 H2D（meta 全量 + 实际 input_ids）。
+  // device view 为 TYPE_UINT64；host 上对应缓冲目前仍是 size_t，须与 uint64_t 等宽才能按字节直拷。
+  {
+    static_assert(sizeof(size_t) == sizeof(uint64_t),
+                  "PrepareInputIds pack requires size_t == uint64_t for TYPE_UINT64 views");
+    const auto& layout = input_pack_layout_;
+    uint8_t* host_pack = input_pack_host_.GetPtr<uint8_t>();
+
+    auto copy_into_pack = [&](size_t offset, const void* src, size_t bytes, size_t capacity_bytes) {
+      if (src == nullptr || bytes == 0) {
+        return;
+      }
+      KLLM_CHECK_WITH_INFO(bytes <= capacity_bytes, "PrepareInputIds pack region overflow");
+      std::memcpy(host_pack + offset, src, bytes);
+    };
+
+    copy_into_pack(layout.off_cur_batch_pairs, cur_batch_pairs_cpu_.data(),
+                   cur_batch_pairs_cpu_.size() * sizeof(int64_t), layout.cur_batch_pairs_bytes);
+    copy_into_pack(layout.off_logits_idx, logits_idx_list.data(), logits_idx_list.size() * sizeof(uint64_t),
+                   layout.logits_idx_bytes);
+    copy_into_pack(layout.off_input_offset, input_offset_list_uint64.data(),
+                   input_offset_list_uint64.size() * sizeof(uint64_t), layout.batch_offset_bytes);
+    copy_into_pack(layout.off_input_prefix, input_prefix_list_uint64.data(),
+                   input_prefix_list_uint64.size() * sizeof(uint64_t), layout.batch_offset_bytes);
+    copy_into_pack(layout.off_dp_input_offset, dp_input_offset_uint64_host.GetPtr<void>(),
+                   dp_input_offset_uint64_host.shape[0] * sizeof(uint64_t), layout.batch_offset_bytes);
+    copy_into_pack(layout.off_dp_input_prefix, dp_input_prefix_list_uint64.data(),
+                   dp_input_prefix_list_uint64.size() * sizeof(uint64_t), layout.batch_offset_bytes);
+    copy_into_pack(layout.off_dp_prefill_q_offset, dp_prefill_q_offset_uint64_host.GetPtr<void>(),
+                   dp_prefill_q_offset_uint64_host.shape[0] * sizeof(uint64_t), layout.batch_offset_bytes);
+
+    const size_t input_ids_bytes = input_ids_cpu.size() * sizeof(decltype(input_ids_cpu)::value_type);
+    copy_into_pack(layout.off_input_ids, input_ids_cpu.data(), input_ids_bytes,
+                   layout.total_pack_bytes - layout.meta_pack_bytes);
+
+    const size_t transfer_bytes = layout.meta_pack_bytes + input_ids_bytes;
+    MemcpyAsync(input_pack_device_.GetPtr<void>(), host_pack, transfer_bytes, MEMCPY_HOST_TO_DEVICE,
+                GetParseH2DStream());
+  }
 
   size_t attn_dp_group_offset = 0;
   for (size_t i = 0; i < attn_dp_group_size_; ++i) {

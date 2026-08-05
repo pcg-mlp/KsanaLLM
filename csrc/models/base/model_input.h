@@ -269,9 +269,34 @@ class ModelInput {
   // host 侧缓冲，与 cur_batch_pairs_tensor 一一对应，layout [req_id_0, offset_0, ...]。
   std::vector<int64_t> cur_batch_pairs_cpu_;
 
+  // PrepareInputIds 统一 H2D：固定 meta 区在前，末尾接 input_ids（按本步实际长度传输）。
+  // 布局（字节）：pairs | logits | input_offset | input_prefix | dp_input_offset |
+  //               dp_input_prefix | dp_prefill_q_offset | input_ids
+  struct InputPackLayout {
+    size_t off_cur_batch_pairs = 0;
+    size_t off_logits_idx = 0;
+    size_t off_input_offset = 0;
+    size_t off_input_prefix = 0;
+    size_t off_dp_input_offset = 0;
+    size_t off_dp_input_prefix = 0;
+    size_t off_dp_prefill_q_offset = 0;
+    size_t off_input_ids = 0;  // == meta_pack_bytes
+    size_t meta_pack_bytes = 0;
+    size_t total_pack_bytes = 0;
+    size_t cur_batch_pairs_bytes = 0;
+    size_t logits_idx_bytes = 0;
+    size_t batch_offset_bytes = 0;  // (max_batch + 1) * sizeof(uint64_t)
+  };
+  InputPackLayout input_pack_layout_;
+  Tensor input_pack_host_;
+  Tensor input_pack_device_;
+
   // ParseFromRequests 期间使用的 slot (决定 GetParseH2DStream).
   size_t parse_slot_ = 0;
   Stream& GetParseH2DStream();
+
+  // 将各公开 device Tensor 绑到 input_pack_device_ 的固定偏移（shared view）。
+  void BindInputPackDeviceViews();
 
   // Shared config for all attention meta builders.
   std::unique_ptr<AttentionBuilderConfig> builder_config_;

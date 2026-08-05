@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 
-// build-ahead 路径下 ModelInput::PrepareInputIds 的 cur_batch_pairs 填充单测。
+// ModelInput::PrepareInputIds 单测：cur_batch_pairs + 统一 H2D pack / shared view。
 // 不依赖外部模型权重：SetUp 在临时目录写入最小 config.json，仅满足 ParseConfig 所需字段。
 
 #ifdef ENABLE_CUDA
@@ -247,6 +247,104 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsSkipsZeroLenDecodeInCurBatchPairs)
   bsc.enable_xgrammar = orig_xgrammar;
   env->SetBatchSchedulerConfig(bsc);
   ReinitFastPathGate(bsc);
+}
+
+// 构造期：固定 meta + 末尾 input_ids 布局，公开 Tensor 必须是 pack 上的 shared view。
+TEST_F(ModelInputCurPairsTest, InputPackLayoutAndSharedViews) {
+  const auto& layout = model_input_->input_pack_layout_;
+  const size_t max_batch_size = model_input_->runtime_config_.max_batch_size;
+  const size_t max_token_num = model_input_->runtime_config_.max_step_token_num;
+
+  EXPECT_EQ(layout.off_cur_batch_pairs, 0u);
+  EXPECT_EQ(layout.off_logits_idx, layout.off_cur_batch_pairs + layout.cur_batch_pairs_bytes);
+  EXPECT_EQ(layout.off_input_offset, layout.off_logits_idx + layout.logits_idx_bytes);
+  EXPECT_EQ(layout.off_input_prefix, layout.off_input_offset + layout.batch_offset_bytes);
+  EXPECT_EQ(layout.off_dp_input_offset, layout.off_input_prefix + layout.batch_offset_bytes);
+  EXPECT_EQ(layout.off_dp_input_prefix, layout.off_dp_input_offset + layout.batch_offset_bytes);
+  EXPECT_EQ(layout.off_dp_prefill_q_offset, layout.off_dp_input_prefix + layout.batch_offset_bytes);
+  EXPECT_EQ(layout.meta_pack_bytes, layout.off_dp_prefill_q_offset + layout.batch_offset_bytes);
+  EXPECT_EQ(layout.off_input_ids, layout.meta_pack_bytes);
+  EXPECT_EQ(layout.total_pack_bytes, layout.meta_pack_bytes + max_token_num * sizeof(int32_t));
+  EXPECT_EQ(layout.cur_batch_pairs_bytes, 2 * max_batch_size * sizeof(int64_t));
+  EXPECT_EQ(layout.batch_offset_bytes, (max_batch_size + 1) * sizeof(uint64_t));
+
+  ASSERT_EQ(model_input_->input_pack_device_.GetTotalBytes(), layout.total_pack_bytes);
+  ASSERT_EQ(model_input_->input_pack_host_.GetTotalBytes(), layout.total_pack_bytes);
+
+  uint8_t* pack = model_input_->input_pack_device_.GetPtr<uint8_t>();
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->cur_batch_pairs_tensor.GetPtr<void>()),
+            pack + layout.off_cur_batch_pairs);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->logits_idx_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_logits_idx);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->input_offset_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_input_offset);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->input_prefix_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_input_prefix);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->dp_input_offset_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_dp_input_offset);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->dp_input_prefix_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_dp_input_prefix);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->dp_prefill_q_offset_uint64_tensor.GetPtr<void>()),
+            pack + layout.off_dp_prefill_q_offset);
+  EXPECT_EQ(reinterpret_cast<uint8_t*>(model_input_->input_ids.GetPtr<void>()), pack + layout.off_input_ids);
+}
+
+// PrepareInputIds 一次 H2D 后：经 shared view 读回的 device 数据须与 CPU 源一致。
+TEST_F(ModelInputCurPairsTest, PrepareInputIdsUnifiedPackH2DMatchesCpuSources) {
+  // prefill（kv_cached=0 → kFlash）+ decode，覆盖 offset/prefix/logits/input_ids 多段。
+  auto prefill = MakeDecodeForwardRequest(601, {10, 20, 30, 40, 50}, /*kv_cached=*/0);
+  auto decode = MakeDecodeForwardRequest(602, {11, 22, 33, 44}, /*kv_cached=*/3);
+  ASSERT_EQ(prefill.GetType(), ForwardRequestType::kFlash);
+  ASSERT_EQ(decode.GetType(), ForwardRequestType::kPage);
+
+  InvokePrepareInputIds(model_input_.get(), {prefill, decode});
+  StreamSynchronize(context_->device->GetH2DStream());
+
+  // host 侧期望
+  const std::vector<int> expect_ids = {10, 20, 30, 40, 50, 44};
+  ASSERT_EQ(model_input_->input_ids_cpu, expect_ids);
+  ASSERT_EQ(model_input_->input_ids.shape[0], expect_ids.size());
+
+  std::vector<int32_t> ids_dev(expect_ids.size());
+  MemcpyAsync(ids_dev.data(), model_input_->input_ids.GetPtr<void>(), ids_dev.size() * sizeof(int32_t),
+              MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  StreamSynchronize(context_->device->GetH2DStream());
+  EXPECT_EQ(ids_dev, expect_ids);
+
+  // logits：每 req sampling_token_num=1 → 下标指向各 req 末 token 在 flat input_ids 中的位置
+  ASSERT_EQ(model_input_->logits_idx_uint64_tensor.shape[0], 2u);
+  std::vector<uint64_t> logits_dev(2);
+  MemcpyAsync(logits_dev.data(), model_input_->logits_idx_uint64_tensor.GetPtr<void>(),
+              logits_dev.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  StreamSynchronize(context_->device->GetH2DStream());
+  EXPECT_EQ(logits_dev[0], 4u);  // prefill 末 token
+  EXPECT_EQ(logits_dev[1], 5u);  // decode 末 token
+
+  // input_offset / input_prefix：累积 forwarding 长度与 skip
+  ASSERT_EQ(model_input_->input_offset_list_uint64.size(), 3u);
+  ASSERT_EQ(model_input_->input_prefix_list_uint64.size(), 3u);
+  std::vector<uint64_t> offset_dev(3);
+  std::vector<uint64_t> prefix_dev(3);
+  MemcpyAsync(offset_dev.data(), model_input_->input_offset_uint64_tensor.GetPtr<void>(),
+              offset_dev.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  MemcpyAsync(prefix_dev.data(), model_input_->input_prefix_uint64_tensor.GetPtr<void>(),
+              prefix_dev.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  StreamSynchronize(context_->device->GetH2DStream());
+  EXPECT_EQ(offset_dev[0], 0u);
+  EXPECT_EQ(offset_dev[1], 5u);
+  EXPECT_EQ(offset_dev[2], 9u);
+  EXPECT_EQ(prefix_dev[0], 0u);
+  EXPECT_EQ(prefix_dev[1], 0u);
+  EXPECT_EQ(prefix_dev[2], 3u);
+
+  // 经 pack 基址 + 布局偏移读 input_ids，须与 public view 同一块内存（已在上一条用例验证指针）；
+  // 此处再确认 D2H 内容与 host_pack 中拼好的片段一致。
+  const auto& layout = model_input_->input_pack_layout_;
+  std::vector<int32_t> ids_via_pack(expect_ids.size());
+  MemcpyAsync(ids_via_pack.data(), model_input_->input_pack_device_.GetPtr<uint8_t>() + layout.off_input_ids,
+              ids_via_pack.size() * sizeof(int32_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  StreamSynchronize(context_->device->GetH2DStream());
+  EXPECT_EQ(ids_via_pack, expect_ids);
 }
 
 }  // namespace ksana_llm
