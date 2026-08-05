@@ -14,3 +14,8 @@ cd $SCRIPT_HOME
 
 cd 3rdparty/LLM_kernels/csrc/kernels/nvidia/fused_moe_gptq_int4_fp8_kernel
 bash fused_moe_gptq_int4_fp8_kernel_creator.sh `pwd` $SCRIPT_HOME/build/triton_kernel_files
+
+cd $SCRIPT_HOME
+
+cd 3rdparty/LLM_kernels/csrc/kernels/nvidia/kda
+bash kda_creator.sh `pwd` $SCRIPT_HOME/build/triton_kernel_files

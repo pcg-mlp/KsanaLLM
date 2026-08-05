@@ -104,6 +104,22 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["_silu_and_mul_quant_ep_kernel"] = {"N"};
   // (hidden_size H, num_blocks NB, has_delta HD, write_block WB, apply_output_norm ON, block_l BL).
   kernel_key_map_["_attn_res_kernel"] = {"H", "NB", "HD", "WB", "ON", "BL"};
+  kernel_key_map_["causal_conv1d_fwd_kernel"] = {"D", "W"};
+  kernel_key_map_["causal_conv1d_update_kernel"] = {"D", "W", "MODE", "NP2"};
+  kernel_key_map_["layer_norm_gated_fwd_kernel"] = {"D", "BT", "ACT"};
+  kernel_key_map_["l2norm_fwd_kernel"] = {"D", "BT"};
+  // LB selects the forget-gate activation: 1 for the safe gate, 0 for softplus.
+  kernel_key_map_["kda_gate_chunk_cumsum_vector_kernel"] = {"H", "BS", "LB"};
+  kernel_key_map_["chunk_kda_fwd_kernel_intra_token_parallel"] = {"H", "BH"};
+  kernel_key_map_["chunk_kda_fwd_kernel_inter_solve_fused"] = {"H", "FR", "FD", "BK", "BV"};
+  kernel_key_map_["recompute_w_u_fwd_kernel"] = {"H", "BK", "BV"};
+  // SSM selects the recurrent-state storage dtype (fp32 or bf16); it appears in
+  // the compiled signature of every kernel that reads or writes that state.
+  kernel_key_map_["chunk_gated_delta_rule_fwd_kernel_h_blockdim64"] = {"H", "NTB", "BV", "SSM"};
+  kernel_key_map_["chunk_gla_fwd_kernel_o"] = {"H", "BK", "BV"};
+  kernel_key_map_["fused_recurrent_kda_packed_decode_kernel"] = {"H", "BK", "BV", "LB", "SSM"};
+  kernel_key_map_["fused_sigmoid_gating_delta_rule_update_kernel"] = {"H",  "MODE", "NP2",
+                                                                      "BK", "BV",   "LB", "SSM"};
 }
 
 void TritonWrapper::InitKernelsDir() {

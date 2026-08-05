@@ -51,6 +51,12 @@ set(TRITON_WRAPPER_TEST_SRCS triton_wrapper_test.cpp)
 cc_test(triton_wrapper_test SRCS ${TRITON_WRAPPER_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
+if(HAS_SM90 OR HAS_SM90A)
+    set(KDA_KERNEL_WRAPPER_TEST_SRCS kda_kernel_wrapper_test.cpp)
+    cc_test(kda_kernel_wrapper_test SRCS ${KDA_KERNEL_WRAPPER_TEST_SRCS} DEPS
+        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+endif()
+
 if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
     file(GLOB_RECURSE DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS deepseek_deepgemm_wrapper_test.cpp)
     cc_test(deepseek_deepgemm_wrapper_test SRCS ${DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS} DEPS

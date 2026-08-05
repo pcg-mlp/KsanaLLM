@@ -476,6 +476,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   }
   runtime_config_.attn_backend_config.kv_cache_dtype_str = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.quantization_config.kv_cache.dtype", "auto");
+
   KLLM_LOG_INFO << fmt::format("enable_blocked_multi_token_forwarding_kv: {}, kv_cache.dtype: {}",
                                runtime_config_.attn_backend_config.enable_blocked_multi_token_forwarding_kv,
                                runtime_config_.attn_backend_config.kv_cache_dtype_str);

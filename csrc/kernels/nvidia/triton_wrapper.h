@@ -40,6 +40,10 @@ class TritonWrapper {
 
   void SetKernelsDir(const std::string& kernels_dir);
 
+  void InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
+                          const std::unordered_map<std::string, std::string>& map, size_t grid_x, size_t grid_y,
+                          size_t grid_z, cudaStream_t stream, int block_x = -1, int block_y = -1, int block_z = -1);
+
   // The directory chosen by InitKernelsDir() (or overridden by SetKernelsDir()).
   // Exposed primarily so the directory-resolution priority can be unit tested.
   const std::string& GetKernelsDir() const { return kernels_dir_; }
@@ -171,10 +175,6 @@ class TritonWrapper {
                                                                         const std::string& kernel_name);
 
   CUresult LoadTritonKernelFromFile(const std::string& ptx_file_path, std::shared_ptr<TritonKernel>& triton_kernel);
-
-  void InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
-                          const std::unordered_map<std::string, std::string>& map, size_t grid_x, size_t grid_y,
-                          size_t grid_z, cudaStream_t stream, int block_x = -1, int block_y = -1, int block_z = -1);
 
   std::unordered_map<std::string, std::vector<std::string>> kernel_key_map_;
 
