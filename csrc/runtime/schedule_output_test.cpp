@@ -246,6 +246,7 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
 
 // InferRequest 持有 Request 内部字段的引用；测试夹具须同时 pin 住 request 与 infer_req 生命周期。
 struct DecodeReadyInferRequestFixture {
+  std::shared_ptr<KsanaPythonInput> input;
   std::shared_ptr<Request> request;
   std::shared_ptr<InferRequest> infer_req;
 };
@@ -273,7 +274,7 @@ DecodeReadyInferRequestFixture BuildDecodeReadyInferRequest(int64_t req_id, int 
   req->ResetInflightTask();
   EXPECT_EQ(req->infer_stage, InferStage::kDecode);
   EXPECT_EQ(req->GetInflightCount(), 0u);
-  return {request, req};
+  return {input, request, req};
 }
 
 void ArmDecodePlanningWorkload(const std::shared_ptr<InferRequest>& req) {
