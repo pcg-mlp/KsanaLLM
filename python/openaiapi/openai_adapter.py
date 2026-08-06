@@ -9,6 +9,7 @@ OpenAI API Adapter for KsanaLLM
 Actually, this python module is a mixture of Configuration, Request Handling, and OpenAI API Compatibility.
 """
 
+import os
 import time
 import uuid
 import asyncio
@@ -161,6 +162,8 @@ class KsanaOpenAIServing:
 
         self.use_deepseek_v32_encoding = False
         self.use_deepseek_v4_encoding = False
+        # Default use dsv4_0731_reasoning_effort
+        self.use_dsv4_0731_reasoning_effort = os.environ.get("USE_DSV4_0731_REASONING_EFFORT", "1") != "0"
 
     def _initialize_tokenizer(self) -> Any:
         """Initialize tokenizer, avoid repeat getting tokenizer"""
@@ -783,10 +786,17 @@ class KsanaOpenAIServing:
             if tool_dicts:
                 conversation[0]["tools"] = tool_dicts
 
+            valid_efforts = (
+                ("low", "high", "max")
+                if self.use_dsv4_0731_reasoning_effort
+                else ("high", "max")
+            )
+            logger.debug(f"dsv4 valid_efforts: {valid_efforts}")
             # V4 reasoning effort: only accepts "max" / "high" / None
+            # V4 0731 reasoning effort: accepts "max" / "high" / "low" / None
             reasoning_effort = getattr(request, "reasoning_effort", None)
             v4_reasoning_effort = (
-                reasoning_effort if reasoning_effort in ("max", "high") else None
+                reasoning_effort if reasoning_effort in valid_efforts else None
             )
 
             # V4 task support
@@ -798,6 +808,7 @@ class KsanaOpenAIServing:
                 conversation,
                 thinking_mode=thinking_mode,
                 reasoning_effort=v4_reasoning_effort,
+                use_three_tier_reasoning_effort=self.use_dsv4_0731_reasoning_effort,
             )
         else:
             request_prompt = apply_hf_chat_template(
