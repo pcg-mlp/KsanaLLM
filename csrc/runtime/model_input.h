@@ -13,7 +13,10 @@ namespace ksana_llm {
 
 class NewModelInput {
  public:
-  RunMode run_mode;
+  // Defaults to kMain since BuildModelInput no longer takes a run_mode parameter for the main
+  // forward path; MtpDecoder::ExecuteForward explicitly overrides this to kNextN after
+  // BuildModelInput returns.
+  RunMode run_mode = RunMode::kMain;
 
   // The schedule output.
   std::shared_ptr<ScheduleOutput> schedule_output;

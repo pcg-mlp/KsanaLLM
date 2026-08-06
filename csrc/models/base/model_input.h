@@ -21,6 +21,9 @@
 
 namespace ksana_llm {
 
+// Forward declaration for gather index builder injection
+class GatherIndexBuilderInterface;
+
 // Convert input ids to expected format.
 class ModelInput {
  public:
@@ -28,8 +31,8 @@ class ModelInput {
              std::shared_ptr<Context> context, std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
   ~ModelInput();
 
-  // Parse forward request.
-  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
+  // Parse forward request into model input tensors.
+  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs);
 
   // build-ahead: 指定本 step 使用的 ModelInput slot，H2D 走对应 slot stream。
   void SetParseSlot(size_t slot) { parse_slot_ = slot; }
@@ -38,13 +41,31 @@ class ModelInput {
   // no-op for other models). Called from ForwardingContext::SetInflightResourceManager.
   void SetInflightResourceManager(InflightResourceManager* mgr);
 
+  // Inject an external gather index builder (owned by MtpDecoder).
+  // When non-null, PrepareNextNGatherIdx delegates all state management to this builder.
+  void SetExternalGatherIdxBuilder(GatherIndexBuilderInterface* builder) { external_gather_idx_builder_ = builder; }
+
+  // Return the currently injected external gather index builder (nullptr if none).
+  // Used by speculative decoders to temporarily detach the builder around calls that would otherwise
+  // trigger an unwanted UpdateMainForward (see ExecuteForward).
+  GatherIndexBuilderInterface* GetExternalGatherIdxBuilder() const { return external_gather_idx_builder_; }
+
+  // Return the external builder's gather index tensor.
+  // The builder must be injected via SetExternalGatherIdxBuilder before calling this method.
+  // Called by MTP layers (DeepSeekV4MtpLayer, GLM4MoE) via forwarding_context.GetModelInput().
+  Tensor* GetEffectiveNextNGatherIdxTensor();
+
+  // Build MTP-specific gather indices from external builder state.
+  // Called by MtpDecoder::ExecuteForward per MTP step.
+  void PrepareMtpDraftGatherIndices(const std::vector<ForwardRequest>& forward_reqs);
+
  private:
   void PrepareInputRefit(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareVLInputRefit(const std::vector<ForwardRequest>& forward_reqs);
   void CreateVLTensors();
   void PrepareVLRequest(const std::vector<ForwardRequest>& forward_reqs);
   void PrepareCutoffLayer(const std::vector<ForwardRequest>& forward_reqs);
-  void PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareMainForwardGather(const std::vector<ForwardRequest>& forward_reqs);
 
   // Prepare MRope position for qwen2_vl
   void PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs);
@@ -144,8 +165,6 @@ class ModelInput {
   // Due to the presence of logits_custom_length and speculative_decoding, a single request may require extracting more
   // than one logit. In the standard case, only the last logit of each request needs to be retrieved
   Tensor logits_idx_uint64_tensor;
-
-  Tensor nextn_hidden_idx_uint64_tensor;
 
   // Tensors to hold pairs(pos, data_length) and embeddings ptr of positions for input_refit on the CPU.
   struct {
@@ -263,8 +282,9 @@ class ModelInput {
   int layer_num_on_node_;
   size_t total_sampling_token_num_;
 
-  // for nextn layer(MTP), record each req's first token index in hidden output
-  std::unordered_map<size_t, size_t> mtp_req_id_to_pos_;
+  // External gather index builder injected by speculative decoders.
+  // When non-null, PrepareNextNGatherIdx delegates to this builder.
+  GatherIndexBuilderInterface* external_gather_idx_builder_ = nullptr;
 
   // host 侧缓冲，与 cur_batch_pairs_tensor 一一对应，layout [req_id_0, offset_0, ...]。
   std::vector<int64_t> cur_batch_pairs_cpu_;
@@ -300,7 +320,6 @@ class ModelInput {
 
   // Shared config for all attention meta builders.
   std::unique_ptr<AttentionBuilderConfig> builder_config_;
-
   // Builders that construct flash_meta / page_metas for each forward step.
   // Initialized in the constructor with the standard implementations;
   // can be replaced (e.g., via a setter) to swap in alternative backends.

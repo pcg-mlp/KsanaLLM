@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "runtime/generation_controller.h"
+#include "runtime/speculative/common/draft_generator_interface.h"
 #include "runtime/structured_generation/reasoning_structured_generator.h"
 
 namespace ksana_llm {
@@ -140,48 +141,54 @@ TEST_F(GenerationControllerTest, UpdateGenerationState) {
 
   // First sampling_result_tokens is acceptable, generated_tokens[0] is sampling_result_tokens[0];
   exec_req->sampling_result_tokens = {1};
-  exec_req->draft_tokens.clear();
+  exec_req->spec_state.draft_tokens.clear();
   generation_controller_->UpdateGenerationState(reqs);
-  EXPECT_EQ(exec_req->accepted_tokens.size(), 0);
+  // After refactor, verification moves to composite decoder; simulate HandlePostprocess order:
+  // UpdateGenerationState (clears stale draft_tokens) → DefaultFilterDraftTokens (verify).
+  DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens.size(), 0);
   EXPECT_EQ(exec_req->generated_tokens[0], 1);
 
-  // Expecting 2 to be generated, but sampling result is 1, so generated_tokens[0] is -1;
+  // Expecting 2 to be generated, but sampling result is 1, so generated_tokens[0] is 1 (was -1 in old test,
+  // but DefaultFilterDraftTokens does not produce -1 — TODO(robertyuan): scheduler doesn't handle this value).
   exec_req->sampling_result_tokens = {1};
-  exec_req->draft_tokens.clear();
+  exec_req->spec_state.draft_tokens.clear();
   generation_controller_->UpdateGenerationState(reqs);
-  EXPECT_EQ(exec_req->accepted_tokens.size(), 0);
-  //  EXPECT_EQ(exec_req->generated_tokens[0], -1);  // TODO(robertyuan): scheduler doesn't handle this value. handle
-  //  this after generated_tokens is changed to a vector.
+  DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens.size(), 0);
 
   // Expecting 2,3 to be generated, draft_tokens is 2 and sampling result is 2,3, so accepted_token is 2,
   // generated_tokens[0] is 3;
   exec_req->sampling_result_tokens = {2, 3};
-  exec_req->draft_tokens.mtp = {2};
-  exec_req->forwarding_tokens_draft_num = 1;
+  exec_req->spec_state.draft_tokens.mtp = {2};
+  exec_req->spec_state.forwarding_tokens_draft_num = 1;
   generation_controller_->UpdateGenerationState(reqs);
-  EXPECT_EQ(exec_req->accepted_tokens.size(), 1);
-  EXPECT_EQ(exec_req->accepted_tokens[0], 2);
+  DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens.size(), 1);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens[0], 2);
   EXPECT_EQ(exec_req->generated_tokens[0], 3);
 
   // Expecting 4,5,6 to be generated, draft_tokens is 4,5 and sampling result is 4,7,8, so accepted_token is null
   // because generated token 7 is rejected by structure generator, generated_tokens[0] is 4;
   // computing for draft token 4 is wasted.
   exec_req->sampling_result_tokens = {4, 7, 8};
-  exec_req->draft_tokens.mtp = {4, 5};
-  exec_req->forwarding_tokens_draft_num = 2;
+  exec_req->spec_state.draft_tokens.mtp = {4, 5};
+  exec_req->spec_state.forwarding_tokens_draft_num = 2;
   generation_controller_->UpdateGenerationState(reqs);
-  EXPECT_EQ(exec_req->accepted_tokens.size(), 0);
+  DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens.size(), 0);
   EXPECT_EQ(exec_req->generated_tokens[0], 4);
 
   // Expecting 5,6,7 to be generated, draft_tokens is 5,6 and sampling result is 5,6,7, so accepted_token is 5,6 because
   // 6,7 are accepted by structure generator, generated_tokens[0] is 7;
   exec_req->sampling_result_tokens = {5, 6, 7};
-  exec_req->draft_tokens.mtp = {5, 6};
-  exec_req->forwarding_tokens_draft_num = 2;
+  exec_req->spec_state.draft_tokens.mtp = {5, 6};
+  exec_req->spec_state.forwarding_tokens_draft_num = 2;
   generation_controller_->UpdateGenerationState(reqs);
-  EXPECT_EQ(exec_req->accepted_tokens.size(), 2);
-  EXPECT_EQ(exec_req->accepted_tokens[0], 5);
-  EXPECT_EQ(exec_req->accepted_tokens[1], 6);
+  DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens.size(), 2);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens[0], 5);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens[1], 6);
   EXPECT_EQ(exec_req->generated_tokens[0], 7);
 }
 
@@ -325,39 +332,97 @@ TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorFindJumpForwardToke
   EXPECT_FALSE(reasoner_generator->FindJumpForwardTokens(jump_tokens));
 }
 
-// Test: Clear stale draft_tokens when forwarding_tokens_draft_num == 0
-TEST_F(GenerationControllerTest, ClearStaleDraftTokensWhenNoDraftForwarded) {
+// After refactor, GenerationController::UpdateGenerationState no longer
+// clears stale draft_tokens — that responsibility has moved to
+// CompositeSpeculativeDecoder::HandlePostprocess.
+// Test that UpdateGenerationState leaves draft_tokens untouched.
+TEST_F(GenerationControllerTest, UpdateGenerationStateDoesNotTouchDraftTokens) {
   auto exec_req = CreateMockExecutorInferRequest(1);
   std::vector<std::shared_ptr<ExecutorInferRequest>> reqs = {exec_req};
 
-  // Simulate a split-fuse intermediate prefill step: draft_tokens are non-empty
-  // but forwarding_tokens_draft_num is 0 (no draft tokens were actually forwarded).
-  exec_req->draft_tokens.mtp = {10, 11};
-  exec_req->forwarding_tokens_draft_num = 0;
+  exec_req->spec_state.draft_tokens.mtp = {10, 11};
+  exec_req->spec_state.forwarding_tokens_draft_num = 0;
   exec_req->sampling_result_tokens = {1};
 
   generation_controller_->UpdateGenerationState(reqs);
 
-  // draft_tokens should be cleared because forwarding_tokens_draft_num == 0
-  EXPECT_EQ(exec_req->draft_tokens.size(), 0);
+  // draft_tokens should NOT be cleared by UpdateGenerationState anymore —
+  // that cleanup is now done in CompositeSpeculativeDecoder::HandlePostprocess
+  // before VerifyDraftTokens.
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.size(), 2);
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.mtp[0], 10);
 }
 
-// Test: Keep draft_tokens when forwarding_tokens_draft_num > 0
-TEST_F(GenerationControllerTest, KeepDraftTokensWhenDraftForwarded) {
+// After refactor: UpdateGenerationState no longer handles draft_tokens at all,
+// regardless of forwarding_tokens_draft_num. Test that draft_tokens are always
+// left intact by UpdateGenerationState.
+TEST_F(GenerationControllerTest, UpdateGenerationStateAlwaysPreservesDraftTokens) {
   auto exec_req = CreateMockExecutorInferRequest(1);
   std::vector<std::shared_ptr<ExecutorInferRequest>> reqs = {exec_req};
 
-  // Normal decode step with draft tokens actually forwarded.
-  exec_req->draft_tokens.mtp = {1};
-  exec_req->forwarding_tokens_draft_num = 1;
+  // draft_tokens present with forwarding active.
+  exec_req->spec_state.draft_tokens.mtp = {1};
+  exec_req->spec_state.forwarding_tokens_draft_num = 1;
   exec_req->sampling_result_tokens = {1, 2};
 
   generation_controller_->UpdateGenerationState(reqs);
 
-  // draft_tokens should NOT be cleared because forwarding_tokens_draft_num > 0
-  EXPECT_EQ(exec_req->draft_tokens.size(), 1);
+  // draft_tokens preserved (cleanup moved to HandlePostprocess).
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.size(), 1);
+
+  // After refactor, verification moves to composite decoder; simulate HandlePostprocess order.
+  DefaultFilterDraftTokens(exec_req);
   EXPECT_EQ(exec_req->generated_tokens[0], 2);
-  EXPECT_EQ(exec_req->accepted_tokens[0], 1);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens[0], 1);
+}
+
+// After refactor, stale draft_tokens clearing is done by
+// CompositeSpeculativeDecoder::HandlePostprocess (right after UpdateGenerationState,
+// before VerifyDraftTokens). UpdateGenerationState itself no longer clears draft_tokens.
+// Simulate the HandlePostprocess order: clear stale drafts → verify.
+TEST_F(GenerationControllerTest, VerifyAfterDraftCleanupOrder) {
+  auto exec_req = CreateMockExecutorInferRequest(1);
+  std::vector<std::shared_ptr<ExecutorInferRequest>> reqs = {exec_req};
+
+  exec_req->spec_state.draft_tokens.spec = {7, 8, 9};
+  exec_req->spec_state.forwarding_tokens_draft_num = 0;
+  exec_req->sampling_result_tokens = {42};
+
+  // Step 1: Explicitly clear stale drafts (simulates HandlePostprocess logic).
+  for (auto& req : reqs) {
+    if (req->spec_state.forwarding_tokens_draft_num == 0) {
+      req->spec_state.draft_tokens.clear();
+    }
+  }
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.size(), 0);
+
+  // Step 2: DefaultFilterDraftTokens afterwards — sizes match, no mismatch triggered.
+  size_t accepted = DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(accepted, 0);
+  EXPECT_TRUE(exec_req->sampling_result_tokens.empty());
+  EXPECT_EQ(exec_req->generated_tokens.size(), 1);
+  EXPECT_EQ(exec_req->generated_tokens[0], 42);
+}
+
+// Regression test: DefaultFilterDraftTokens with mismatched sizes (stale drafts
+// not cleared) triggers defensive mismatch check and returns hit=0.
+// This validates that clearing stale drafts BEFORE verification is critical —
+// a bug order (verify before clear) would produce this mismatch.
+TEST_F(GenerationControllerTest, DefaultFilterDraftTokensMismatch) {
+  auto exec_req = CreateMockExecutorInferRequest(1);
+
+  exec_req->spec_state.draft_tokens.spec = {7, 8, 9};
+  exec_req->spec_state.forwarding_tokens_draft_num = 0;
+  exec_req->sampling_result_tokens = {42};
+
+  // Call DefaultFilterDraftTokens WITHOUT first clearing stale drafts.
+  // This simulates the bug order: verify before clear.
+  // sampling_result_tokens.size()-1 (0) != draft_tokens.size() (3) → mismatch.
+  size_t accepted = DefaultFilterDraftTokens(exec_req);
+  EXPECT_EQ(accepted, 0);
+
+  // Drafts are intact (no clear + no accept).
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.spec.size(), 3);
 }
 
 }  // namespace ksana_llm

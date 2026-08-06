@@ -44,9 +44,10 @@ void ModelExecutor::SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManag
 Status ModelExecutor::Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                               std::shared_ptr<NewModelOutput> model_output) {
   model_output->schedule_output = model_input->schedule_output;
+  // Propagate run_mode so ModelSampler::Sampling can tell apart main-forward sampling from
+  // MTP/DSpark/speculative-forward sampling per call, instead of relying on a persisted request field.
   model_output->run_mode = model_input->run_mode;
   // 固化本步 logits_offset: fast path 下共享 ExecutorInferRequest 可能被下一 schedule 覆写,
-  // Sampling 阶段用此快照而非 live 字段 (slow path 下两者通常相同).
   model_output->frozen_logits_offsets.clear();
   model_output->frozen_logits_offsets.reserve(model_input->reqs.size());
   for (const auto& fr : model_input->reqs) {

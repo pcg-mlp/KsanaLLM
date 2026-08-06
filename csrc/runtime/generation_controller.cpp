@@ -101,38 +101,12 @@ void GenerationController::RemoveGenerator(int64_t req_id, std::vector<std::shar
 
 void GenerationController::UpdateGenerationState(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {
   UpdateStructuredGeneratorState(reqs);
-
-  // Clear stale draft_tokens left over from split-fuse intermediate prefill steps.
-  for (auto& req : reqs) {
-    if (req->forwarding_tokens_draft_num == 0) {
-      req->draft_tokens.clear();
-    }
-  }
-
-  // Filter draft tokens from both structured generation and PTP
-  if (draft_generator_controller_) {
-    draft_generator_controller_->FilterDraftTokens(reqs);
-  } else {
-    // Fallback to structured generator draft token filtering only
-    FilterGeneratorDraftTokens(reqs);
-  }
-}
-
-void GenerationController::SetDraftGeneratorController(
-    std::shared_ptr<DraftGeneratorController> draft_generator_controller) {
-  draft_generator_controller_ = draft_generator_controller;
+  // Stale draft_tokens cleanup has been moved to CompositeSpeculativeDecoder::HandlePostprocess.
 }
 
 void GenerationController::SetStructuredGeneratorFactory(
     std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory) {
   structured_generator_factory_ = structured_generator_factory;
-}
-
-Status GenerationController::GenerateDraft(std::shared_ptr<ExecutorInferRequest> req) {
-  if (draft_generator_controller_) {
-    return draft_generator_controller_->GenerateDraft(req);
-  }
-  return Status();
 }
 
 // Update structured generator state after sampling
@@ -152,119 +126,6 @@ void GenerationController::UpdateStructuredGeneratorState(std::vector<std::share
       KLLM_LOG_WARNING << "Structured generator rejected token " << token_id << " for req_id " << req->req_id;
     }
   }
-}
-
-void GenerationController::FilterGeneratorDraftTokens(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {
-  std::vector<std::pair<size_t, size_t>> hit_count;  // hit_num, draft_num
-  for (auto& req : reqs) {
-    req->accepted_tokens.clear();
-    if (req->sampling_result_tokens.size() - kStepGenerateTokenNum != req->draft_tokens.size() &&
-        req->logits_custom_length == 0) {
-      KLLM_LOG_ERROR << fmt::format(
-          "req {} sampling_result_tokens.size = {}, mtp_draft_tokens.size = {}, spec_draft_tokens.size = {}",
-          req->req_id, req->sampling_result_tokens.size(), req->draft_tokens.mtp.size(), req->draft_tokens.spec.size());
-      continue;
-    }
-    // Check which tokens are predicted correctly.
-    size_t draft_hit_num = 0;
-    std::vector<int> draft_tokens = req->draft_tokens.GetDraftTokens();
-    for (size_t i = 0; i < draft_tokens.size(); ++i, ++draft_hit_num) {
-      if (req->sampling_result_tokens[i] != draft_tokens[i]) {
-        break;
-      }
-      // Structured constraint check for the new generated token
-      if (req->structured_generator) {
-        if (req->structured_generator->IsTerminated()) {
-          KLLM_LOG_DEBUG << "Structured generator terminated for req_id " << req->req_id
-                         << ", stopping draft token acceptance";
-          break;
-        }
-
-        const int new_token = req->sampling_result_tokens[i + 1];
-        if (!req->structured_generator->AcceptToken(new_token)) {
-          KLLM_LOG_DEBUG << "Structured constraint rejected new_token " << new_token << " for request " << req->req_id
-                         << ", will not use it as generated_token";
-          break;
-        }
-      }
-
-      // stop if stop token
-      if (std::find(req->sampling_config.stop_token_ids.begin(), req->sampling_config.stop_token_ids.end(),
-                    draft_tokens[i]) != req->sampling_config.stop_token_ids.end()) {
-        break;
-      }
-    }
-
-    hit_count.resize(std::max(req->draft_tokens.size(), hit_count.size()));
-    for (size_t i = 0; i < req->draft_tokens.size(); ++i) {
-      auto& [hit_num, draft_num] = hit_count[i];
-      ++draft_num;
-      if (i < draft_hit_num) {
-        ++hit_num;
-      }
-    }
-
-    req->accepted_tokens.swap(draft_tokens);
-    req->accepted_tokens.resize(draft_hit_num);
-    // Delete logprobs of tokens that were not accepted.
-    size_t unaccepted_num =
-        draft_tokens.size() > 0 ? req->sampling_result_tokens.size() - kStepGenerateTokenNum - draft_hit_num : 0;
-    for (size_t i = 0; i < unaccepted_num; ++i) {
-      if (!req->logprobs.empty()) req->logprobs.pop_back();
-    }
-    // replace generated_token with draft token's next token
-    req->generated_tokens.clear();
-    req->generated_tokens.push_back(req->sampling_result_tokens[draft_hit_num]);
-    req->sampling_result_tokens.clear();
-  }
-
-  if (hit_count.empty()) {
-    return;
-  }
-
-  size_t total_hit_num = 0, total_draft_num = 0;
-  for (size_t i = 0; i < hit_count.size(); ++i) {
-    const auto& [hit_num, draft_num] = hit_count[i];
-    KLLM_LOG_DEBUG << fmt::format("Draft index {} hit rate: {} / {}", i, hit_num, draft_num);
-    total_hit_num += hit_num;
-    total_draft_num += draft_num;
-  }
-
-  // Accumulate per-position stats across calls so the periodic INFO log reflects
-  // the entire report interval rather than a single batch.
-  static std::vector<std::pair<size_t, size_t>> accumulated_hit_count;
-  if (accumulated_hit_count.size() < hit_count.size()) {
-    accumulated_hit_count.resize(hit_count.size());
-  }
-  for (size_t i = 0; i < hit_count.size(); ++i) {
-    accumulated_hit_count[i].first += hit_count[i].first;
-    accumulated_hit_count[i].second += hit_count[i].second;
-  }
-
-  // Log every 10 seconds
-  constexpr size_t kReportIntervalMs = 10000;
-  static IntervalLogger interval_logger(kReportIntervalMs);
-  if (interval_logger.ShouldLog()) {
-    size_t agg_hit = 0, agg_draft = 0;
-    std::string per_index_str;
-    for (const auto& [hit_num, draft_num] : accumulated_hit_count) {
-      agg_hit += hit_num;
-      agg_draft += draft_num;
-      if (!per_index_str.empty()) per_index_str += ", ";
-      per_index_str += fmt::format("{:.1f}%", draft_num > 0 ? hit_num * 100.f / draft_num : 0.f);
-    }
-    KLLM_LOG_INFO << fmt::format(
-      "Draft hit rate: {:.1f}%, Hit tokens: {}, "
-      "Draft tokens: {}; Per draft token hit rate: [{}]",
-      agg_draft > 0 ? agg_hit * 100.f / agg_draft : 0.f,
-      agg_hit,
-      agg_draft,
-      per_index_str);
-    accumulated_hit_count.clear();
-  }
-  // Report
-  REPORT_METRIC("spec_draft_hit_num", total_hit_num);
-  REPORT_METRIC("spec_draft_token_num", total_draft_num);
 }
 
 }  // namespace ksana_llm

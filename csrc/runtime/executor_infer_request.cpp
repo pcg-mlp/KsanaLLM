@@ -39,10 +39,12 @@ std::string ExecutorInferRequest::ToString(bool print_details) const {
   oss << " req(req_id:" << req_id << ", step:" << step << ", sampling_token_num:" << sampling_token_num
       << ", kv_cached_token_num:" << kv_cached_token_num << ", prefix_cache_len:" << prefix_cache_len
       << ", input_tokens_size:" << input_tokens.size() << ", output_tokens_size:" << output_tokens.size()
-      << ", forwarding_tokens_size:" << forwarding_tokens.size() << ", draft_tokens_size:" << draft_tokens.size()
-      << ", accepted_tokens_size:" << accepted_tokens.size() << ", generated_token_size:" << generated_tokens.size()
-      << PrintKVBlockIds(print_details) << ", finished:" << finished << ", aborted:" << aborted
-      << ", finish_status:" << finish_status.ToString() << " ) ";
+      << ", forwarding_tokens_size:" << forwarding_tokens.size()
+      << ", draft_tokens_size:" << spec_state.draft_tokens.size()
+      << ", accepted_tokens_size:" << spec_state.accepted_tokens.size()
+      << ", generated_token_size:" << generated_tokens.size() << PrintKVBlockIds(print_details)
+      << ", finished:" << finished << ", aborted:" << aborted << ", finish_status:" << finish_status.ToString()
+      << " ) ";
   return oss.str();
 }
 
@@ -102,8 +104,8 @@ void ExecutorInferRequest::NotifyStep() {
 
 std::vector<int> ExecutorInferRequest::GetVerifiedTokens() {
   std::vector<int> tokens = forwarding_tokens;
-  tokens.resize(forwarding_tokens.size() - forwarding_tokens_draft_num);
-  tokens.insert(tokens.end(), accepted_tokens.begin(), accepted_tokens.end());
+  tokens.resize(forwarding_tokens.size() - spec_state.forwarding_tokens_draft_num);
+  tokens.insert(tokens.end(), spec_state.accepted_tokens.begin(), spec_state.accepted_tokens.end());
   tokens.insert(tokens.end(), generated_tokens.begin(), generated_tokens.end());
   return tokens;
 }

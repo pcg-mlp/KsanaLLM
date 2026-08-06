@@ -26,7 +26,7 @@ void ExecutorRequestManager::UpdateInferRequest(int64_t req_id, std::shared_ptr<
   size_t forwarding_tokens_offset = infer_req_patch->forwarding_tokens_offset;
   executor_request.infer_request->infer_stage = infer_req_patch->infer_stage;
   executor_request.infer_request->step = infer_req_patch->step;
-  executor_request.infer_request->forwarding_tokens_draft_num = infer_req_patch->forwarding_tokens_draft_num;
+  executor_request.infer_request->spec_state.forwarding_tokens_draft_num = infer_req_patch->forwarding_tokens_draft_num;
   executor_request.infer_request->kv_cached_token_num = infer_req_patch->kv_cached_token_num;
   executor_request.infer_request->kv_from_remote = infer_req_patch->kv_from_remote;
   executor_request.infer_request->prefix_cache_len = infer_req_patch->prefix_cache_len;

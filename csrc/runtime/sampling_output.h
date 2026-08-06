@@ -6,10 +6,10 @@
 #include <memory>
 #include <vector>
 
-#include "runtime/draft_generator/draft_tokens.h"
 #include "runtime/profile_metrics.h"
 #include "runtime/sampling_request.h"
 #include "runtime/schedule_output.h"
+#include "runtime/speculative/common/draft_tokens.h"
 #include "utils/logger.h"
 
 namespace ksana_llm {

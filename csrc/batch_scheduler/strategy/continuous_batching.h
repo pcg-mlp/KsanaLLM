@@ -5,6 +5,7 @@
 
 #include "batch_scheduler/strategy/base_strategy.h"
 #include "runtime/request_state.h"
+#include "runtime/speculative/common/spec_scheduling_info.h"
 #include "utils/status.h"
 
 namespace ksana_llm {
@@ -91,6 +92,11 @@ class ContinuousBatchingStrategy : public BaseScheduleStrategy {
 
  private:
   size_t GetMaxRequiredTokenNum(const size_t token_num) const;
+
+  // Aggregate speculative scheduling info from all sources.
+  // In Step 1, constructs from RuntimeConfig + BatchSchedulerConfig.
+  // After Step 3, aggregates from registered speculative decoders.
+  SpecSchedulingInfo GetAggregatedSchedulingInfo() const;
 
   void ReportRequestProgressInfo(const std::shared_ptr<InferRequest> req);
 

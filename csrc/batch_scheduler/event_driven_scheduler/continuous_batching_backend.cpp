@@ -16,10 +16,14 @@
 
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/request_finish_checker.h"
+#include "configure/environment.h"
 #include "configure/schedule_config_parser.h"
 #include "profiler/reporter.h"
 #include "runtime/schedule_output.h"
+#include "runtime/speculative/common/spec_scheduling_info.h"
+#include "runtime/speculative/common/speculative_resource_profile.h"
 #include "utils/ret_code.h"
+#include "utils/singleton.h"
 
 namespace ksana_llm {
 
@@ -47,8 +51,8 @@ void EmitEventOnce(ScheduleBackendEventType type, size_t dp_idx, const std::shar
   events.push_back(std::move(event));
 }
 
-size_t GetMaxRequiredTokenNum(size_t token_num, size_t mtp_step_num) {
-  return token_num + mtp_step_num - std::min(mtp_step_num, static_cast<size_t>(1));
+size_t GetMaxRequiredTokenNum(size_t token_num, const SpecSchedulingInfo& info) {
+  return token_num + info.extra_token_capacity;
 }
 
 bool IsDpBatchFull(const DpBatch& dp_batch, const BatchSchedulerConfig& config) {
@@ -61,6 +65,26 @@ bool IsDpBatchFull(const DpBatch& dp_batch, const BatchSchedulerConfig& config) 
 ContinuousBatchingBackend::ContinuousBatchingBackend(const BatchSchedulerConfig& batch_scheduler_config)
     : ScheduleBackendInterface(batch_scheduler_config) {
   KLLM_CHECK(batch_scheduler_config.max_pp_batch_num > 0);
+}
+
+SpecSchedulingInfo ContinuousBatchingBackend::GetAggregatedSchedulingInfo() const {
+  SpecSchedulingInfo info;
+  // Speculative resources from registered decoder profiles.
+  auto spec_profile = SpeculativeRegistry::Get().Aggregate(batch_scheduler_config_);
+
+  info.extra_kv_tokens = static_cast<size_t>(spec_profile.workload_multiplier);
+  info.extra_token_capacity = spec_profile.extra_token_capacity;
+  info.workload_multiplier = static_cast<size_t>(spec_profile.workload_multiplier);
+
+  // Compatibility guard: incompatible speculative decoders detected via config.
+  // Runtime enforcement via CompositeSpeculativeDecoder::AreAllCompatible().
+  if (batch_scheduler_config_.mtp_step_num > 0 && batch_scheduler_config_.ptp_step_num > 0) {
+    KLLM_LOG_WARNING << "Incompatible speculative decoders detected; "
+                     << "speculative resource requirements will be limited. "
+                     << "This will be enforced by CompositeSpeculativeDecoder at runtime.";
+    info.workload_multiplier = batch_scheduler_config_.mtp_step_num;
+  }
+  return info;
 }
 
 void ContinuousBatchingBackend::Schedule(const ScheduleContext& context,
@@ -249,7 +273,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
         continue;
       }
 
-      EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
+      EstimateRequestPlanningWorkload(req, GetAggregatedSchedulingInfo().workload_multiplier);
 
       agg.has_schedulable_req = true;
       // pd_v2: 允许 kv_from_remote 也就是正在进行decode的请求成为抢占候选。Decode 侧请求都会带 kv_from_remote=true，
@@ -258,9 +282,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       }
 
       const size_t max_required_token_num =
-          GetMaxRequiredTokenNum(req->GetPlanningSequenceLen(), batch_scheduler_config_.mtp_step_num);
+          GetMaxRequiredTokenNum(req->GetPlanningSequenceLen(), GetAggregatedSchedulingInfo());
       const size_t step_query_token_num =
-          GetMaxRequiredTokenNum(req->GetPlanningQueryLen(), batch_scheduler_config_.mtp_step_num);
+          GetMaxRequiredTokenNum(req->GetPlanningQueryLen(), GetAggregatedSchedulingInfo());
       // decode 一步只算 per-step query (sampling + draft ≈ 3 token), 全局与 per-dp 检查同单位,
       // 故两个参数都传 step_query_token_num。
       const bool request_acceptable = workload_balancer_->IsRequestAcceptable(
@@ -333,8 +357,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       if (!prefill_req->kv_cache_blocks.empty()) {
         recompute_candidate = prefill_req;
         KLLM_LOG_INFO << "Recompute prefilling request for blocked Decode. req_id=" << prefill_req->req_id
-                      << ", dp_idx=" << dp_idx
-                      << ", kv_cache_blocks=" << prefill_req->kv_cache_blocks.size();
+                      << ", dp_idx=" << dp_idx << ", kv_cache_blocks=" << prefill_req->kv_cache_blocks.size();
         break;
       }
     }
@@ -430,7 +453,7 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
+      EstimateRequestPlanningWorkload(req, GetAggregatedSchedulingInfo().workload_multiplier);
       agg.has_schedulable_req = true;
 
       bool is_first_prefill_step = true;
@@ -504,10 +527,10 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      // mtp_step_num 单独透传给 cache_manager，统一处理 next-sampler 与 MTP lookahead 的 block 预留。
-      // 这样 hook fast-path 与 backend fallback 共享同一套 block 计数逻辑，避免 pd_v2 dispatcher 两侧不一致。
-      req_step_block_num =
-          cache_manager->GetRequestStepBlockNumber(req->req_id, seq_token_num, batch_scheduler_config_.mtp_step_num);
+      // Account for user-provided draft tokens (e.g., ASR custom) not counted in
+      // seq_token_num, plus MTP/DSpark extra KV tokens from aggregated scheduling info.
+      req_step_block_num = cache_manager->GetRequestStepBlockNumber(
+          req->req_id, seq_token_num + req->draft_tokens.spec.size() + GetAggregatedSchedulingInfo().extra_kv_tokens);
 
       const size_t launch_block_threshold =
           static_cast<size_t>(std::ceil(dp_batch.running_reqs.size() * batch_scheduler_config_.launch_block_threshold));

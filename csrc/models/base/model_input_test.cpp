@@ -21,6 +21,7 @@
 #include "models/base/attention_meta/mla_attention_meta_builder.h"
 #include "models/base/attention_meta/paged_attention_meta_builder.h"
 #include "models/base/model_input.h"
+#include "runtime/speculative/mtp/mtp_gather_index_builder.h"
 #include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta.h"
 #include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 #include "tests/test.h"
@@ -44,16 +45,16 @@ class ModelInputTest : public testing::Test {
     env->ParseConfig(config_path);
 
     // Initialize the context with global and device contexts
-    auto context = std::make_shared<Context>();
-    context->global.reset(new GlobalContext(1, 1, 1, env));
-    context->global->InitDistributedConfig();
+    context_ = std::make_shared<Context>();
+    context_->global.reset(new GlobalContext(1, 1, 1, env));
+    context_->global->InitDistributedConfig();
 
 #ifdef ENABLE_CUDA
     ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
-    context->device = std::make_shared<DeviceContext>(1);
-    context->device->ext->InitNcclParam(nccl_uid);
+    context_->device = std::make_shared<DeviceContext>(1);
+    context_->device->ext->InitNcclParam(nccl_uid);
 #else
-    context->device = std::make_shared<DeviceContext>(1);
+    context_->device = std::make_shared<DeviceContext>(1);
 #endif
 
     // Initialize the model config
@@ -92,7 +93,7 @@ class ModelInputTest : public testing::Test {
     env->schedule_config_parser_.runtime_config_ = runtime_config;
 
     // Initialize the model input object.
-    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context, block_cache_layout);
+    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context_, block_cache_layout);
 
     // When the model uses MLA / DSA, inject the DeepSeekV3-specific creator so that the
     // corresponding shared attention tensors (tile_scheduler_metadatas, num_splits, etc.)
@@ -126,6 +127,7 @@ class ModelInputTest : public testing::Test {
   }
 
  protected:
+  std::shared_ptr<Context> context_;
   std::unique_ptr<ModelInput> model_input;
 };
 
@@ -451,26 +453,32 @@ TEST_F(ModelInputTest, PrepareNextNGatherIdxTest) {
     forward_reqs[i].req_id = i;
   }
 
-  model_input->mtp_req_id_to_pos_.clear();
   model_input->runtime_config_.mtp_step_num = 1;
   model_input->model_config_.dspark_config.dspark_block_size = 0;
-  model_input->builder_config_->run_mode = RunMode::kMain;
-  model_input->PrepareNextNGatherIdx(forward_reqs);
 
-  EXPECT_EQ(model_input->mtp_req_id_to_pos_.size(), forward_reqs.size());
+  // Use MtpGatherIndexBuilder to exercise the current gather index pipeline.
+  // The builder is the replacement for the old PrepareNextNGatherIdx logic:
+  // - UpdateMainForward records each request's start position
+  // - BuildGatherIndices generates the gather tensor from those positions
+  const size_t max_token_num = kReqNum * kMaxReqLen;
+  MtpGatherIndexBuilder builder(max_token_num, context_, /*rank=*/0);
+  model_input->SetExternalGatherIdxBuilder(&builder);
+
+  model_input->builder_config_->run_mode = RunMode::kMain;
+  builder.UpdateMainForward(forward_reqs);
+
   size_t total_len = 0;
   for (size_t i = 0; i < forward_reqs.size(); ++i) {
-    EXPECT_EQ(total_len, model_input->mtp_req_id_to_pos_[forward_reqs[i].req_id]);
     total_len += forward_reqs[i].forwarding_tokens->size() - forward_reqs[i].kv_cached_token_num;
   }
 
   model_input->builder_config_->run_mode = RunMode::kNextN;
-  model_input->PrepareNextNGatherIdx(forward_reqs);
-  EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape.size(), 1);
-  EXPECT_EQ(model_input->nextn_hidden_idx_uint64_tensor.shape[0], total_len);
+  builder.BuildGatherIndices(forward_reqs);
+  EXPECT_EQ(builder.GetGatherTensor()->shape.size(), 1);
+  EXPECT_EQ(builder.GetGatherTensor()->shape[0], total_len);
 
   std::vector<size_t> host_idx_result(total_len);
-  Memcpy(host_idx_result.data(), model_input->nextn_hidden_idx_uint64_tensor.GetPtr<void>(), total_len * sizeof(size_t),
+  Memcpy(host_idx_result.data(), builder.GetGatherTensor()->GetPtr<void>(), total_len * sizeof(size_t),
          MEMCPY_DEVICE_TO_HOST);
   size_t result_i = 0, counter_i = 0;
   for (size_t i = 0; i < forward_reqs.size(); ++i) {

@@ -35,7 +35,7 @@ class QwenEmbeddingModel : public CommonModel {
   Status CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) override;
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
   Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) override;
+                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode = RunMode::kMain) override;
 
   // Copy embedding result into forward request response PythonTensor.
   void UpdateEmbeddingResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output);

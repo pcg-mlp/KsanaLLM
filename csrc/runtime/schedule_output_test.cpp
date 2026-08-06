@@ -203,9 +203,9 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->mrotary_embedding_pos_offset, full_req->mrotary_embedding_pos_offset);
   EXPECT_EQ(exec_req->xdrotary_embedding_pos_offset, full_req->xdrotary_embedding_pos_offset);
   EXPECT_EQ(exec_req->output_tokens, full_req->output_tokens);
-  EXPECT_EQ(exec_req->draft_tokens.mtp, full_req->draft_tokens.mtp);
-  EXPECT_EQ(exec_req->accepted_tokens, full_req->accepted_tokens);
-  EXPECT_EQ(exec_req->forwarding_tokens_draft_num, full_req->forwarding_tokens_draft_num);
+  EXPECT_EQ(exec_req->spec_state.draft_tokens.mtp, full_req->draft_tokens.mtp);
+  EXPECT_EQ(exec_req->spec_state.accepted_tokens, full_req->accepted_tokens);
+  EXPECT_EQ(exec_req->spec_state.forwarding_tokens_draft_num, full_req->forwarding_tokens_draft_num);
   EXPECT_EQ(exec_req->generated_tokens, full_req->generated_tokens);
   EXPECT_EQ(exec_req->forwarding_tokens, full_req->forwarding_tokens);
   EXPECT_EQ(exec_req->sampling_result_tokens, full_req->sampling_result_tokens);

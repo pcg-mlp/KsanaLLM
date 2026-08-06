@@ -21,8 +21,10 @@
 #include "layers/paged_attention_layer.h"
 #include "layers/silu_mul_layer.h"
 #include "models/base/base_model.h"
+#include "models/base/draft_model_interface.h"
 #include "models/base/forwarding_context.h"
 #include "models/base/model_communicator.h"
+#include "models/base/model_delegate.h"
 #include "models/base/model_input.h"
 #include "models/base/model_output.h"
 #include "models/common_moe/moe_config.h"
@@ -66,7 +68,7 @@ struct ModelRunConfig {
 };
 
 // A common implement
-class CommonModel : public BaseModel {
+class CommonModel : public BaseModel, public ModelDelegate {
  public:
   CommonModel(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
               std::shared_ptr<Context> context);
@@ -96,6 +98,18 @@ class CommonModel : public BaseModel {
   // Propagate inflight resource manager reference down to ForwardingContext.
   void SetInflightResourceManager(InflightResourceManager* mgr) override;
 
+  // --- ModelDelegate interface ---
+  ForwardingContext* GetForwardingContext() override;
+  void SaveNextStepHiddenBuffer(ForwardingContext& forwarding_context) override;
+  void SaveNextStepNormedHiddenBuffer(ForwardingContext& forwarding_context) override;
+  Status LmHeadPost(ForwardingContext& forwarding_context, std::shared_ptr<BaseWeight>& base_weight,
+                    std::vector<ForwardRequest>& forward_reqs, bool assemble_already_done,
+                    std::vector<Tensor>& hidden_buffer_tensors_0) override;
+  // --- End ModelDelegate ---
+
+  // Expose the draft model for MtpDecoder creation in InferenceExecutor.
+  DraftModelInterface* GetDraftModel() const { return draft_model_.get(); }
+
   // 设置/清除 ForwardingContext 中的 ProfileMetrics 及当前子 metrics 指针。
   void SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) override;
 
@@ -118,8 +132,8 @@ class CommonModel : public BaseModel {
 
  protected:
   // Get tensors hidden buffer.
-  std::vector<Tensor>& GetHiddenUnitBufferTensors(ForwardingContext& forwarding_context);
-  void SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidden_unit);
+  std::vector<Tensor>& GetHiddenUnitBufferTensors(ForwardingContext& forwarding_context) override;
+  void SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidden_unit) override;
 
  public:
   using BaseModel::context_;
@@ -199,7 +213,7 @@ class CommonModel : public BaseModel {
   Status EmbedTokensUseCpu(Tensor& embedding_weight, std::vector<ForwardRequest>& forward_reqs,
                            ForwardingContext& forwarding_context);
 
-  virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context);
+  virtual Status EmbedTokensUseGpu(Tensor& embedding_weight, ForwardingContext& forwarding_context) override;
 
   // Only set by required models
   std::unique_ptr<Mhc> initial_mhc_;
@@ -209,6 +223,7 @@ class CommonModel : public BaseModel {
   // When set, LmHead uses these for non-main run modes (MTP/DSpark) instead of final_mhc_/lm_head_prenorm_.
   std::unique_ptr<Mhc> nextn_final_mhc_;
   std::unique_ptr<Layernorm> nextn_shared_head_norm_;
+  std::unique_ptr<DraftModelInterface> draft_model_;
 };
 
 }  // namespace ksana_llm

@@ -465,19 +465,19 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     DeserializeVector<int>(req->output_tokens, ptr, offset);
 
     // draft_tokens
-    DeserializeVector<int>(req->draft_tokens.mtp, ptr, offset);
-    DeserializeVector<int>(req->draft_tokens.spec, ptr, offset);
-    DeserializeVector<int>(req->draft_tokens.ptp, ptr, offset);
+    DeserializeVector<int>(req->spec_state.draft_tokens.mtp, ptr, offset);
+    DeserializeVector<int>(req->spec_state.draft_tokens.spec, ptr, offset);
+    DeserializeVector<int>(req->spec_state.draft_tokens.ptp, ptr, offset);
 
     // accepted_hidden_states, not supported.
 
     // suggested_draft_num, not supported.
 
     // accepted_tokens
-    DeserializeVector<int>(req->accepted_tokens, ptr, offset);
+    DeserializeVector<int>(req->spec_state.accepted_tokens, ptr, offset);
 
     // forwarding_tokens_draft_num
-    req->forwarding_tokens_draft_num = DeserializePod<int64_t>(ptr, offset);
+    req->spec_state.forwarding_tokens_draft_num = DeserializePod<int64_t>(ptr, offset);
 
     // generated_tokens
     DeserializeVector<int>(req->generated_tokens, ptr, offset);

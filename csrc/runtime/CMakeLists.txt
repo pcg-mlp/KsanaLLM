@@ -27,7 +27,10 @@ message(STATUS "runtime_test_SRCS: ${runtime_test_SRCS}")
 #cpp_test(runtime_test SRCS ${runtime_test_SRCS} DEPS runtime)
 
 file(GLOB_RECURSE draft_generator_test_SRCS
-  ${PROJECT_SOURCE_DIR}/csrc/runtime/draft_generator/*_test.cpp)
+  ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/ptp/*_test.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/trie/*_test.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/asr/*_test.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/dspark/dspark_decoder_test.cpp)
 cpp_test(draft_generator_test SRCS ${draft_generator_test_SRCS})
 
 if (WITH_CUDA)
@@ -43,6 +46,20 @@ cpp_test(sampling_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/sampling_o
 cpp_test(infer_request_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/infer_request_test.cpp DEPS ${MODELS_TEST_DEPS} ipc LIBS ${MODELS_TEST_LIBS})
 
 cpp_test(profile_metrics_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/profile_metrics_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(speculative_resource_profile_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/orchestration/speculative_resource_profile_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(composite_speculative_decoder_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/orchestration/composite_speculative_decoder_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(ptp_decoder_adapter_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/ptp/ptp_decoder_adapter_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(trie_decoder_adapter_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/trie/trie_decoder_adapter_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(asr_decoder_adapter_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/asr/asr_decoder_adapter_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(mtp_decoder_adapter_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/mtp/mtp_decoder_adapter_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(dspark_decoder_adapter_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/dspark/dspark_decoder_adapter_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
 # Fast-path controller 启动 check 单测。
 # 虽然 controller 自身只依赖配置层 + ScheduleOutput 头, 但 runtime 库引入了 executor/layer_progress_tracker

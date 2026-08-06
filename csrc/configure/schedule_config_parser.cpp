@@ -13,6 +13,7 @@
 #include "gflags/gflags.h"
 
 #include "configure/environment.h"
+#include "runtime/speculative/common/speculative_resource_profile.h"
 #include "utils/memory_utils.h"
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
@@ -291,8 +292,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
     if (batch_scheduler_config_.speculative_method.empty()) {
       // Use trie by default
       batch_scheduler_config_.speculative_method = "trie";
-    } else if (batch_scheduler_config_.speculative_method != "trie" &&
-               batch_scheduler_config_.speculative_method != "asr_custom") {
+    } else if (!SpeculativeRegistry::Get().HasDecoderMethod(batch_scheduler_config_.speculative_method)) {
       KLLM_LOG_WARNING << fmt::format("Unknown speculative_method: {}, disable speculative decoding.",
                                       batch_scheduler_config_.speculative_method);
       batch_scheduler_config_.enable_speculative_decoding = false;
@@ -308,18 +308,21 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   batch_scheduler_config_.ptp_step_num = model_config.ptp_step_num;
   batch_scheduler_config_.ptp_token_id = model_config.ptp_token_id;
 
+  // Parse generic speculative config key-value pairs for method-specific parameters.
+  {
+    auto spec_cfg = yaml_reader.GetMap(yaml_reader.GetRootNode(), "setting.batch_scheduler.speculative_config");
+    for (auto it = spec_cfg.begin(); it != spec_cfg.end(); ++it) {
+      const std::string &key = it->first.as<std::string>();
+      const std::string &value = it->second.as<std::string>();
+      batch_scheduler_config_.speculative_config[key] = value;
+    }
+  }
+
   if (model_config.num_nextn_predict_layers == 0 && batch_scheduler_config_.mtp_step_num != 0) {
     batch_scheduler_config_.mtp_step_num = 0;
     KLLM_LOG_WARNING << "There is no MTP layer in the model, mtp_step_num will be set to 0.";
   }
-  if (batch_scheduler_config_.mtp_step_num > 0 && batch_scheduler_config_.ptp_step_num > 0) {
-    batch_scheduler_config_.ptp_step_num = 0;
-    KLLM_LOG_WARNING << "MTP and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
-  }
-  if (batch_scheduler_config_.enable_speculative_decoding && batch_scheduler_config_.ptp_step_num > 0) {
-    batch_scheduler_config_.ptp_step_num = 0;
-    KLLM_LOG_WARNING << "Speculative decoding and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
-  }
+
   KLLM_LOG_INFO << "mtp_step_num: " << batch_scheduler_config_.mtp_step_num
                 << ", model MTP layer: " << model_config.num_nextn_predict_layers;
 
@@ -353,10 +356,11 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
 
   KLLM_CHECK_WITH_INFO(batch_scheduler_config_.max_pp_batch_num > 0, "max_multi_batch_size should be bigger than 0");
 
-  // When MTP/PTP is enabled, each request requires calculating more tokens while decoding.
-  // PTP in steady state has ptp_step_num verify tokens + ptp_step_num placeholder tokens + 1 generated token.
-  batch_scheduler_config_.max_decode_tokens_per_req =
-      batch_scheduler_config_.mtp_step_num + 2 * batch_scheduler_config_.ptp_step_num + 1;
+  // Aggregate speculative resource profiles from registered decoders.
+  // Speculative decoder adapters register their resource profiles; the parser
+  // aggregates them without knowing the specific speculative method.
+  auto spec_profile = SpeculativeRegistry::Get().Aggregate(batch_scheduler_config_);
+  batch_scheduler_config_.max_decode_tokens_per_req = 1 + spec_profile.extra_decode_tokens_per_req;
 
   if (std::getenv("ENABLE_O_PROJ_OUT_OF_DP") != nullptr) {
     KLLM_CHECK_WITH_INFO(runtime_config_.parallel_basic_config.attn_tensor_parallel_size == 1,

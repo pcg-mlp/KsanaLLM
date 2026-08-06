@@ -7,6 +7,7 @@
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "models/communicator/tp_communicator.h"
+#include "models/glm4_moe/glm4_moe_mtp_draft_model.h"
 #include "modules/attention/multihead_attention.h"
 #include "modules/basic/linear.h"
 #include "modules/basic/moe.h"
@@ -107,10 +108,14 @@ class Glm4MoeModel : public CommonModel {
 
   // MTP (Multi-Token Prediction) support
   std::unordered_map<int, std::shared_ptr<Glm4MoeMtpLayer>> nextn_layers_;
+  std::unique_ptr<Glm4MoeMtpDraftModel> draft_model_{nullptr};
   // Each MTP "step" uses exactly one decoder layer. If future models require multiple
   // decoder layers per MTP step, this constant should be updated accordingly.
   static constexpr size_t kNextnDecoderLayerNum = 1;
   int16_t nextn_layer_idx_ = -1;
+
+  // next-step hidden buffer for MTP (owned by model, injected into ForwardingBuffers).
+  std::vector<Tensor> next_step_hidden_tensors_;
 };
 
 }  // namespace ksana_llm

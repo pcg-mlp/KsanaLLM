@@ -11,6 +11,7 @@
 #include "runtime/model_output.h"
 #include "runtime/sampling_output.h"
 #include "runtime/schedule_output.h"
+#include "runtime/speculative/orchestration/composite_speculative_decoder.h"
 #include "runtime/weight_instance_inferface.h"
 #include "utils/blocking_queue.h"
 
@@ -31,7 +32,7 @@ class ModelRunner {
   void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
   void SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> sampling_output_pool);
-  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
+  void SetCompositeSpeculativeDecoder(std::shared_ptr<CompositeSpeculativeDecoder> decoder);
   void SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker);
 
   // Start runner, all worker threads should be ready.
@@ -80,10 +81,6 @@ class ModelRunner {
 
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;
 
-  const size_t mtp_step_num_;
-  const size_t dspark_block_size_;
-  const int dspark_noise_token_id_;
-
  private:
   // Read schedule_output and build model input.
   std::thread preprocess_thread_;
@@ -119,6 +116,9 @@ class ModelRunner {
   // build-ahead 启用时每步 cur_ring_slot_ ^= 1u（0/1 交替），上一步写入 slot 为 cur_slot ^ 1u；
   // 不依赖 batch 是否同构或本步是否做替换（req_id 解耦，prefill/decode 混合一视同仁）。
   size_t cur_ring_slot_ = 0;
+
+  // Composite speculative decoder (unified interface for all speculative methods).
+  std::shared_ptr<CompositeSpeculativeDecoder> composite_decoder_ = nullptr;
 };
 
 }  // namespace ksana_llm

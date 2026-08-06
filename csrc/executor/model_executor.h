@@ -20,6 +20,9 @@ class ModelExecutor {
   void SetModelWeight(std::shared_ptr<WeightInstanceInterface> model_weight);
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
 
+  std::shared_ptr<ModelInstance> GetModelInstance() const { return model_instance_; }
+  std::shared_ptr<WeightInstanceInterface> GetModelWeight() const { return model_weight_; }
+
  private:
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<WeightInstanceInterface> model_weight_ = nullptr;

@@ -21,7 +21,8 @@ class DeepSeekV4DSparkLayer {
  public:
   DeepSeekV4DSparkLayer(const int layer_idx, LayerCreationContext& creation_context,
                         ModelCreationConfig& model_creation_config,
-                        std::shared_ptr<DeepSeekV4DecoderLayer> decoder_layer, bool is_embed_layer = false);
+                        std::shared_ptr<DeepSeekV4DecoderLayer> decoder_layer, bool is_embed_layer,
+                        Tensor* dspark_hidden_buffer = nullptr);
 
   ~DeepSeekV4DSparkLayer() = default;
 
@@ -50,6 +51,9 @@ class DeepSeekV4DSparkLayer {
 
   std::unique_ptr<DSparkLayer> dspark_layer_;
   std::shared_ptr<DeepSeekV4DecoderLayer> decoder_layer_;
+
+  // Buffer for captured cross-layer hidden states (owned by DeepSeekV4Model).
+  Tensor* dspark_hidden_buffer_ptr_ = nullptr;
 };
 
 }  // namespace ksana_llm

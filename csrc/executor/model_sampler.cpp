@@ -72,6 +72,9 @@ void ModelSampler::BuildSamplingRequest(std::vector<std::shared_ptr<ExecutorInfe
     sampling_req.ngram_dict = &(req_ptr->ngram_dict);
     sampling_req.grammar_matcher = req_ptr->grammar_matcher;
     sampling_req.apply_grammar_constraint = enable_main_layers_sampler;
+    // Derived from the per-call run_mode (via enable_main_layers_sampler), not from a persisted
+    // request field — a persisted flag would stay stuck at true forever once any MTP forward
+    // sets it, silently degrading every subsequent main-forward sampling call for that request.
     sampling_req.enable_mtp_sampler = !enable_main_layers_sampler;
     sampling_reqs.push_back(sampling_req);
   }

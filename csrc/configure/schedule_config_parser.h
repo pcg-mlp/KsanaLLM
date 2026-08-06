@@ -110,6 +110,11 @@ struct BatchSchedulerConfig {
   // The token id for Parallel Token Prediction
   uint32_t ptp_token_id = 0;
 
+  // Generic key-value extension point for speculative decoding method-specific configuration.
+  // New speculative decoding methods read their parameters from here instead of adding
+  // dedicated fields to BatchSchedulerConfig.
+  std::unordered_map<std::string, std::string> speculative_config;
+
   bool enable_async = false;
 
   // 是否启用 Executor 端 build-ahead + device 侧 token 替换（默认关闭）。

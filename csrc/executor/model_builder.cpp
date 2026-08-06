@@ -164,10 +164,9 @@ void ModelBuilder::BuildFlatKVCacheBlkIds(uint32_t layer_num, const std::vector<
 }
 
 Status ModelBuilder::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output,
-                                     std::shared_ptr<NewModelInput> model_input, const RunMode run_mode) {
+                                     std::shared_ptr<NewModelInput> model_input) {
   PROFILE_EVENT_SCOPE(build_model_input, "Exec.BuildModelInput.Total");
   model_input->schedule_output = schedule_output;
-  model_input->run_mode = run_mode;
 
   {
     PROFILE_EVENT_SCOPE(reorder_infer_requests, "Exec.BuildModelInput.Reorder");

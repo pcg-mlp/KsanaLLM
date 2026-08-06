@@ -177,6 +177,102 @@ void CommonModel::SetInflightResourceManager(InflightResourceManager* mgr) {
   }
 }
 
+ForwardingContext* CommonModel::GetForwardingContext() { return forwarding_context_.get(); }
+
+void CommonModel::SaveNextStepHiddenBuffer(ForwardingContext& forwarding_context) {
+  if (forwarding_context.GetForwardingBuffers()->HasExternalNextStepHiddenBuffer()) {
+    if (model_run_config_.return_hidden_states_before_norm) {
+      std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+      auto& next_step_hidden_tensor = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer()[0];
+      next_step_hidden_tensor.shape = residual_buffer[0].shape;
+      next_step_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(next_step_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+                  residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetPrimaryComputeStream());
+    }
+  }
+}
+
+void CommonModel::SaveNextStepNormedHiddenBuffer(ForwardingContext& forwarding_context) {
+  if (forwarding_context.GetForwardingBuffers()->HasExternalNextStepHiddenBuffer()) {
+    if (!model_run_config_.return_hidden_states_before_norm) {
+      std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+      auto& next_step_hidden_tensor = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer()[0];
+      next_step_hidden_tensor.shape = residual_buffer[0].shape;
+      next_step_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(next_step_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+                  residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                  context_->device->GetPrimaryComputeStream());
+    }
+  }
+}
+
+Status CommonModel::LmHeadPost(ForwardingContext& forwarding_context,
+                               std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
+                               std::vector<ForwardRequest>& forward_reqs, bool assemble_already_done,
+                               std::vector<Tensor>& hidden_buffer_tensors_0) {
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
+
+  if (!assemble_already_done) {
+#ifdef ENABLE_CUDA
+    auto* typed = static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get());
+    STATUS_CHECK_RETURN(typed->Forward(&residual_buffer[0],
+                                       &forwarding_context.GetModelInput()->logits_idx_uint64_tensor,
+                                       &hidden_buffer_tensors_0[0]));
+#elif defined(ENABLE_ACL)
+    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get())
+                            ->Forward(&residual_buffer[0], &forwarding_context.GetModelInput()->last_token_index_tensor,
+                                      &hidden_buffer_tensors_0[0]));
+#endif
+  }
+
+  PROFILE_EVENT_SCOPE(CommonModel_LmHead_, "CommonModel_LmHead", forwarding_context.GetCurrentRank());
+
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+  if (forwarding_context.GetModelCommunicator() && runtime_config_.enable_full_shared_expert) {
+    forwarding_context.GetModelCommunicator()->ReduceSum(hidden_buffer_tensors_0, hidden_buffer_tensors_1,
+                                                         is_multi_token_forward, /*use_custom*/ false);
+    std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+  }
+
+  STATUS_CHECK_RETURN(lm_head_->Forward(hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]));
+  std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
+
+  // NOTE(karlluo): multiple event in nccl will cause preformance regression
+  // nccl multiple event just enable when context.IsRunContextDecodeAndDecodeSerially() == false
+  if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
+    EventRecord(forwarding_context.GetModelOutput()->compute_ready_event, context_->device->GetPrimaryComputeStream());
+    StreamWaitEvent(context_->device->GetCommStream(), forwarding_context.GetModelOutput()->compute_ready_event);
+  }
+
+  if (forwarding_context.GetModelCommunicator()) {
+    forwarding_context.GetModelCommunicator()->AllGather({hidden_buffer_tensors_0[0], hidden_buffer_tensors_1[0]},
+                                                         hidden_buffer_tensors_0);
+  }
+
+  if (is_multi_token_forward) {
+    if (UpdateResponse(forward_reqs, hidden_buffer_tensors_0[0], "logits")) {
+      StreamSynchronize(context_->device->GetPrimaryComputeStream());
+      return Status();
+    }
+  }
+
+  PROFILE_EVENT_SCOPE(CommonModel_Cast_, fmt::format("CommonModel_Cast"), forwarding_context.GetCurrentRank());
+  forwarding_context.UpdateAfterForward(forward_reqs);
+  std::vector<Tensor> logits_buffer{forwarding_context.GetModelOutput()->logits_tensor};
+  const auto& fs = forwarding_context.GetAttentionForwardContext().forward_shape;
+  auto* typed_cast_layer = static_cast<CastLayer*>(cast_layer_.get());
+  STATUS_CHECK_RETURN(
+      typed_cast_layer->Forward(&hidden_buffer_tensors_0[0], fs.shape[0], fs.shape[1], fs.shape[2], &logits_buffer[0]));
+
+#ifndef ENABLE_CUDA
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
+#endif
+  RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::End);
+  return Status();
+}
+
 void CommonModel::SetForwardProfileMetrics(ProfileMetrics* pm, ForwardPerfMetrics* current) {
   if (forwarding_context_) {
     forwarding_context_->profile_metrics = pm;
@@ -482,22 +578,22 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
   RecordRequestSchedEventWithFContext(forwarding_context, "LmHead", RequestEventPhase::Begin);
 
-  const bool enable_mtp = (runtime_config_.mtp_step_num > 0 && !model_config_.dspark_config.dspark_block_size);
+  const bool save_next_step_hidden = forwarding_context.GetForwardingBuffers()->HasExternalNextStepHiddenBuffer();
 
-  // save unnormed hidden result if enable MTP model
-  if (enable_mtp) {
+  // save unnormed hidden result if next-step speculative decoder needs it
+  if (save_next_step_hidden) {
     if (model_run_config_.return_hidden_states_before_norm) {
-      auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
-      mtp_hidden_tensor.shape = residual_buffer[0].shape;
-      mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
-      MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+      auto& next_step_hidden_tensor = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer()[0];
+      next_step_hidden_tensor.shape = residual_buffer[0].shape;
+      next_step_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(next_step_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
                   residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
                   context_->device->GetPrimaryComputeStream());
     }
   }
 
-  // Assemble early when there is no need to save mtp_hidden and no need for request_target
-  const bool assemble_early = (!enable_mtp || model_run_config_.return_hidden_states_before_norm) &&
+  // Assemble early when there is no need to save next-step hidden and no need for request_target
+  const bool assemble_early = (!save_next_step_hidden || model_run_config_.return_hidden_states_before_norm) &&
                               !forwarding_context.GetModelInput()->has_request_target;
 
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
@@ -544,13 +640,13 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     lm_head_prenorm_->Forward(input_tensors[0], input_tensors[0]);
   }
 
-  // save normed hidden result if enable MTP model
-  if (enable_mtp) {
+  // save normed hidden result if next-step speculative decoder needs it
+  if (save_next_step_hidden) {
     if (!model_run_config_.return_hidden_states_before_norm) {
-      auto& mtp_hidden_tensor = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors[0];
-      mtp_hidden_tensor.shape = residual_buffer[0].shape;
-      mtp_hidden_tensor.dtype = residual_buffer[0].dtype;
-      MemcpyAsync(mtp_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
+      auto& next_step_hidden_tensor = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer()[0];
+      next_step_hidden_tensor.shape = residual_buffer[0].shape;
+      next_step_hidden_tensor.dtype = residual_buffer[0].dtype;
+      MemcpyAsync(next_step_hidden_tensor.template GetPtr<void>(), residual_buffer[0].template GetPtr<void>(),
                   residual_buffer[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
                   context_->device->GetPrimaryComputeStream());
     }

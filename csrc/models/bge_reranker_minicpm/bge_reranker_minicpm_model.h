@@ -78,7 +78,7 @@ class BgeRerankerMinicpmModel : public CommonModel {
   bool BgeRerankerUpdateResponse(std::vector<ForwardRequest>& forward_reqs, Tensor& output, const std::string& stage);
 
   Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
-                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode) override;
+                std::vector<ForwardRequest>& forward_reqs, RunMode run_mode = RunMode::kMain) override;
 
  protected:
   using CommonModel::context_;

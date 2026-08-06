@@ -16,13 +16,15 @@ namespace ksana_llm {
 
 DeepSeekV4DSparkLayer::DeepSeekV4DSparkLayer(const int layer_idx, LayerCreationContext& creation_context,
                                              ModelCreationConfig& model_creation_config,
-                                             std::shared_ptr<DeepSeekV4DecoderLayer> decoder_layer, bool is_embed_layer)
+                                             std::shared_ptr<DeepSeekV4DecoderLayer> decoder_layer, bool is_embed_layer,
+                                             Tensor* dspark_hidden_buffer)
     : layer_idx_(layer_idx),
       local_layer_idx_(creation_context.pipeline_config.ComputeLocalLayerIdx(
           layer_idx, static_cast<int>(model_creation_config.attn_config.model_config.num_layer))),
       hidden_dim_(model_creation_config.attn_config.model_config.hidden_units),
       layernorm_eps_(model_creation_config.layernorm_config.layernorm_eps),
-      kv_cache_dtype_(model_creation_config.attn_config.kv_cache_dtype) {
+      kv_cache_dtype_(model_creation_config.attn_config.kv_cache_dtype),
+      dspark_hidden_buffer_ptr_(dspark_hidden_buffer) {
   if (is_embed_layer) {
     num_target_layers_ = creation_context.model_config.dspark_config.dspark_target_layer_ids.size();
     main_norm_ =
@@ -61,7 +63,7 @@ Status DeepSeekV4DSparkLayer::Forward(std::vector<Tensor>& residual_buffer, Forw
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "DSpark", RequestEventPhase::Begin);
 
-  auto& dspark_hidden = forwarding_context.GetForwardingBuffers()->dspark_hidden_buffer_tensors[0];
+  auto& dspark_hidden = *dspark_hidden_buffer_ptr_;
   if (num_target_layers_ > 0) {
     // Convert concat'd hidden from selected main-decoder layers.
     KLLM_CHECK(dspark_hidden.shape[1] == num_target_layers_ * hidden_dim_);

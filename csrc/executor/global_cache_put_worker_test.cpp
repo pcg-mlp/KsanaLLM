@@ -396,7 +396,7 @@ TEST_F(PutWorkerDeepTest, FirstTokensPutMergesGeneratedAndDraft) {
   worker.Start();
   auto req = MakeDeepReq(800, InferStage::kContext);
   req->generated_tokens = {42};
-  req->draft_tokens.mtp = {10, 11};
+  req->spec_state.draft_tokens.mtp = {10, 11};
   worker.SubmitFirstTokensPut({req});
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   worker.Stop();

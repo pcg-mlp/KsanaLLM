@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "runtime/speculative/common/speculative_resource_profile.h"
+
 #include "batch_scheduler/global_cache_put_tracker.h"
 #include "batch_scheduler/request_admission.h"
 #include "batch_scheduler/strategy/continuous_batching.h"
@@ -521,7 +523,8 @@ Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,
                                      std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
   // To avoid Mock requests being categorized as SingleTokenForward requests, we calculate the Mock request total
   // length as: Mock total length = MTP token count + SingleToken length + 1 (additional token)
-  const size_t mock_req_length = runtime_config.mtp_step_num + 1 + 1;
+  auto spec_profile = SpeculativeRegistry::Get().Aggregate(batch_scheduler_config_);
+  const size_t mock_req_length = spec_profile.workload_multiplier + 1 + 1;
   auto mock_req_input = std::make_shared<KsanaPythonInput>();
   alias_python_input_ = mock_req_input;
   std::vector<int> input_tokens(mock_req_length, 0);

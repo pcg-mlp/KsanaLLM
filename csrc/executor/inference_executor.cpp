@@ -20,10 +20,10 @@
 #include "pd_v2/configure/pd_v2_connector_config_builder.h"
 #include "pd_v2/public/pd_v2_connector_bootstrap.h"
 #include "profiler/profiler.h"
-#include "runtime/draft_generator/asr_custom_generator.h"
-#include "runtime/draft_generator/ptp_generator.h"
-#include "runtime/draft_generator/trie_generator.h"
 #include "runtime/fast_path_controller.h"
+#include "runtime/model_instance.h"
+#include "runtime/speculative/common/speculative_resource_profile.h"
+#include "runtime/speculative/orchestration/composite_speculative_decoder.h"
 #include "runtime/weight_instance.h"
 #include "utils/host_memory_pool.h"
 #include "utils/memory_allocator.h"
@@ -251,28 +251,46 @@ Status InferenceExecutor::Initialize() {
     KLLM_LOG_INFO << "InferenceExecutor::Initialize standalone mode, skip distributed coordinator.";
   }
 
-  // Create draft generator controller.
-  // Trie/AsrCustomGenerator and PtpGenerator are independent draft generators that can be enabled separately:
-  //   - Trie/AsrCustomGenerator: controlled by enable_speculative_decoding, predicts draft tokens via specific method.
-  //   - PtpGenerator: controlled by ptp_step_num (from model config ptp_step_num), does NOT require
-  //                   enable_speculative_decoding.
-  auto draft_generator_controller = std::make_shared<DraftGeneratorController>();
+  // Register speculative decoder adapters via SpeculativeRegistry factory.
+  // Registration order: Trie/ASR first, then PTP, then MTP.
+  auto composite_decoder = std::make_shared<CompositeSpeculativeDecoder>();
+
   if (batch_scheduler_config.enable_speculative_decoding) {
-    if (batch_scheduler_config.speculative_method == "trie") {
-      draft_generator_controller->AppendDraftGenerator(std::make_shared<TrieGenerator>());
-      KLLM_LOG_INFO << "Added TrieGenerator to DraftGeneratorController";
-    } else {  // batch_scheduler_config.speculative_method == "asr_custom"
-      draft_generator_controller->AppendDraftGenerator(std::make_shared<AsrCustomGenerator>());
-      KLLM_LOG_INFO << "Added AsrCustomGenerator to DraftGeneratorController";
+    // Unified decoder factory lookup via SpeculativeRegistry.
+    // Each adapter registers its factory during static init.
+    auto result =
+        SpeculativeRegistry::Get().CreateDecoder(batch_scheduler_config.speculative_method, batch_scheduler_config);
+    if (result.adapter) {
+      composite_decoder->Register(std::move(result.adapter));
+      KLLM_LOG_INFO << "Registered speculative decoder: " << batch_scheduler_config.speculative_method;
+    } else {
+      KLLM_LOG_WARNING << "Unknown speculative_method: " << batch_scheduler_config.speculative_method
+                       << ", speculative decoding disabled.";
+      batch_scheduler_config.enable_speculative_decoding = false;
     }
   }
   if (batch_scheduler_config.ptp_step_num > 0) {
-    draft_generator_controller->AppendDraftGenerator(
-        std::make_shared<PtpGenerator>(batch_scheduler_config.ptp_step_num, batch_scheduler_config.ptp_token_id));
-    KLLM_LOG_INFO << "Added PtpGenerator to DraftGeneratorController with ptp_step_num="
-                  << batch_scheduler_config.ptp_step_num << ", ptp_token_id=" << batch_scheduler_config.ptp_token_id;
+    auto result = SpeculativeRegistry::Get().CreateDecoder("ptp", batch_scheduler_config);
+    if (result.adapter) {
+      composite_decoder->Register(std::move(result.adapter));
+      KLLM_LOG_INFO << "Registered speculative decoder: ptp"
+                    << ", ptp_step_num=" << batch_scheduler_config.ptp_step_num
+                    << ", ptp_token_id=" << batch_scheduler_config.ptp_token_id;
+    }
   }
-  model_runner_->SetDraftGeneratorController(draft_generator_controller);
+  model_runner_->SetCompositeSpeculativeDecoder(composite_decoder);
+
+  executor_runtime_->SetCompositeSpeculativeDecoder(composite_decoder);
+
+  // Execute post-init setup callbacks registered by speculative decoder modules.
+  // Each decoder (e.g. MTP) registers a static PostInitSetup that binds their
+  // lazy-creation logic to ExecutorRuntime::Initialize() lifecycle.
+  SpeculativeSetupContext setup_ctx{composite_decoder, model_instance_, context_, executor_runtime_.get()};
+  SpeculativeRegistry::Get().RunPostInitSetups(setup_ctx);
+
+  // Inject GenerationController so CompositeSpeculativeDecoder can delegate
+  // CreateGenerators/RestoreGenerators/UpdateGenerationState/RemoveGenerator.
+  composite_decoder->SetGenerationController(executor_runtime_->GetGenerationController().get());
 
   // For standalone mode, the first argument is nullptr.
   hidden_unit_buffer_pool_ = std::make_shared<HiddenUnitBufferPool>(distributed_data_coordinator_, env_, context_);

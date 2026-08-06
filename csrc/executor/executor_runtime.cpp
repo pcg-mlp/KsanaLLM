@@ -3,31 +3,24 @@
 ==============================================================================*/
 
 #include "executor/executor_runtime.h"
+#include "models/base/model_delegate.h"
+#include "models/common/common_model.h"
+#include "runtime/speculative/orchestration/composite_speculative_decoder.h"
 #include "runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
 
 namespace ksana_llm {
 
-ExecutorRuntime::ExecutorRuntime(std::shared_ptr<Environment> env, std::shared_ptr<Context> context)
-    : serialize_main_mtp_(context->global->IsSamplingNode() && context->global->GetMtpStepNum() > 0 &&
-                          context->global->GetMaxPpBatchNum() > 1) {
+ExecutorRuntime::ExecutorRuntime(std::shared_ptr<Environment> env, std::shared_ptr<Context> context) {
   env_ = env;
   context_ = context;
   executor_request_manager_ = std::make_shared<ExecutorRequestManager>();
   generation_controller_ = std::make_shared<GenerationController>(nullptr);
 
-  // Waiter starts in the "ready" state (num_wait == 0) so that the very first main Forward()
-  // returns from Wait() immediately without needing a paired Notify(). Subsequent iterations are
-  // armed by Reset(1) inside Forward() and released by Notify() at the end of MtpForward().
-  prev_mtp_done_ = std::make_shared<Waiter>(0);
-
   // The inflight resource manager does not depend on any external objects; create it early so
   // that it is always available regardless of whether Initialize() is called.
   inflight_resource_mgr_ = std::make_shared<InflightResourceManager>();
 
-  KLLM_LOG_INFO << "ExecutorRuntime serialize_main_mtp=" << serialize_main_mtp_
-                << " (IsSamplingNode=" << context_->global->IsSamplingNode()
-                << ", mtp_step_num=" << context_->global->GetMtpStepNum()
-                << ", max_pp_batch_num=" << context_->global->GetMaxPpBatchNum() << ")";
+  KLLM_LOG_INFO << "ExecutorRuntime initialized";
 }
 
 void ExecutorRuntime::SetModelInstance(std::shared_ptr<ModelInstance> model_instance) {
@@ -50,9 +43,8 @@ void ExecutorRuntime::SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPo
   hidden_unit_buffer_pool_ = hidden_unit_buffer_pool;
 }
 
-void ExecutorRuntime::SetDraftGeneratorController(
-    std::shared_ptr<DraftGeneratorController> draft_generator_controller) {
-  generation_controller_->SetDraftGeneratorController(draft_generator_controller);
+void ExecutorRuntime::SetCompositeSpeculativeDecoder(std::shared_ptr<CompositeSpeculativeDecoder> composite_decoder) {
+  composite_decoder_ = std::move(composite_decoder);
 }
 
 Status ExecutorRuntime::InitializeStructuredGeneratorFactory() {
@@ -105,6 +97,20 @@ Status ExecutorRuntime::Initialize() {
   model_executor_->SetBlockAllocatorManager(block_allocator_manager_);
 
   model_sampler_ = std::make_shared<ModelSampler>(env_, context_);
+
+  // Execute post-init callbacks (e.g. speculative decoder lazy creation).
+  for (auto& cb : post_init_cbs_) {
+    cb();
+  }
+
+  // Verify speculative decoder compatibility after all decoders are registered.
+  // Fail-fast on incompatible combinations (e.g. MTP+DSpark, Trie+ASR) that
+  // would corrupt draft_tokens at runtime.
+  if (composite_decoder_ && !composite_decoder_->AreAllCompatible()) {
+    KLLM_LOG_ERROR << "Incompatible speculative decoders detected at startup";
+    return Status(RET_RUNTIME_FAILED, "Incompatible speculative decoders registered");
+  }
+
   return Status();
 }
 
@@ -137,8 +143,8 @@ void ExecutorRuntime::RebuildScheduleOutput(std::shared_ptr<ScheduleOutput> sche
 }
 
 Status ExecutorRuntime::BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output,
-                                        std::shared_ptr<NewModelInput> model_input, const RunMode run_mode) {
-  return model_builder_->BuildModelInput(schedule_output, model_input, run_mode);
+                                        std::shared_ptr<NewModelInput> model_input) {
+  return model_builder_->BuildModelInput(schedule_output, model_input);
 }
 
 Status ExecutorRuntime::PrepareModelInputGpu(std::shared_ptr<NewModelInput> model_input) {
@@ -149,7 +155,7 @@ Status ExecutorRuntime::PrepareModelInputGpu(std::shared_ptr<NewModelInput> mode
     return Status();
   }
   Status status =
-      model_instance_->PrepareModelInputGpu(model_input->reqs, model_input->run_mode, model_input->slot_index);
+      model_instance_->PrepareModelInputGpu(model_input->reqs, ksana_llm::RunMode::kMain, model_input->slot_index);
   if (status.OK()) {
     model_input->gpu_input_ready = true;
   }
@@ -158,17 +164,18 @@ Status ExecutorRuntime::PrepareModelInputGpu(std::shared_ptr<NewModelInput> mode
 
 Status ExecutorRuntime::Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                                 std::shared_ptr<NewModelOutput> model_output) {
-  // Serialize the main forward (RunMode::kMain) against the previous iteration's MtpForward
-  // (RunMode::kNextN). Without this gate, on a sampling rank with TP > 1 and max_pp_batch_num >= 2
-  // the per-rank CommonModel::forward_mutex_ can be acquired in different order on different TP
-  // ranks (kMain on one rank vs. kNextN on its peer), causing both ranks to enter different
-  // TrtAllReduce collectives and deadlock. See common_model.cpp:328 / trt_all_reduce_sum_layer.cpp.
-  // Wait order: first wait for prior Notify() (no-op on the first iteration since the Waiter starts
-  // at zero), then arm the Waiter for the upcoming MtpForward by Reset(1).
-  if (serialize_main_mtp_) {
-    prev_mtp_done_->Wait();
-    prev_mtp_done_->Reset(1);
+  // Decouple MTP serialization and hidden buffer injection via PreMainForward hook.
+  if (composite_decoder_) {
+    SpecContext ctx;
+    if (model_instance_) {
+      auto* delegate = dynamic_cast<ModelDelegate*>(model_instance_->GetBaseModel().get());
+      if (delegate) {
+        ctx.forwarding_context = delegate->GetForwardingContext();
+      }
+    }
+    composite_decoder_->PreMainForward(ctx);
   }
+
   return model_executor_->Forward(model_input, hidden_unit, model_output);
 }
 
@@ -177,139 +184,13 @@ Status ExecutorRuntime::Sampling(std::shared_ptr<NewModelOutput> model_output,
   return model_sampler_->Sampling(model_output, sampling_output);
 }
 
-Status ExecutorRuntime::MtpForward(const size_t mtp_step_num, std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
-                                   HiddenUnitDeviceBuffer* hidden_unit,
-                                   std::shared_ptr<ScheduleOutput> schedule_output) {
-  if (mtp_step_num == 0) {
-    return Status();
-  }
-
-  // update forward request
-  std::unordered_map<decltype(ExecutorInferRequest::req_id), size_t> original_kv;
-  std::unordered_map<decltype(ExecutorInferRequest::req_id), std::vector<int>> original_tokens;
-  for (size_t i = 0; i < reqs.size(); ++i) {
-    auto& infer_req = reqs[i];
-    infer_req->draft_tokens.clear();
-    original_kv[infer_req->req_id] = infer_req->kv_cached_token_num;
-    original_tokens[infer_req->req_id] = infer_req->forwarding_tokens;
-    infer_req->forwarding_tokens.resize(infer_req->forwarding_tokens.size() - infer_req->forwarding_tokens_draft_num +
-                                        infer_req->accepted_tokens.size());
-    infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(), infer_req->generated_tokens.begin(),
-                                        infer_req->generated_tokens.end());
-    infer_req->forwarding_tokens.erase(infer_req->forwarding_tokens.begin());
-    infer_req->sampling_token_num = kStepGenerateTokenNum;
-  }
-
-  // Guard infer_req against UpdateInferRequest
-  std::lock_guard<std::mutex> infer_req_lock(infer_req_mutex_);
-  for (size_t mtp_step = 0; mtp_step < mtp_step_num; ++mtp_step) {
-    KLLM_LOG_DEBUG << "MTP forward step: " << mtp_step;
-    std::shared_ptr<NewModelInput> model_input = std::make_shared<NewModelInput>();
-    BuildModelInput(schedule_output, model_input, RunMode::kNextN);
-    std::shared_ptr<NewModelOutput> model_output = std::make_shared<NewModelOutput>();
-    model_executor_->Forward(model_input, hidden_unit, model_output);
-    std::shared_ptr<SamplingOutput> sampling_output = std::make_shared<SamplingOutput>();
-    model_sampler_->Sampling(model_output, sampling_output);
-
-    for (auto& infer_req : reqs) {
-      infer_req->draft_tokens.mtp.emplace_back(infer_req->sampling_result_tokens.back());
-      if (mtp_step != mtp_step_num - 1) {
-        infer_req->kv_cached_token_num = infer_req->forwarding_tokens.size();
-        infer_req->prefix_cache_len = infer_req->kv_cached_token_num;
-        infer_req->forwarding_tokens.emplace_back(infer_req->draft_tokens.mtp.back());
-        infer_req->sampling_result_tokens.clear();
-      }
-    }
-  }
-
-  for (auto& req : reqs) {
-    req->forwarding_tokens = original_tokens[req->req_id];
-    req->kv_cached_token_num = original_kv[req->req_id];
-    req->prefix_cache_len = req->kv_cached_token_num;
-  }
-
-  // Release the next main Forward() that has been waiting on prev_mtp_done_. Paired with the
-  // Wait()/Reset(1) at the top of Forward(); see the comment there for the deadlock context.
-  if (serialize_main_mtp_) {
-    prev_mtp_done_->Notify();
-  }
-
-  return Status();
-}
-
-Status ExecutorRuntime::DSparkForward(const size_t dspark_block_size, const int dspark_noise_token_id,
-                                      std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
-                                      HiddenUnitDeviceBuffer* hidden_unit,
-                                      std::shared_ptr<ScheduleOutput> schedule_output) {
-  if (dspark_block_size == 0) {
-    return Status();
-  }
-
-  // update forward request
-  std::unordered_map<decltype(ExecutorInferRequest::req_id), size_t> original_kv;
-  std::unordered_map<decltype(ExecutorInferRequest::req_id), std::vector<int>> original_tokens;
-  for (auto& infer_req : reqs) {
-    infer_req->draft_tokens.clear();
-    original_kv[infer_req->req_id] = infer_req->kv_cached_token_num;
-    original_tokens[infer_req->req_id] = infer_req->forwarding_tokens;
-    infer_req->forwarding_tokens.resize(infer_req->forwarding_tokens.size() - infer_req->forwarding_tokens_draft_num +
-                                        infer_req->accepted_tokens.size());
-    infer_req->prefix_cache_len = infer_req->kv_cached_token_num = infer_req->forwarding_tokens.size();
-    infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(), infer_req->generated_tokens.begin(),
-                                        infer_req->generated_tokens.end());
-    // DSpark: no erase(begin); pad with noise tokens to block_size after generated tokens.
-    infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(),
-                                        dspark_block_size - infer_req->generated_tokens.size(), dspark_noise_token_id);
-    infer_req->sampling_token_num = dspark_block_size;
-  }
-
-  // Guard infer_req against UpdateInferRequest
-  std::lock_guard<std::mutex> infer_req_lock(infer_req_mutex_);
-  std::shared_ptr<NewModelInput> model_input = std::make_shared<NewModelInput>();
-  BuildModelInput(schedule_output, model_input, RunMode::kDSpark);
-  std::shared_ptr<NewModelOutput> model_output = std::make_shared<NewModelOutput>();
-  model_executor_->Forward(model_input, hidden_unit, model_output);
-
-  // DSpark per-step: ForwardHead corrects logits, then sample, feed token back for next step.
-  // Logits layout is step-major [block_size, B, V]. Each step samples from its own [B, V] row.
-  const size_t batch_size = reqs.size();
-  for (size_t step_index = 0; step_index < dspark_block_size; ++step_index) {
-    model_instance_->ForwardHead(model_input->reqs, step_index);
-
-    for (size_t i = 0; i < batch_size; ++i) {
-      reqs[i]->sampling_token_num = kStepGenerateTokenNum;
-      model_output->frozen_logits_offsets[i] = i;
-    }
-
-    std::shared_ptr<SamplingOutput> sampling_output = std::make_shared<SamplingOutput>();
-    model_sampler_->Sampling(model_output, sampling_output);
-
-    for (auto& infer_req : reqs) {
-      infer_req->draft_tokens.mtp.emplace_back(infer_req->sampling_result_tokens.back());
-      if (step_index < dspark_block_size - 1) {
-        infer_req->forwarding_tokens[infer_req->forwarding_tokens.size() - dspark_block_size + step_index + 1] =
-            infer_req->sampling_result_tokens.back();
-        infer_req->sampling_result_tokens.clear();
-      }
-    }
-  }
-
-  for (auto& req : reqs) {
-    req->forwarding_tokens = original_tokens[req->req_id];
-    req->kv_cached_token_num = original_kv[req->req_id];
-    req->prefix_cache_len = req->kv_cached_token_num;
-  }
-
-  if (serialize_main_mtp_) {
-    prev_mtp_done_->Notify();
-  }
-
-  return Status();
-}
-
 void ExecutorRuntime::Shutdown() {
-  if (prev_mtp_done_) {
-    prev_mtp_done_->Stop();
+  // Wake the execute thread if it is currently blocked on prev_mtp_done_->Wait()
+  // inside PreMainForward. Without this, ModelRunner::Stop()'s subsequent join
+  // call will hang because HandlePostprocess (which would deliver the Notify) has
+  // already been stopped.
+  if (composite_decoder_) {
+    composite_decoder_->Shutdown();
   }
 }
 

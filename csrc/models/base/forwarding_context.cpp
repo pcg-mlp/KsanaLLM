@@ -77,6 +77,7 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
       std::max({qkv_head_num * size_per_head, hidden_units * model_config.mhc_config.hc_mult,
                 hidden_units * model_config.dspark_config.dspark_target_layer_ids.size(), inter_size_per_tp * 2});
   // 2 is for concatenate of embedding_norm and hidden norm in mtp
+  // TODO(yancyliu): extract mtp_concat_hidden_size to a configurable constant.
   const size_t mtp_concat_hidden_size = (enable_mtp && context->global->IsSamplingNode()) ? hidden_units * 2 : 0;
   size_t all_to_all_hidden_size = 0;
   if (runtime_config.moe_all_to_all_mode == MoeAllToAllMode::DEEPEP_LOW_LATENCY) {
@@ -185,12 +186,6 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
     }
   }
 
-  buffers_shape_map["mtp_hidden_buffer_tensors"] = {
-      enable_mtp ? max_token_num * model_config.hidden_units * model_config.mhc_config.hc_mult : 0};
-  // Concat hidden of target_layer_ids along last dim for DSpark.
-  buffers_shape_map["dspark_hidden_buffer_tensors"] = {max_token_num * model_config.hidden_units *
-                                                       model_config.dspark_config.dspark_target_layer_ids.size()};
-
   buffers_shape_map["prefix_residual_buffer"] = {
       model_config.attn_res_config.attn_res_block_size > 0 ? max_token_num * model_config.hidden_units : 0};
 }
@@ -224,19 +219,6 @@ void ForwardingBuffers::Init(std::shared_ptr<Context> context, const int rank, c
                                                      : MemoryLocation::LOCATION_DEVICE_IPC);
   kv_cache_buffer = buffer_mgr->CreateBufferTensor("kv_cache_buffer", buffers_shape_map["kv_cache_buffer"], TYPE_FP32,
                                                    MemoryLocation::LOCATION_DEVICE, stream);
-
-  // mtp_hidden_buffer_tensors will used across main forward and nextn forward
-  mtp_hidden_buffer_tensors =
-      buffer_mgr
-          ->CreateBufferTensor("mtp_hidden_buffer_tensors", buffers_shape_map["mtp_hidden_buffer_tensors"], weight_type,
-                               MemoryLocation::LOCATION_DEVICE, stream)
-          ->GetTensors();
-  // dspark_hidden_buffer_tensors will used across main forward and dspark forward
-  dspark_hidden_buffer_tensors =
-      buffer_mgr
-          ->CreateBufferTensor("dspark_hidden_buffer_tensors", buffers_shape_map["dspark_hidden_buffer_tensors"],
-                               weight_type, MemoryLocation::LOCATION_DEVICE, stream)
-          ->GetTensors();
 
   prefix_residual_buffer =
       buffer_mgr->CreateBufferTensor("prefix_residual_buffer", buffers_shape_map["prefix_residual_buffer"], weight_type,
@@ -373,7 +355,7 @@ void ForwardingContext::SetActiveModelInputSlot(size_t slot) {
   active_slot_ = slot;
 }
 
-void ForwardingContext::PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+void ForwardingContext::PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
                                              size_t model_input_slot) {
   // build-ahead 启用时可传 slot=1；slot 未分配时 hard fail，避免 silent skip。
   KLLM_CHECK_WITH_INFO(
@@ -384,10 +366,10 @@ void ForwardingContext::PrepareModelInputGpu(const std::vector<ForwardRequest>& 
       fmt::format("PrepareModelInputGpu slot {} not allocated (enable_executor_build_ahead config mismatch).",
                   model_input_slot));
   model_inputs_[model_input_slot]->SetParseSlot(model_input_slot);
-  model_inputs_[model_input_slot]->ParseFromRequests(forward_reqs, run_mode);
+  model_inputs_[model_input_slot]->ParseFromRequests(forward_reqs);
 }
 
-void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
+void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
                                             size_t model_input_slot, bool gpu_input_already_prepared) {
   PROFILE_EVENT_SCOPE(UpdateBeforeForward, "UpdateBeforeForward", rank_);
 
@@ -405,7 +387,7 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward
 
   if (!gpu_input_already_prepared) {
     model_input->SetParseSlot(model_input_slot);
-    model_input->ParseFromRequests(forward_reqs, run_mode);
+    model_input->ParseFromRequests(forward_reqs);
   }
 
   // create forward shape tensor

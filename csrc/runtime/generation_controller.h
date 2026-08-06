@@ -8,7 +8,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "runtime/draft_generator/draft_generator_controller.h"
 #include "runtime/grammar_output.h"
 #include "runtime/infer_request.h"
 #include "runtime/schedule_output.h"
@@ -40,25 +39,14 @@ class GenerationController {
   // Update generation state after sampling_result_tokens are generated (for InferRequest)
   void UpdateGenerationState(std::vector<std::shared_ptr<ExecutorInferRequest>> &reqs);
 
-  // Set draft generator controller for PTP (Parallel Token Prediction)
-  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
-
   // Set structured generator factory
   void SetStructuredGeneratorFactory(std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory);
-
-  // Generate draft tokens for requests (PTP)
-  Status GenerateDraft(std::shared_ptr<ExecutorInferRequest> req);
 
  private:
   void UpdateStructuredGeneratorState(std::vector<std::shared_ptr<ExecutorInferRequest>> &reqs);
 
-  void FilterGeneratorDraftTokens(std::vector<std::shared_ptr<ExecutorInferRequest>> &reqs);
-
  private:
   std::shared_ptr<StructuredGeneratorFactory> structured_generator_factory_ = nullptr;
-
-  // Draft generator controller for PTP (Parallel Token Prediction)
-  std::shared_ptr<DraftGeneratorController> draft_generator_controller_ = nullptr;
 
   // Persistent storage for structured generators (keyed by request ID)
   // Generators are stored here to maintain state across multiple inference steps

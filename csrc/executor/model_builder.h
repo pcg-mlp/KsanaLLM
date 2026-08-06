@@ -13,8 +13,7 @@ class ModelBuilder {
  public:
   explicit ModelBuilder(std::shared_ptr<Context> context);
 
-  Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input,
-                         const RunMode run_mode);
+  Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input);
 
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
 
@@ -90,7 +89,6 @@ class ModelBuilder {
 
  private:
   std::shared_ptr<Context> context_ = nullptr;
-
 
   std::shared_ptr<ModelInstance> model_instance_ = nullptr;
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;

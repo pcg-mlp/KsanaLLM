@@ -8,6 +8,7 @@
 #include "layers/assemble_tokens_hidden_layer.h"
 #include "layers/concat_layer.h"
 #include "layers/emb_lookup_layer.h"
+#include "models/glm4_moe/glm4_moe_mtp_draft_model.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
 
@@ -174,7 +175,7 @@ Glm4MoeMtpLayer::Glm4MoeMtpLayer(int layer_idx, TensorBuffer* moe_buffer, LayerC
 Status Glm4MoeMtpLayer::Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context) {
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
-  auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;
+  auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer();
   const auto& model_input = forwarding_context.GetModelInput();
   {
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
@@ -183,10 +184,9 @@ Status Glm4MoeMtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forwarding
     enorm_->Forward(residual_buffer[0], residual_buffer[0]);
 
     // gather last token hidden
-    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
-                            ->Forward(&mtp_hidden_buffer[0],
-                                      &forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor,
-                                      &shared_buffer[0]));
+    STATUS_CHECK_RETURN(
+        static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
+            ->Forward(&mtp_hidden_buffer[0], model_input->GetEffectiveNextNGatherIdxTensor(), &shared_buffer[0]));
 
     // last token hidden norm
     hnorm_->Forward(shared_buffer[0], mtp_hidden_buffer[0]);
@@ -283,6 +283,18 @@ Status Glm4MoeModel::CreateLayers(LayerCreationContext& creation_context, ModelC
                                                                    model_creation_config, decoder_layer);
     }
     nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
+
+    // Allocate and inject next-step hidden buffer for MTP (owned by model).
+    if (creation_context.runtime_config.mtp_step_num > 0) {
+      next_step_hidden_tensors_ = {
+          Tensor(MemoryLocation::LOCATION_DEVICE, model_config.weight_data_type,
+                 {max_token_num * model_config.hidden_units * model_config.mhc_config.hc_mult})};
+      forwarding_context_->GetForwardingBuffers()->SetExternalNextStepHiddenBuffer(&next_step_hidden_tensors_);
+    }
+
+    // Create the DraftModel that encapsulates the MTP forward pipeline.
+    draft_model_ = std::make_unique<Glm4MoeMtpDraftModel>(&nextn_layers_, pipeline_config_.lower_nextn_layer_idx,
+                                                          pipeline_config_.upper_nextn_layer_idx);
   }
   return Status();
 }
@@ -290,21 +302,7 @@ Status Glm4MoeModel::CreateLayers(LayerCreationContext& creation_context, ModelC
 Status Glm4MoeModel::LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode) {
   std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
 
-  if (run_mode == RunMode::kMain) {
-    return glm4moe_.Forward(residual_buffer, forwarding_context);
-  } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
-    forwarding_context.SetIsForwardingLayers(false);
-    for (int layer_idx = nextn_layer_idx_; layer_idx < nextn_layer_idx_ + static_cast<int>(kNextnDecoderLayerNum);
-         ++layer_idx) {
-      STATUS_CHECK_RETURN(nextn_layers_[layer_idx]->Forward(residual_buffer, forwarding_context));
-    }
-
-    nextn_layer_idx_ += kNextnDecoderLayerNum;
-    if (nextn_layer_idx_ >=
-        pipeline_config_.lower_nextn_layer_idx + static_cast<int>(model_config_.num_nextn_predict_layers)) {
-      nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
-    }
-  }
+  return glm4moe_.Forward(residual_buffer, forwarding_context);
   return Status();
 }
 

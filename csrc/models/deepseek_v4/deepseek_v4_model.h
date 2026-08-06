@@ -128,6 +128,10 @@ class DeepSeekV4Model : public CommonModel {
   // DSpark single-step markov input.
   Tensor dspark_step_token_ids_;
   std::vector<int> dspark_step_token_ids_host_;
+  // DSpark cross-layer hidden state capture buffer.
+  Tensor dspark_hidden_tensor_;
+  // next-step hidden buffer for MTP (owned by model, injected into ForwardingBuffers).
+  std::vector<Tensor> next_step_hidden_tensors_;
   size_t dspark_block_size_ = 0;
 
   // Base address of the current step's [batch_size, V] logits row within logits_tensor.

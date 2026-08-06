@@ -233,24 +233,35 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
   // Prefix cache write-copy: 把 c4 层当前 step 的 kv_score 持久化到 tail 区，供下个请求复用。
   if (compress_ratio_ == 4) {
     if (const size_t num_tokens = compressor_shared.tail_write_indices_tensor.GetElementNumber(); num_tokens > 0) {
-      KLLM_CHECK(num_tokens == total_tokens);
-      auto& mqa_shared = *model_input->shared_attention_meta->GetMqa();
-      Tensor* tail_layer_base_tensor = is_in_indexer_ ? &mqa_shared.layer_tail_indexer_cache_ptr_tensor
-                                                      : &mqa_shared.layer_tail_attn_cache_ptr_tensor;
-      // layer_tail_*_cache_ptr_tensor layout: [block_num(int64) | layer_0_base | layer_1_base | ...]
-      // Slots 1..N correspond to local layer 0..N-1, so local_layer_idx_ must be used here.
-      void* const tail_layer_base = tail_layer_base_tensor->GetPtr<void*>()[1 + local_layer_idx_];
-      // Per-token bytes match a single row of kv_score_input.
-      // tail 写入的目标位于 SWA pool, stride 使用 SWA pool 的 block_size。
-      const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
-      KLLM_LOG_DEBUG << fmt::format(
-          "tail write-copy: layer={} is_in_indexer={} num_tokens={} per_token_bytes={} block_cache_size={}", layer_idx_,
-          is_in_indexer_, num_tokens, per_token_bytes_, block_cache_size);
-      CopyKvScoreToTail(tail_layer_base,
-                        kv_score_input.GetPtr<void>(),  // FP32 [total_tokens, 2*coff*head_dim]
-                        compressor_shared.tail_write_indices_tensor.GetPtr<int32_t>(), static_cast<int>(num_tokens),
-                        block_cache_size, per_token_bytes_,
-                        forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
+      // tail_write_indices may be stale when the forward is replayed with a
+      // different token count (e.g., DSpark speculative forward in PP mode).
+      // Root cause: DSpark's model_input reuses the main forward's attention_meta
+      // (BuildModelInput only builds ForwardRequest, not attention metas). The
+      // shared tail_write_indices_tensor still carries the main forward's shape,
+      // while DSpark's token count differs due to noise padding. Since DSpark
+      // tokens are noise and should not be persisted to tail cache, and the
+      // alternative of rebuilding attention metas per DSpark step would incur
+      // O(batch × block_size) SWA overhead while polluting tail cache with noise
+      // kv, we skip the write gracefully instead of crashing.
+      if (num_tokens == total_tokens) {
+        auto& mqa_shared = *model_input->shared_attention_meta->GetMqa();
+        Tensor* tail_layer_base_tensor = is_in_indexer_ ? &mqa_shared.layer_tail_indexer_cache_ptr_tensor
+                                                        : &mqa_shared.layer_tail_attn_cache_ptr_tensor;
+        // layer_tail_*_cache_ptr_tensor layout: [block_num(int64) | layer_0_base | layer_1_base | ...]
+        // Slots 1..N correspond to local layer 0..N-1, so local_layer_idx_ must be used here.
+        void* const tail_layer_base = tail_layer_base_tensor->GetPtr<void*>()[1 + local_layer_idx_];
+        // Per-token bytes match a single row of kv_score_input.
+        // tail 写入的目标位于 SWA pool, stride 使用 SWA pool 的 block_size。
+        const int64_t block_cache_size = static_cast<int64_t>(mqa_shared.swa_block_size);
+        KLLM_LOG_DEBUG << fmt::format(
+            "tail write-copy: layer={} is_in_indexer={} num_tokens={} per_token_bytes={} block_cache_size={}",
+            layer_idx_, is_in_indexer_, num_tokens, per_token_bytes_, block_cache_size);
+        CopyKvScoreToTail(tail_layer_base,
+                          kv_score_input.GetPtr<void>(),  // FP32 [total_tokens, 2*coff*head_dim]
+                          compressor_shared.tail_write_indices_tensor.GetPtr<int32_t>(), static_cast<int>(num_tokens),
+                          block_cache_size, per_token_bytes_,
+                          forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
+      }
     }
   }
 

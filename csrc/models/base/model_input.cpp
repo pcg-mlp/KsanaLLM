@@ -7,6 +7,8 @@
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
 
+#include "models/base/gather_index_builder_interface.h"
+
 #include "cache_manager/block_allocator/block_allocator_interface.h"
 #include "configure/environment.h"
 #include "device/device_types.h"
@@ -148,8 +150,6 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   dp_input_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
   dp_prefill_q_offset_uint64_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_UINT64, {max_batch_size + 1});
-
-  nextn_hidden_idx_uint64_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_token_num});
 
   attention_meta_creator_ = std::make_unique<AttentionMetaCreator>(AttentionMetaCreator::Config{
       model_config_, runtime_config_, layer_num_on_node_, max_table_block_num, max_token_num,
@@ -316,7 +316,7 @@ void ModelInput::SetInflightResourceManager(InflightResourceManager* mgr) {
   }
 }
 
-void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
+void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs) {
   // NOTE(karlluo): check batch size
   PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
   batch_size = forward_reqs.size();
@@ -331,7 +331,6 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
       fmt::format("ModelInput batch_size exceed max_batch_size. {} > {}", batch_size, runtime_config_.max_batch_size));
 
   infer_stage = forward_reqs.front().infer_stage;  // for NPU
-  builder_config_->run_mode = run_mode;
 
   PrepareInputInfo(forward_reqs);
 
@@ -358,9 +357,8 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   }
 
   KLLM_LOG_DEBUG << fmt::format(
-      "run_mode: {}, dp_multi_token_request_num: {}, dp_context_tokens: {}, dp_single_token_request_num: {}, "
+      "dp_multi_token_request_num: {}, dp_context_tokens: {}, dp_single_token_request_num: {}, "
       "dp_decode_tokens: {}, dp_total_prefix_len: {}, page_metas.size(): {}",
-      (run_mode == RunMode::kMain ? "main" : (run_mode == RunMode::kNextN ? "nextn" : "dspark")),
       dp_multi_token_request_num, dp_context_tokens, dp_single_token_request_num, dp_decode_tokens, dp_total_prefix_len,
       page_metas.size());
 
@@ -370,7 +368,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
 
   PrepareVLRequest(forward_reqs);
   PrepareCutoffLayer(forward_reqs);
-  PrepareNextNGatherIdx(forward_reqs);
+  PrepareMainForwardGather(forward_reqs);
 
   PreparePrefill();
   PrepareDecode();
@@ -438,46 +436,25 @@ void ModelInput::PrepareVLRequest(const std::vector<ForwardRequest>& forward_req
   }
 }
 
-void ModelInput::PrepareNextNGatherIdx(const std::vector<ForwardRequest>& forward_reqs) {
-  if (runtime_config_.mtp_step_num == 0 || model_config_.dspark_config.dspark_block_size > 0) {
-    return;
+// is_mtp_step parameter eliminated. Method split into explicit names:
+// - PrepareMainForwardGather: called from main inference path (always is_mtp_step=false).
+// - PrepareMtpDraftGatherIndices: called from MTP path (always is_mtp_step=true).
+void ModelInput::PrepareMainForwardGather(const std::vector<ForwardRequest>& forward_reqs) {
+  if (external_gather_idx_builder_) {
+    external_gather_idx_builder_->UpdateMainForward(forward_reqs);
   }
+}
 
-  PROFILE_EVENT_SCOPE(PrepareNextnGatherIdx, "PrepareNextnGatherIdx", rank_);
-  std::unordered_map<size_t, size_t> updated_mtp_req_id_to_pos;
-  updated_mtp_req_id_to_pos.reserve(forward_reqs.size());
-
-  std::vector<size_t> mtp_hidden_gather_idx;
-  mtp_hidden_gather_idx.reserve(forward_reqs.size());
-  size_t total_len = 0;
-  for (const auto& req : forward_reqs) {
-    const size_t input_ids_len = req.GetInputIdsLength();
-    if (builder_config_->run_mode == RunMode::kMain) {
-      updated_mtp_req_id_to_pos[req.req_id] = total_len;
-    } else {
-      updated_mtp_req_id_to_pos[req.req_id] = total_len + input_ids_len - 1;
-    }
-    total_len += input_ids_len;
-
-    if (builder_config_->run_mode == RunMode::kNextN) {
-      const size_t begin_idx = mtp_req_id_to_pos_[req.req_id];
-      for (size_t idx = begin_idx; idx < begin_idx + input_ids_len; ++idx) {
-        mtp_hidden_gather_idx.emplace_back(idx);
-      }
-    }
+void ModelInput::PrepareMtpDraftGatherIndices(const std::vector<ForwardRequest>& forward_reqs) {
+  if (external_gather_idx_builder_) {
+    external_gather_idx_builder_->BuildGatherIndices(forward_reqs);
   }
+}
 
-  mtp_req_id_to_pos_.swap(updated_mtp_req_id_to_pos);
-
-  if (builder_config_->run_mode == RunMode::kMain) {
-    return;
-  }
-
-  nextn_hidden_idx_uint64_tensor.shape = {mtp_hidden_gather_idx.size()};
-  MemcpyAsync(nextn_hidden_idx_uint64_tensor.GetPtr<void>(), mtp_hidden_gather_idx.data(),
-              mtp_hidden_gather_idx.size() * sizeof(decltype(mtp_hidden_gather_idx)::value_type), MEMCPY_HOST_TO_DEVICE,
-              context_->device->GetH2DStream());
-  KLLM_LOG_DEBUG << "mtp_hidden_gather_idx: " << mtp_hidden_gather_idx;
+Tensor* ModelInput::GetEffectiveNextNGatherIdxTensor() {
+  KLLM_CHECK_WITH_INFO(external_gather_idx_builder_ != nullptr,
+                       "GetEffectiveNextNGatherIdxTensor called without external builder injected");
+  return external_gather_idx_builder_->GetGatherTensor();
 }
 
 #ifdef ENABLE_CUDA
@@ -1037,22 +1014,6 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     cur_batch_pairs_tensor.dtype = TYPE_INT64;
   } else {
     cur_batch_pairs_tensor.shape = {0};
-  }
-
-  // DSpark ForwardHead slices logits as [block_size, batch_size, V] (step-major).
-  // Standard logits_idx fills batch-major: [req0_steps..., req1_steps..., ...].
-  // Transpose to step-major: [step0_all_reqs, step1_all_reqs, ...].
-  if (builder_config_->run_mode == RunMode::kDSpark && batch_size > 1 && forward_reqs.front().sampling_token_num > 1) {
-    const size_t block_size = forward_reqs.front().sampling_token_num;
-    KLLM_CHECK_WITH_INFO(logits_idx_list.size() == batch_size * block_size,
-                         "DSpark expects logits_idx_list.size() == batch_size * block_size");
-    std::vector<size_t> transposed(logits_idx_list.size());
-    for (size_t req_idx = 0; req_idx < batch_size; ++req_idx) {
-      for (size_t step = 0; step < block_size; ++step) {
-        transposed[step * batch_size + req_idx] = logits_idx_list[req_idx * block_size + step];
-      }
-    }
-    logits_idx_list.swap(transposed);
   }
 
   logits_idx_uint64_tensor.shape = {logits_idx_list.size()};

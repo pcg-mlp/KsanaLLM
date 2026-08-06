@@ -3,9 +3,11 @@
 ==============================================================================*/
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 #include "executor/executor_request_manager.h"
 #include "executor/inflight_resource.h"
@@ -18,9 +20,10 @@
 #include "runtime/structured_generation/structured_generator_interface.h"
 #include "utils/logger.h"
 #include "utils/ret_code.h"
-#include "utils/waiter.h"
 
 namespace ksana_llm {
+
+class CompositeSpeculativeDecoder;
 
 // The runtime instance, used to execute the real inference process.
 // It does not contain any thread itself, but invoked by other pipeline thread.
@@ -37,7 +40,8 @@ class ExecutorRuntime {
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> block_allocator_manager);
   void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager);
   void SetHiddenUnitBufferPool(std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool);
-  void SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller);
+
+  void SetCompositeSpeculativeDecoder(std::shared_ptr<CompositeSpeculativeDecoder> composite_decoder);
 
   // Get structured generator factory for creating generators
   std::shared_ptr<StructuredGeneratorFactory> GetStructuredGeneratorFactory() { return structured_generator_factory_; }
@@ -47,6 +51,10 @@ class ExecutorRuntime {
   // 暴露 model_sampler，供 ModelRunner 在 build-ahead 同步路径（Forward→Sampling 同线程）使用。
   std::shared_ptr<ModelSampler> GetModelSampler() const { return model_sampler_; }
 
+  // Expose sub-components for stub adapter construction during init.
+  std::shared_ptr<ModelExecutor> GetModelExecutor() const { return model_executor_; }
+  std::shared_ptr<ModelBuilder> GetModelBuilder() const { return model_builder_; }
+
   // The inflight resource manager drives automatic allocation and release of per-request
   // runtime resources (e.g. compressor slots). owned by ExecutorRuntime.
   std::shared_ptr<InflightResourceManager> GetInflightResourceManager() { return inflight_resource_mgr_; }
@@ -55,19 +63,12 @@ class ExecutorRuntime {
   // on each per-layer event. Returns the same shared instance held inside.
   ExecutorRequestManager* GetExecutorRequestManager() { return executor_request_manager_.get(); }
 
-
-  Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input,
-                         const RunMode run_mode);
+  Status BuildModelInput(std::shared_ptr<ScheduleOutput> schedule_output, std::shared_ptr<NewModelInput> model_input);
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上 ParseFromRequests，与 Execute forward 重叠。
   Status PrepareModelInputGpu(std::shared_ptr<NewModelInput> model_input);
   Status Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                  std::shared_ptr<NewModelOutput> model_output);
   Status Sampling(std::shared_ptr<NewModelOutput> model_output, std::shared_ptr<SamplingOutput> sampling_output);
-  Status MtpForward(const size_t mtp_step_num, std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs,
-                    HiddenUnitDeviceBuffer* hidden_unit, std::shared_ptr<ScheduleOutput> schedule_output);
-  Status DSparkForward(const size_t dspark_block_size, const int dspark_noise_token_id,
-                       std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs, HiddenUnitDeviceBuffer* hidden_unit,
-                       std::shared_ptr<ScheduleOutput> schedule_output);
 
   // Cache full requests, and update incremental requests.
   void UpdateCachedRequests(std::shared_ptr<ScheduleOutput> schedule_output);
@@ -80,8 +81,23 @@ class ExecutorRuntime {
   // is not stuck waiting on an MTP Notify that will never come during shutdown.
   void Shutdown();
 
+  // Register a callback to be invoked at the end of Initialize(), after all
+  // internal components (model_builder/executor/sampler) are fully constructed.
+  // Callbacks run synchronously in registration order. Each callback runs at most once.
+  void RegisterPostInitCallback(std::function<void()> cb) { post_init_cbs_.push_back(std::move(cb)); }
+
+  // Expose infer_req_mutex_ so that MTP/DSpark decoders (which run on the Execute/Postprocess
+  // thread and mutate forwarding_tokens/kv_cached_token_num/prefix_cache_len across their
+  // multi-step forward loop) can synchronize against UpdateCachedRequests (Preprocess thread,
+  // via UpdateInferRequest) on the same ExecutorInferRequest instances. Decoders must lock this
+  // exact mutex instance rather than a private one, or the two threads race on those fields.
+  std::mutex& GetInferReqMutex() { return infer_req_mutex_; }
+
  private:
   Status InitializeStructuredGeneratorFactory();
+
+  // Post-init callbacks: invoked synchronously at end of Initialize().
+  std::vector<std::function<void()>> post_init_cbs_;
 
   std::shared_ptr<Environment> env_ = nullptr;
   std::shared_ptr<Context> context_ = nullptr;
@@ -111,22 +127,11 @@ class ExecutorRuntime {
   // The generation controller for inference engine.
   std::shared_ptr<GenerationController> generation_controller_ = nullptr;
 
-  // Prevent concurrent modification of infer_request by MTPForward and UpdateInferRequest
+  std::shared_ptr<CompositeSpeculativeDecoder> composite_decoder_ = nullptr;
+
+  // Prevent concurrent modification of infer_request by spec decoders' ExecuteForward (MTP/DSpark)
+  // and UpdateInferRequest (Preprocess thread).
   std::mutex infer_req_mutex_;
-
-  // True when this runtime instance must serialize the main forward (HandleExecute thread,
-  // RunMode::kMain) against the immediately preceding MTP forward (HandlePostprocess thread,
-  // RunMode::kNextN) on the same rank. Required to avoid the cross-TP-rank deadlock in
-  // CommonModel::forward_mutex_ when TP > 1 and the same TrtAllReduce/AllReduce kernel is launched
-  // for two different RunModes in inconsistent order on different TP ranks. Computed once at
-  // construction from (IsSamplingNode && mtp_step_num > 0 && max_pp_batch_num > 1).
-  const bool serialize_main_mtp_{false};
-
-  // Used only when serialize_main_mtp_ is true: HandleExecute path (Forward) waits on this before
-  // launching the next main forward; HandlePostprocess path (MtpForward) notifies it at the end.
-  // Initialized to a "ready" state so the first main Forward proceeds immediately. Internally
-  // backed by std::mutex + std::condition_variable; we use Waiter to keep that out of this header.
-  std::shared_ptr<Waiter> prev_mtp_done_;
 };
 
 }  // namespace ksana_llm

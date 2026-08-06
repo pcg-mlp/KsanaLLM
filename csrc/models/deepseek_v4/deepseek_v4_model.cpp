@@ -9,6 +9,7 @@
 #include "layers/emb_lookup_layer.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "models/deepseek_v4/deepseek_v4_dspark.h"
+#include "models/deepseek_v4/deepseek_v4_mtp_draft_model.h"
 #include "profiler/profile_event.h"
 #include "profiler/sched_event_tracer.h"
 #include "runtime/profile_metrics.h"
@@ -310,7 +311,7 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "MTP", RequestEventPhase::Begin);
 
-  auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->mtp_hidden_buffer_tensors;
+  auto& mtp_hidden_buffer = forwarding_context.GetForwardingBuffers()->GetNextStepHiddenBuffer();
   const auto& model_input = forwarding_context.GetModelInput();
   {
     CREATE_BUFFER_SCOPE(shared_buffer, forwarding_context.GetForwardingBuffers()->shared_buffer);
@@ -324,15 +325,9 @@ Status DeepSeekV4MtpLayer::Forward(std::vector<Tensor>& residual_buffer, Forward
     STATUS_CHECK_RETURN(e_proj_->Forward(residual_buffer[0], shared_buffer));
 
     // Gather last token hidden from mtp_hidden_buffer
-    KLLM_CHECK(mtp_hidden_buffer[0].shape[1] == hc_mult * hidden_dim);
-    KLLM_CHECK(mtp_hidden_buffer[0].shape.size() == 2ul);
-    STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
-                            ->Forward(&mtp_hidden_buffer[0],
-                                      &forwarding_context.GetModelInput()->nextn_hidden_idx_uint64_tensor,
-                                      &mtp_hidden_buffer[0]));
-    KLLM_CHECK_WITH_INFO(
-        mtp_hidden_buffer[0].shape[0] == token_num,
-        fmt::format("mtp_hidden_buffer shape[0]={} != token_num={}", mtp_hidden_buffer[0].shape[0], token_num));
+    STATUS_CHECK_RETURN(
+        static_cast<AssembleTokensHiddenLayer*>(gather_layer_.get())
+            ->Forward(&mtp_hidden_buffer[0], model_input->GetEffectiveNextNGatherIdxTensor(), &mtp_hidden_buffer[0]));
 
     // Reshape gathered mtp_hidden to [token_num * hc_mult, hidden_dim] for norm and proj
     mtp_hidden_buffer[0].shape = {token_num * hc_mult, hidden_dim};
@@ -427,6 +422,13 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
 
   if (pipeline_config_.lower_nextn_layer_idx >=
       static_cast<int>(model_creation_config.attn_config.model_config.num_layer)) {
+    // Allocate DSpark cross-layer hidden state capture buffer (shared across all DSpark layers).
+    if (creation_context.model_config.dspark_config.dspark_block_size > 0) {
+      const size_t num_target = creation_context.model_config.dspark_config.dspark_target_layer_ids.size();
+      dspark_hidden_tensor_ =
+          Tensor(MemoryLocation::LOCATION_DEVICE, model_config_.weight_data_type,
+                 {creation_context.runtime_config.max_step_token_num * model_config_.hidden_units * num_target});
+    }
     for (int layer_idx = pipeline_config_.lower_nextn_layer_idx; layer_idx <= pipeline_config_.upper_nextn_layer_idx;
          ++layer_idx) {
       const bool is_moe = layer_idx >= first_k_dense_replace_;
@@ -437,7 +439,7 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
       if (creation_context.model_config.dspark_config.dspark_block_size > 0) {
         dspark_layers_[layer_idx] = std::make_shared<DeepSeekV4DSparkLayer>(
             layer_idx, creation_context, model_creation_config, layers_[layer_idx], /*is_embed_layer=*/
-            layer_idx == pipeline_config_.lower_nextn_layer_idx);
+            layer_idx == pipeline_config_.lower_nextn_layer_idx, &dspark_hidden_tensor_);
       } else {
         nextn_layers_[layer_idx] = std::make_shared<DeepSeekV4MtpLayer>(layer_idx, creation_context,
                                                                         model_creation_config, layers_[layer_idx]);
@@ -470,6 +472,20 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
         dspark_layer_->Init({}, creation_context.runtime_config, creation_context.context, creation_context.rank);
       }
     }
+
+    // Allocate and inject next-step hidden buffer for MTP (owned by model).
+    if (creation_context.model_config.dspark_config.dspark_block_size == 0 &&
+        creation_context.runtime_config.mtp_step_num > 0) {
+      next_step_hidden_tensors_ = {Tensor(MemoryLocation::LOCATION_DEVICE, model_config_.weight_data_type,
+                                          {creation_context.runtime_config.max_step_token_num *
+                                           model_config_.hidden_units * model_config_.mhc_config.hc_mult})};
+      forwarding_context_->GetForwardingBuffers()->SetExternalNextStepHiddenBuffer(&next_step_hidden_tensors_);
+    }
+
+    // Create DraftModel for MTP speculative decoding (non-owning refs, layers remain owned by model).
+    draft_model_ = std::make_unique<DeepSeekV4MtpDraftModel>(
+        &nextn_layers_, nextn_shared_head_norm_.get(), nextn_final_mhc_.get(), pipeline_config_.lower_nextn_layer_idx,
+        pipeline_config_.upper_nextn_layer_idx);
   }
 
   return Status();
@@ -484,7 +500,7 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
 
     // Capture hidden states of layers in dspark_target_layer_ids for is_embed_layer.
     // Reduce-mean over the hc_mult axis on the fly.
-    auto& dspark_buffer = forwarding_context.GetForwardingBuffers()->dspark_hidden_buffer_tensors[0];
+    auto& dspark_buffer = dspark_hidden_tensor_;
     const auto& dspark_target_set = model_config_.dspark_config.dspark_target_layer_ids;
     const size_t num_target_layers = dspark_target_set.size();
     const size_t token_num = residual_buffer[0].shape[0];
@@ -509,18 +525,10 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
     dspark_buffer.dtype = residual_buffer[0].dtype;
     // Reset DSpark step logits ptr;
     dspark_step_logits_ptr_ = nullptr;
-  } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
-    forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
+  } else if (run_mode == RunMode::kNextN) {
+    forwarding_context.SetIsForwardingLayers(false);
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
-    for (int layer_idx = nextn_layer_idx_; layer_idx < nextn_layer_idx_ + kNextnDecoderLayerNum; ++layer_idx) {
-      STATUS_CHECK_RETURN(nextn_layers_[nextn_layer_idx_]->Forward(residual_buffer, forwarding_context));
-    }
-
-    nextn_layer_idx_ += kNextnDecoderLayerNum;
-    if (static_cast<uint32_t>(nextn_layer_idx_) >=
-        pipeline_config_.lower_nextn_layer_idx + model_config_.num_nextn_predict_layers) {
-      nextn_layer_idx_ = pipeline_config_.lower_nextn_layer_idx;
-    }
+    STATUS_CHECK_RETURN(draft_model_->ForwardLayer(residual_buffer, forwarding_context));
   } else if (run_mode == RunMode::kDSpark && !dspark_layers_.empty()) {
     forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);

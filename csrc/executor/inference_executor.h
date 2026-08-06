@@ -18,7 +18,6 @@
 #include "pd_v2/prefill/pd_v2_kv_dispatcher.h"
 #include "pd_v2/prefill/pd_v2_layer_event_tracker.h"
 #include "pd_v2/public/pd_v2_connector.h"
-#include "runtime/draft_generator/draft_generator_controller.h"
 #include "runtime/hidden_unit_buffer_pool.h"
 #include "runtime/model_instance.h"
 #include "runtime/weight_instance_inferface.h"

@@ -145,17 +145,14 @@ void GlobalCachePutWorker::SubmitFirstTokensPut(const std::vector<std::shared_pt
       continue;
     }
 
-    // 合并 generated_tokens + draft_tokens（MTP 产生的推测 token）
-    std::vector<int> tokens_to_save;
-    tokens_to_save.reserve(req->generated_tokens.size() + req->draft_tokens.GetDraftTokens().size());
-    tokens_to_save.insert(tokens_to_save.end(), req->generated_tokens.begin(), req->generated_tokens.end());
-    auto drafts = req->draft_tokens.GetDraftTokens();
-    tokens_to_save.insert(tokens_to_save.end(), drafts.begin(), drafts.end());
+    // Merge generated_tokens + draft_tokens for cache persistence.
+    auto tokens_to_save = GetAllProducedTokens(*req);
 
     auto token_ids = req->input_tokens;
 
     KLLM_LOG_DEBUG << "SubmitFirstTokensPut: req_id=" << req->req_id
-                   << ", generated_count=" << req->generated_tokens.size() << ", draft_count=" << drafts.size()
+                   << ", generated_count=" << req->generated_tokens.size()
+                   << ", draft_count=" << req->spec_state.draft_tokens.size()
                    << ", total_save=" << tokens_to_save.size() << ", input_token_count=" << token_ids.size()
                    << ", first_token=" << tokens_to_save[0];
 

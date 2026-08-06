@@ -39,7 +39,6 @@
 #include "periphery/version_reporter.h"
 #include "profiler/reporter.h"
 #include "profiler/timer.h"
-#include "runtime/draft_generator/trie_generator.h"
 #include "runtime/fast_path_controller.h"
 #include "runtime/infer_request.h"
 #include "runtime/weight_instance.h"

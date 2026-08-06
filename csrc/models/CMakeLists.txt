@@ -6,6 +6,7 @@ cmake_minimum_required(VERSION 3.13)
 file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/models/common/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/communicator/*.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/models/draft_model/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/quant/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/weight_method/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/llama/*.cpp

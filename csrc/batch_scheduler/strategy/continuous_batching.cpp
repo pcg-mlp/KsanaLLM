@@ -19,6 +19,8 @@
 #include "cache_manager/prefix_cache_manager.h"
 #include "profiler/reporter.h"
 #include "runtime/infer_request.h"
+#include "runtime/speculative/common/spec_scheduling_info.h"
+#include "runtime/speculative/common/speculative_resource_profile.h"
 #include "transfer/transfer_engine.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
@@ -70,7 +72,31 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
 }
 
 size_t ContinuousBatchingStrategy::GetMaxRequiredTokenNum(const size_t token_num) const {
-  return token_num + runtime_config_.mtp_step_num - std::min(runtime_config_.mtp_step_num, 1ul);
+  auto info = GetAggregatedSchedulingInfo();
+  return token_num + info.extra_token_capacity;
+}
+
+SpecSchedulingInfo ContinuousBatchingStrategy::GetAggregatedSchedulingInfo() const {
+  SpecSchedulingInfo info;
+  // Speculative resources from registered decoder profiles.
+  auto spec_profile = SpeculativeRegistry::Get().Aggregate(batch_scheduler_config_);
+
+  info.extra_kv_tokens = spec_profile.extra_kv_tokens;
+  // extra_token_capacity is workload_multiplier minus the generated token for draft-model
+  // decoders, plus placeholder+verify tokens for no-draft-model decoders. Each decoder's
+  // estimator sets the correct value in its profile.
+  info.extra_token_capacity = spec_profile.extra_token_capacity;
+  info.workload_multiplier = static_cast<size_t>(spec_profile.workload_multiplier);
+
+  // Compatibility guard: incompatible speculative decoders detected via config.
+  // Runtime enforcement via CompositeSpeculativeDecoder::AreAllCompatible().
+  if (runtime_config_.mtp_step_num > 0 && batch_scheduler_config_.ptp_step_num > 0) {
+    KLLM_LOG_WARNING << "Incompatible speculative decoders detected; "
+                     << "speculative resource requirements will be limited. "
+                     << "This will be enforced by CompositeSpeculativeDecoder at runtime.";
+    info.workload_multiplier = runtime_config_.mtp_step_num;
+  }
+  return info;
 }
 
 bool ContinuousBatchingStrategy::CheckRequestTimeout(const std::shared_ptr<InferRequest> req) {
@@ -89,7 +115,7 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
   // To avoid Mock requests being categorized as SingleTokenForward requests, we
   // calculate the Mock request total length as: Mock total length = MTP token
   // count + SingleToken length + 1 (additional token)
-  const size_t mock_request_length = runtime_config.mtp_step_num + 1 + 1;
+  const size_t mock_request_length = GetAggregatedSchedulingInfo().extra_kv_tokens + 1 + 1;
   // After Mock request completes one inference round, rollback the newly generated tokens at the end to restore
   // the initial state.
   if (req->output_tokens.size() > mock_request_length) {
@@ -553,7 +579,7 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
 
   // Estimate inflight task result and update planning workloads
   for (auto &req : batch_state_->decoding_queue) {
-    EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
+    EstimateRequestPlanningWorkload(req, GetAggregatedSchedulingInfo().workload_multiplier);
   }
 
   // Check decoding queue to determine whether it exceeds the max_step_token_num.
@@ -678,7 +704,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
   for (auto it = batch_state_->waiting_queue.begin(); it != batch_state_->waiting_queue.end();) {
     auto req = *it;
-    EstimateRequestPlanningWorkload(req, batch_scheduler_config_.mtp_step_num + batch_scheduler_config_.ptp_step_num);
+    EstimateRequestPlanningWorkload(req, GetAggregatedSchedulingInfo().workload_multiplier);
 
     // Check timeout, no finished req in waiting queue.
     if (CheckRequestTimeout(req)) {
@@ -789,9 +815,12 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
       assert(!planning_workload.IsEmpty());
     }
 
-    // add extra token for MTP sub model/User draft if needed
+    // Account for user-provided draft tokens (e.g., ASR custom) that are not
+    // counted in seq_token_num, plus extra KV tokens from speculative decoders.
+    // Pass extra_kv_tokens as the third argument to preserve independent ceil:
+    // ceil(input/B) + ceil(mtp/B) instead of ceil((input + mtp)/B).
     req_step_block_num = cache_manager_->GetRequestStepBlockNumber(
-        req->req_id, seq_token_num + req->draft_tokens.spec.size(), runtime_config_.mtp_step_num);
+        req->req_id, seq_token_num + req->draft_tokens.spec.size(), GetAggregatedSchedulingInfo().extra_kv_tokens);
     KLLM_LOG_SCHEDULER << "req_step_token_num:" << req_step_token_num << ", req_step_block_num:" << req_step_block_num
                        << ", seq_token_num:" << seq_token_num;
 
@@ -811,7 +840,7 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
                                ? req_step_token_num
                                : seq_token_num;
     // Reserve at least mtp_step_num tokens per request to ensure
-    // prefill drafts fit within buffers sized for multi-token decoding, e.g., MTP/PTP/DSpark.
+    // prefill drafts fit within buffers sized for speculative decoding.
     req_token_num = std::max(req_token_num, runtime_config_.mtp_step_num);
     if (step_logits_num + req->sampling_token_num <= dp_max_logits_num_ && step_batch_size < dp_max_batch_size_ &&
         per_dp_batch_size < per_dp_max_batch_size_ && step_token_num + req_token_num <= dp_max_step_token_num_ &&

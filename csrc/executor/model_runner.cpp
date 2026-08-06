@@ -24,10 +24,7 @@
 
 namespace ksana_llm {
 
-ModelRunner::ModelRunner(std::shared_ptr<Context> context)
-    : mtp_step_num_(context->global->GetMtpStepNum()),
-      dspark_block_size_(context->global->GetDSparkBlockSize()),
-      dspark_noise_token_id_(context->global->GetDSparkNoiseTokenId()) {
+ModelRunner::ModelRunner(std::shared_ptr<Context> context) {
   context_ = context;
 
   schedule_output_queue_ = std::make_shared<BlockingQueue<std::shared_ptr<ScheduleOutput>>>();
@@ -72,8 +69,8 @@ void ModelRunner::SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> samp
   sampling_output_pool_ = sampling_output_pool;
 }
 
-void ModelRunner::SetDraftGeneratorController(std::shared_ptr<DraftGeneratorController> draft_generator_controller) {
-  executor_runtime_->SetDraftGeneratorController(draft_generator_controller);
+void ModelRunner::SetCompositeSpeculativeDecoder(std::shared_ptr<CompositeSpeculativeDecoder> decoder) {
+  composite_decoder_ = std::move(decoder);
 }
 
 void ModelRunner::SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker) {
@@ -223,7 +220,7 @@ Status ModelRunner::HandlePreprocess() {
     std::shared_ptr<NewModelInput> model_input = std::make_shared<NewModelInput>();
     {
       PROFILE_EVENT_SCOPE(preprocess_build_model_input, "Exec.HandlePreprocess.BuildModelInput");
-      executor_runtime_->BuildModelInput(schedule_output, model_input, RunMode::kMain);
+      executor_runtime_->BuildModelInput(schedule_output, model_input);
     }
 
     // ModelInput / ring 双 slot 乒乓翻转, 使 Preprocess 与 Execute 可重叠且互不覆写.
@@ -391,9 +388,13 @@ Status ModelRunner::HandlePostprocess() {
     WriteBuildAheadRingAfterSampling(model_output);
 
     auto generation_controller = executor_runtime_->GetGenerationController();
-    {
-      PROFILE_EVENT_SCOPE(postprocess_update_gen_state, "Exec.HandlePostprocess.UpdateGenerationState");
-      generation_controller->UpdateGenerationState(model_output->schedule_output->executor_running_reqs);
+
+    // Speculative decoding post-processing is encapsulated in
+    // CompositeSpeculativeDecoder::HandlePostprocess.
+    if (composite_decoder_) {
+      composite_decoder_->HandlePostprocess(model_output->schedule_output->executor_running_reqs,
+                                            model_output->hidden_unit, model_output->schedule_output,
+                                            generation_controller.get());
     }
 
     std::unordered_map<int64_t, GenerationResult> generation_results;
@@ -402,7 +403,7 @@ Status ModelRunner::HandlePostprocess() {
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
       auto& result = generation_results[req->req_id];
       result.generated_tokens = req->generated_tokens;
-      result.accepted_tokens = req->accepted_tokens;
+      result.accepted_tokens = req->spec_state.accepted_tokens;
       sampling_output->target_logprobs[req->req_id] = req->logprobs;
       if (req->structured_generator && req->structured_generator->IsTerminated()) {
         finished_req_ids.push_back(req->req_id);
@@ -424,45 +425,6 @@ Status ModelRunner::HandlePostprocess() {
     HiddenUnitDeviceBuffer* const hidden_unit = model_output->hidden_unit;
 
     {
-      PROFILE_EVENT_SCOPE(postprocess_gen_draft, "Exec.HandlePostprocess.GenerateDraft");
-      for (auto& req : model_output->schedule_output->executor_running_reqs) {
-        generation_controller->GenerateDraft(req);
-        // build-ahead：Execute 与下一步 Forward 重叠，需把 draft 计入 sampling_token_num 供调度/workload 估算。
-        // 慢路径：Sampling 在独立线程，req 状态在入队前已定型，此处无需再改 sampling_token_num。
-        if (postprocess_enqueue_report_) {
-          size_t draft_token_num = req->draft_tokens.size();
-          req->sampling_token_num = kStepGenerateTokenNum + draft_token_num;
-        }
-      }
-    }
-
-    if (context_->global->IsSamplingNode() && mtp_step_num_ > 0) {
-      PROFILE_EVENT_SCOPE(postprocess_mtp_forward, "Exec.HandlePostprocess.MtpForward");
-      GetHiddenShape(model_output->schedule_output, hidden_unit->tensor.shape);
-      hidden_unit->tensor.dtype = GetHiddenDataType();
-      if (has_profile) {
-        model_output->schedule_output->step_metrics = &sampling_output->profile_metrics;
-      }
-      // Check dspark_block_size_ first to route to the DSpark-specific forward path.
-      if (dspark_block_size_ > 0) {
-        executor_runtime_->DSparkForward(dspark_block_size_, dspark_noise_token_id_,
-                                         model_output->schedule_output->executor_running_reqs, hidden_unit,
-                                         model_output->schedule_output);
-      } else {
-        executor_runtime_->MtpForward(mtp_step_num_, model_output->schedule_output->executor_running_reqs, hidden_unit,
-                                      model_output->schedule_output);
-      }
-      model_output->schedule_output->step_metrics = nullptr;
-    }
-
-    // Compressor slot eviction has been moved to the start of HandleExecute (before the main
-    // Forward), uniformly on both sampling and non-sampling ranks. See the comment there for the
-    // rationale: doing evict before Prepare lets a single schedule_output carry finish_req_ids and
-    // new running_reqs together without exhausting the slot pool. MTP on this rank only Prepare()s
-    // for executor_running_reqs of the same schedule_output, which never overlap with that SO's
-    // finish_req_ids, so MTP does not require a dedicated evict point here.
-
-    {
       PROFILE_EVENT_SCOPE(postprocess_free_buffer, "Exec.HandlePostprocess.FreeHiddenBuffer");
       hidden_unit_buffer_pool_->FreeBuffer(hidden_unit);
     }
@@ -475,7 +437,7 @@ Status ModelRunner::HandlePostprocess() {
     Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->ResetState(model_output->pd_v2_epoch_id);
 
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
-      generation_results[req->req_id].draft_tokens = req->draft_tokens;
+      generation_results[req->req_id].draft_tokens = req->spec_state.draft_tokens;
     }
 
     if (global_cache_put_worker_) {

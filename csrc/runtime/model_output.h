@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 
+#include "models/base/base_model.h"
 #include "runtime/profile_metrics.h"
 #include "runtime/schedule_output.h"
 
@@ -13,7 +14,10 @@ namespace ksana_llm {
 
 class NewModelOutput {
  public:
-  RunMode run_mode;
+  // Whether this forward is an MTP (NextN) step. Propagated from NewModelInput by
+  // ModelExecutor::Forward. Used by ModelSampler::Sampling to decide whether the sampling
+  // request belongs to the main forward (RunMode::kMain) or a speculative/MTP forward.
+  RunMode run_mode = RunMode::kMain;
 
   // The schedule output.
   std::shared_ptr<ScheduleOutput> schedule_output;

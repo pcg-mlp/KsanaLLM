@@ -65,9 +65,17 @@ struct ForwardingBuffers {
   // Partial block prefix buffer for attn_res [max_token_num, hidden_units].
   TensorBuffer* prefix_residual_buffer = nullptr;
 
-  // Used among multiple forward calls for MTP/DSpark
-  std::vector<Tensor> mtp_hidden_buffer_tensors;
-  std::vector<Tensor> dspark_hidden_buffer_tensors;
+  // External hidden buffer for speculative decoding (injected by model).
+  // When non-null, CommonModel writes hidden states here for the next speculative step.
+  std::vector<Tensor>* external_next_step_hidden_buffer_ = nullptr;
+
+  void SetExternalNextStepHiddenBuffer(std::vector<Tensor>* buffer) { external_next_step_hidden_buffer_ = buffer; }
+
+  // Returns the next-step hidden buffer injected by the model.
+  std::vector<Tensor>& GetNextStepHiddenBuffer() { return *external_next_step_hidden_buffer_; }
+
+  // Whether the model has injected a next-step hidden buffer.
+  bool HasExternalNextStepHiddenBuffer() const { return external_next_step_hidden_buffer_ != nullptr; }
 
   void Init(std::shared_ptr<Context> context, const int rank, const ModelConfig& model_config,
             const RuntimeConfig& runtime_config, BufferManager* const buffer_mgr);
@@ -106,12 +114,11 @@ class ForwardingContext {
   size_t GetActiveModelInputSlot() const { return active_slot_; }
 
   // model_input_slot: 见 NewModelInput::slot_index 注释。slow path 默认 0。
-  void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
-                           size_t model_input_slot = 0, bool gpu_input_already_prepared = false);
+  void UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode, size_t model_input_slot = 0,
+                           bool gpu_input_already_prepared = false);
 
   // Preprocess 线程: 在 slot 对应 H2D stream 上完成 ParseFromRequests (与 Execute forward 重叠)。
-  void PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode,
-                            size_t model_input_slot);
+  void PrepareModelInputGpu(const std::vector<ForwardRequest>& forward_reqs, RunMode run_mode, size_t model_input_slot);
 
   void UpdateAfterForward(std::vector<ForwardRequest>& forward_reqs);
 

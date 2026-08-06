@@ -18,6 +18,7 @@ namespace ksana_llm {
 
 // Forward declaration to avoid introducing a dependency from models/base/ to executor/.
 class InflightResourceManager;
+class DraftModelInterface;
 
 enum class RunMode {
   kMain,    // default
@@ -42,11 +43,18 @@ class BaseModel {
                          bool gpu_input_already_prepared = false) = 0;
 
   // DSpark single-step head correction.
-  virtual Status ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) = 0;
+  virtual Status ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) { return Status(); }
 
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上构建 ModelInput（默认空实现）。
   virtual Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
                                       size_t model_input_slot);
+
+  // Expose the draft model (if any) for MtpDecoder creation.
+  // Returns nullptr for models without MTP support.
+  virtual DraftModelInterface* GetDraftModel() const { return nullptr; }
+
+  // Mark the next forward call as an MTP step. MtpDecoder calls this before Forward
+  // to let CommonModel apply MTP-specific behavior (embedding, MHC, norm) without kNextN.
 
   // 取本步 slot 对应 ModelInput 的 (req_id, last_offset) 配对 tensor device 指针 + batch_size。
   // sampling 完成后供 Sampler::WriteRing 固化到 ring。默认空实现；CommonModel 转发到 GetModelInput(slot)。
