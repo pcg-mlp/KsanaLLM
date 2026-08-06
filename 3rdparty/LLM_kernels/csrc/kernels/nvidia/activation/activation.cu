@@ -141,7 +141,7 @@ struct IdentityActivation {
 template <typename T>
 __device__ __forceinline__ T ApplyGateClamp(const T& val, float lim);  // clamp(max = lim)
 template <typename T>
-__device__ __forceinline__ T ApplyUpClamp(const T& val, float lim);    // clamp(min = -lim, max = lim)
+__device__ __forceinline__ T ApplyUpClamp(const T& val, float lim);  // clamp(min = -lim, max = lim)
 
 template <>
 __device__ __forceinline__ float ApplyGateClamp<float>(const float& val, float lim) {
@@ -163,14 +163,11 @@ __device__ __forceinline__ half ApplyUpClamp<half>(const half& val, float lim) {
 
 template <>
 __device__ __forceinline__ half2 ApplyGateClamp<half2>(const half2& val, float lim) {
-  return __floats2half2_rn(fminf(__half2float(val.x), lim),
-                           fminf(__half2float(val.y), lim));
+  return __floats2half2_rn(fminf(__half2float(val.x), lim), fminf(__half2float(val.y), lim));
 }
 template <>
 __device__ __forceinline__ half2 ApplyUpClamp<half2>(const half2& val, float lim) {
-  return __floats2half2_rn(
-      fminf(fmaxf(__half2float(val.x), -lim), lim),
-      fminf(fmaxf(__half2float(val.y), -lim), lim));
+  return __floats2half2_rn(fminf(fmaxf(__half2float(val.x), -lim), lim), fminf(fmaxf(__half2float(val.y), -lim), lim));
 }
 
 template <>
@@ -184,14 +181,12 @@ __device__ __forceinline__ __nv_bfloat16 ApplyUpClamp<__nv_bfloat16>(const __nv_
 
 template <>
 __device__ __forceinline__ __nv_bfloat162 ApplyGateClamp<__nv_bfloat162>(const __nv_bfloat162& val, float lim) {
-  return __floats2bfloat162_rn(fminf(__bfloat162float(val.x), lim),
-                               fminf(__bfloat162float(val.y), lim));
+  return __floats2bfloat162_rn(fminf(__bfloat162float(val.x), lim), fminf(__bfloat162float(val.y), lim));
 }
 template <>
 __device__ __forceinline__ __nv_bfloat162 ApplyUpClamp<__nv_bfloat162>(const __nv_bfloat162& val, float lim) {
-  return __floats2bfloat162_rn(
-      fminf(fmaxf(__bfloat162float(val.x), -lim), lim),
-      fminf(fmaxf(__bfloat162float(val.y), -lim), lim));
+  return __floats2bfloat162_rn(fminf(fmaxf(__bfloat162float(val.x), -lim), lim),
+                               fminf(fmaxf(__bfloat162float(val.y), -lim), lim));
 }
 
 template <template <typename T> class Activation, typename T, bool HAS_SWIGLU_LIMIT>
@@ -221,10 +216,10 @@ __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, in
   int32_t output_col_num = n / 2;
   const T* base = input + row_id * n;
   const T* gate_base = base + stride;
-  T* out_row  = out + row_id * output_col_num;
+  T* out_row = out + row_id * output_col_num;
   constexpr int32_t kColsPerIter = 2;  // process two columns per iteration
 
-  #pragma unroll 2
+#pragma unroll 2
   for (int32_t col = threadIdx.x; col < output_col_num; col += (blockDim.x * kColsPerIter)) {
     const int32_t col_0 = col;
     const int32_t col_1 = col_0 + blockDim.x;
@@ -239,11 +234,11 @@ __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, in
     }
 
     if constexpr (HAS_SWIGLU_LIMIT) {
-      val_in_0  = ApplyGateClamp<T>(val_in_0,  swiglu_limit);
-      gate_in_0 = ApplyUpClamp<T>  (gate_in_0, swiglu_limit);
+      val_in_0 = ApplyGateClamp<T>(val_in_0, swiglu_limit);
+      gate_in_0 = ApplyUpClamp<T>(gate_in_0, swiglu_limit);
       if (has_c1) {
-        val_in_1  = ApplyGateClamp<T>(val_in_1,  swiglu_limit);
-        gate_in_1 = ApplyUpClamp<T>  (gate_in_1, swiglu_limit);
+        val_in_1 = ApplyGateClamp<T>(val_in_1, swiglu_limit);
+        gate_in_1 = ApplyUpClamp<T>(gate_in_1, swiglu_limit);
       }
     }
 
@@ -264,8 +259,8 @@ __global__ void RowBasedActivationKernel(T* out, const T* __restrict__ input, in
 }
 
 template <template <typename T> class Activation, typename T, bool HAS_SWIGLU_LIMIT>
-void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n,
-                              float swiglu_limit, cudaStream_t& stream) {
+void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int32_t n, float swiglu_limit,
+                              cudaStream_t& stream) {
   using PT = typename PackTypeAlign<T>::type;
   int32_t packed_elems = ElemsNum<PT>::value;
   int32_t divided_column_num = n / 2;
@@ -281,17 +276,15 @@ void InvokeRowBasedActivation(T* out, const T* input, const int32_t m, const int
         <<<grid, block, 0, stream>>>(reinterpret_cast<T*>(out), reinterpret_cast<const T*>(input), m, n / packed_elems,
                                      divided_column_num / packed_elems, for_range, packed_elems, swiglu_limit);
   } else {
-    RowBasedActivationKernel<Activation, PT, HAS_SWIGLU_LIMIT>
-        <<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out), reinterpret_cast<const PT*>(input), m,
-                                     n / packed_elems, divided_column_num / packed_elems, for_range, packed_elems,
-                                     swiglu_limit);
+    RowBasedActivationKernel<Activation, PT, HAS_SWIGLU_LIMIT><<<grid, block, 0, stream>>>(
+        reinterpret_cast<PT*>(out), reinterpret_cast<const PT*>(input), m, n / packed_elems,
+        divided_column_num / packed_elems, for_range, packed_elems, swiglu_limit);
   }
 }
 
-#define INSTANTIATE_ROW_BASED_ACTIVATION(Activation, T, HAS_LIM)                                          \
-  template void InvokeRowBasedActivation<Activation, T, HAS_LIM>(T * out, const T* input, const int32_t m,\
-                                                                 const int32_t n, float swiglu_limit,     \
-                                                                 cudaStream_t& stream);
+#define INSTANTIATE_ROW_BASED_ACTIVATION(Activation, T, HAS_LIM)  \
+  template void InvokeRowBasedActivation<Activation, T, HAS_LIM>( \
+      T * out, const T* input, const int32_t m, const int32_t n, float swiglu_limit, cudaStream_t& stream);
 
 INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float, false);
 INSTANTIATE_ROW_BASED_ACTIVATION(SiluActivation, float, true);
@@ -318,7 +311,11 @@ __global__ void InvokeGenericActivationKernel(T* out, const BT* __restrict bias,
   using FloatType = typename PackType<float, packed_elems>::type;
   using PackedInt8Type = typename PackType<int8_t, packed_elems>::type;
 
-  for (int32_t id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
+  // Use int64_t for the linear index: with large continuous-batching steps, m * n and the
+  // grid-stride (blockDim.x * gridDim.x) can exceed INT32_MAX on the second iteration,
+  // wrapping id to a negative value and causing out-of-bounds accesses on out[id].
+  for (int64_t id = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x; id < static_cast<int64_t>(m) * n;
+       id += static_cast<int64_t>(blockDim.x) * gridDim.x) {
     T val;
     if (int8_mode == 2) {
       val = CastCudaDataType<T>(CastCudaDataType<FloatType>(reinterpret_cast<PackedInt8Type*>(out)[id]) *
@@ -349,7 +346,7 @@ __global__ void InvokeGenericActivationKernel(T* out, const BT* __restrict bias,
     }
 
     if (with_ia3) {
-      const int32_t word_id = id / n;
+      const int32_t word_id = static_cast<int32_t>(id / n);
       const int32_t offset = padding_offset == nullptr ? 0 : padding_offset[word_id];
       const int32_t batch_id = (word_id + offset) / seq_len;
       const int32_t task = ia3_tasks[batch_id];
@@ -380,7 +377,10 @@ void InvokeGenericActivation(T* out, const BT* bias, const T* gated_weights, con
     grid.x = m;
   } else {
     block.x = 1024;
-    grid.x = ceil(m * n / 1024.);
+    // Promote to int64 before multiply: m * n as int32 can overflow for large steps.
+    // Keep using the caller's n (not packed) to preserve existing launch shape; only fix overflow.
+    grid.x = static_cast<unsigned int>((static_cast<int64_t>(m) * n + static_cast<int64_t>(block.x) - 1) /
+                                       static_cast<int64_t>(block.x));
   }
   InvokeGenericActivationKernel<Activation><<<grid, block, 0, stream>>>(
       reinterpret_cast<PT*>(out), reinterpret_cast<const PBT*>(bias), reinterpret_cast<const PT*>(gated_weights),
