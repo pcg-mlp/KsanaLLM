@@ -283,14 +283,22 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_scheduler_config_.split_fuse_token_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.split_fuse_token_num", 0);
+  batch_scheduler_config_.mtp_step_num =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.mtp_step_num", 0);
   batch_scheduler_config_.enable_speculative_decoding = yaml_reader.GetScalar<bool>(
       yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_speculative_decoding", false);
   batch_scheduler_config_.speculative_method =
       yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.batch_scheduler.speculative_method", "");
   if (batch_scheduler_config_.enable_speculative_decoding) {
     if (batch_scheduler_config_.speculative_method.empty()) {
-      // Use trie by default
-      batch_scheduler_config_.speculative_method = "trie";
+      // MTP registers its decoder via post-init setup and does not rely on speculative_method.
+      // When mtp_step_num is configured, leave speculative_method empty — this avoids
+      // conflicting Trie/MTP decoders inside CompositeSpeculativeDecoder.
+      if (batch_scheduler_config_.mtp_step_num > 0) {
+        batch_scheduler_config_.enable_speculative_decoding = false;
+      } else {
+        batch_scheduler_config_.speculative_method = "trie";
+      }
     } else if (!SpeculativeRegistry::Get().HasDecoderMethod(batch_scheduler_config_.speculative_method)) {
       KLLM_LOG_WARNING << fmt::format("Unknown speculative_method: {}, disable speculative decoding.",
                                       batch_scheduler_config_.speculative_method);
@@ -302,8 +310,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
                                     batch_scheduler_config_.speculative_method);
     batch_scheduler_config_.speculative_method.clear();
   }
-  batch_scheduler_config_.mtp_step_num =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.mtp_step_num", 0);
   batch_scheduler_config_.ptp_step_num = model_config.ptp_step_num;
   batch_scheduler_config_.ptp_token_id = model_config.ptp_token_id;
 
@@ -315,6 +321,15 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       const std::string &value = it->second.as<std::string>();
       batch_scheduler_config_.speculative_config[key] = value;
     }
+  }
+
+  if (batch_scheduler_config_.mtp_step_num > 0 && batch_scheduler_config_.ptp_step_num > 0) {
+    batch_scheduler_config_.ptp_step_num = 0;
+    KLLM_LOG_WARNING << "MTP and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
+  }
+  if (batch_scheduler_config_.enable_speculative_decoding && batch_scheduler_config_.ptp_step_num > 0) {
+    batch_scheduler_config_.ptp_step_num = 0;
+    KLLM_LOG_WARNING << "Speculative decoding and PTP cannot be enabled simultaneously, ptp_step_num will be set to 0.";
   }
 
   if (model_config.num_nextn_predict_layers == 0 && batch_scheduler_config_.mtp_step_num != 0) {

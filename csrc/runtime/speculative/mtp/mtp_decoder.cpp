@@ -80,15 +80,6 @@ Status MtpDecoder::ExecuteForward(std::vector<std::shared_ptr<ExecutorInferReque
     infer_req->forwarding_tokens.insert(infer_req->forwarding_tokens.end(), infer_req->generated_tokens.begin(),
                                         infer_req->generated_tokens.end());
     infer_req->forwarding_tokens.erase(infer_req->forwarding_tokens.begin());
-    // Keep kv_cached_token_num/prefix_cache_len consistent with the forwarding_tokens mutation above
-    // (mirrors DSparkDecoder's equivalent preparation in dspark_decoder.cpp). Only the freshly generated
-    // token(s) are uncached at MTP step 0; everything else (including the just-accepted draft prefix) is
-    // treated as already cached. Without this, GetInputIdsLength() at step 0 would equal
-    // `spec_state.accepted_tokens.size() + 1`, a value that varies per-request with the (probabilistic)
-    // draft-acceptance count, breaking the invariant PrepareCompressor's IsPaged-ordering assertion
-    // relies on (see deepseek_v4_compressor_builder.cpp PrepareCompressor).
-    infer_req->kv_cached_token_num = infer_req->forwarding_tokens.size() - infer_req->generated_tokens.size();
-    infer_req->prefix_cache_len = infer_req->kv_cached_token_num;
     infer_req->sampling_token_num = kStepGenerateTokenNum;
   }
 
