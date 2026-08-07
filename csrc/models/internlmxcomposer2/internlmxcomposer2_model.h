@@ -4,7 +4,6 @@
 #pragma once
 
 #include "configure/environment.h"
-#include "models/common/common_weight.h"
 #include "models/common/model_interface.h"
 #include "runtime/forward_request.h"
 #include "utils/status.h"

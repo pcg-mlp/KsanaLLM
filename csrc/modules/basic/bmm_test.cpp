@@ -5,8 +5,8 @@
 
 #include "configure/context.h"
 #include "configure/environment.h"
+#include "models/base/base_weight.h"
 #include "models/base/fake_weight_for_test.h"
-#include "models/common/common_weight.h"
 #include "tests/test.h"
 #include "utils/memory_allocator.h"
 #include "utils/tensor.h"
@@ -101,6 +101,19 @@ float CalcDiff(float gpu_val, float cpu_val) {
 }
 
 template <typename T>
+class BmmTestWeight : public BaseWeight {
+ public:
+  using BaseWeight::weights_map_;
+  BmmTestWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
+                std::shared_ptr<Context> context)
+      : BaseWeight(model_config, runtime_config, rank, context) {}
+  Tensor GetModelWeights(const std::string& weight_name) override {
+    if (weights_map_.count(weight_name)) return weights_map_[weight_name];
+    return Tensor();
+  }
+};
+
+template <typename T>
 void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size_t tokens, std::string test_type) {
   // Initialize the relevant
   ModelConfig model_config;
@@ -134,7 +147,7 @@ void TestBmmWithType(size_t heads, size_t qk_nope_dim, size_t kv_lora_rank, size
   size_t byte_size3 = elem_count3 * sizeof(T);
 
   // Create bmm_weight and Tensor
-  auto bmm_weight = std::make_shared<CommonWeight<T>>(model_config, runtime_config, rank, ctx);
+  auto bmm_weight = std::make_shared<BmmTestWeight<T>>(model_config, runtime_config, rank, ctx);
 
   void* new_buf = nullptr;
   cudaError_t e = cudaMalloc(&new_buf, byte_size1);

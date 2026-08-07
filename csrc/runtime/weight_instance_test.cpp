@@ -13,16 +13,11 @@ class WeightInstanceTest : public ::testing::Test {
   void SetUp() override {
     Py_Initialize();
     InitLoguru();
-    setenv("ENABLE_MODEL_CACHE", "1", 1);
-    setenv("ENABLE_OLD_LOADER", "1", 1);
     context_ = std::make_shared<Context>();
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../examples/llama7b/ksana_llm.yaml";
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
-    tmp_cache_model_path_ =
-        std::filesystem::absolute(parent_path / "../../../build/tmp" / std::to_string(std::time(nullptr)));
-    setenv("MODEL_CACHE_PATH", tmp_cache_model_path_.c_str(), 1);
 
     const auto &env = Singleton<Environment>::GetInstance();
     env->ParseConfig(config_path, "/model/Qwen1.5-Moe-A2.7B-18188");
@@ -44,18 +39,11 @@ class WeightInstanceTest : public ::testing::Test {
     env->GetRuntimeConfig(runtime_config_);
   }
 
-  void TearDown() override {
-    unsetenv("ENABLE_MODEL_CACHE");
-    unsetenv("MODEL_CACHE_PATH");
-    unsetenv("ENABLE_OLD_LOADER");
-    uintmax_t n = std::filesystem::remove_all(tmp_cache_model_path_);
-    Py_Finalize();
-  }
+  void TearDown() override { Py_Finalize(); }
 
   ModelConfig model_config_;
   RuntimeConfig runtime_config_;
   std::shared_ptr<Context> context_{nullptr};
-  std::filesystem::path tmp_cache_model_path_;
 };
 
 }  // namespace ksana_llm

@@ -25,7 +25,7 @@ Status ModelConfigParser::ParseModelConfig(const std::string& model_dir,
 
   nlohmann::json config_json;
   ModelArchitecture model_arch;
-  std::unordered_map<std::string, NewGGUFMetaValue> gguf_meta;
+  std::unordered_map<std::string, GGUFMetaValue> gguf_meta;
 
   // Get model arch and config.
   if (model_format == ModelFormat::PYTORCH_BIN || model_format == ModelFormat::PYTORCH_SAFETENSOR) {

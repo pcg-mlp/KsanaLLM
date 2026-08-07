@@ -73,25 +73,25 @@ Status LlamaModelConfigParser::ParseModelConfig(const nlohmann::json &config_jso
 
 DataType GetGGUFWeightDataType(uint32_t gguf_model_file_type) {
   switch (gguf_model_file_type) {
-    case NewGGUFModelFileType::NEW_LLAMA_FTYPE_ALL_F32:
+    case GGUFModelFileType::LLAMA_FTYPE_ALL_F32:
       return DataType::TYPE_FP32;
-    case NewGGUFModelFileType::NEW_LLAMA_FTYPE_MOSTLY_F16:
+    case GGUFModelFileType::LLAMA_FTYPE_MOSTLY_F16:
       return DataType::TYPE_FP16;
-    case NewGGUFModelFileType::NEW_LLAMA_FTYPE_MOSTLY_BF16:
+    case GGUFModelFileType::LLAMA_FTYPE_MOSTLY_BF16:
       return DataType::TYPE_BF16;
     default:
       return TYPE_INVALID;
   }
 }
 
-Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue> &gguf_meta,
+Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, GGUFMetaValue> &gguf_meta,
                                                 std::shared_ptr<BaseModelConfig> &model_config) {
   // Create real model config.
   std::shared_ptr<LlamaModelConfig> llama_model_config = std::make_shared<LlamaModelConfig>();
   model_config = llama_model_config;
 
   llama_model_config->weight_data_type = GetGGUFWeightDataType(std::any_cast<uint32_t>(
-      GetValueFromGGUFMeta(gguf_meta, "general.file_type", NewGGUFModelFileType::NEW_LLAMA_FTYPE_MOSTLY_F16)));
+      GetValueFromGGUFMeta(gguf_meta, "general.file_type", GGUFModelFileType::LLAMA_FTYPE_MOSTLY_F16)));
 
   std::string model_type = std::any_cast<std::string>(GetValueFromGGUFMeta(gguf_meta, "general.architecture"));
 
@@ -134,7 +134,7 @@ Status LlamaModelConfigParser::ParseModelConfig(const std::unordered_map<std::st
   // Handle 'end_ids' which might be a single value or an array
   if (gguf_meta.count("tokenizer.ggml.eos_token_id")) {
     auto eos_token_meta = gguf_meta.at("tokenizer.ggml.eos_token_id");
-    if (eos_token_meta.type == NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_ARRAY) {
+    if (eos_token_meta.type == GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_ARRAY) {
       llama_model_config->end_ids = std::any_cast<std::vector<uint32_t>>(eos_token_meta.value);
     } else {
       llama_model_config->end_ids = {std::any_cast<uint32_t>(eos_token_meta.value)};

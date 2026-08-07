@@ -30,7 +30,7 @@ class GGUFFileLoader : public BaseFileLoader {
                                   std::unordered_map<std::string, Tensor>& result) override;
 
   // Get the meta info from gguf file, used to construct model config.
-  Status GetMetaDict(std::unordered_map<std::string, NewGGUFMetaValue>& result);
+  Status GetMetaDict(std::unordered_map<std::string, GGUFMetaValue>& result);
 
  private:
   Status LoadGGUFModelMeta();
@@ -42,7 +42,7 @@ class GGUFFileLoader : public BaseFileLoader {
 
   int64_t file_size_ = 0;
 
-  std::shared_ptr<NewGGUFContext> gguf_context_ = nullptr;
+  std::shared_ptr<GGUFContext> gguf_context_ = nullptr;
 
   // Whether the file have been loaded.
   bool loaded_ = false;

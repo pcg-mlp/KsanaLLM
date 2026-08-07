@@ -14,7 +14,7 @@ namespace ksana_llm {
 // Config parser for gguf format.
 class GGUFConfigParser {
  public:
-  Status GetGGUFMeta(const std::string& model_dir, std::unordered_map<std::string, NewGGUFMetaValue>& gguf_meta,
+  Status GetGGUFMeta(const std::string& model_dir, std::unordered_map<std::string, GGUFMetaValue>& gguf_meta,
                      ModelArchitecture& model_arch);
 };
 

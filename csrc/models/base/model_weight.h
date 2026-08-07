@@ -31,18 +31,6 @@ class ModelWeight : public BaseWeight {
   // For compatible with common_model, improve it later
   // //////////////////////////////////////////////////////////////////////////////////////////
   virtual Tensor GetModelWeights(const std::string& weight_name) override { return GetWeightTensor(weight_name); }
-
-  virtual Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
-                                     const std::vector<std::string>& weight_name_list,
-                                     const std::vector<std::string>& custom_name_list) override {
-    return Status();
-  }
-
-  virtual void ProcessWeights() override {}
-
-  virtual void SetEmbeddingsConfig() override {}
-
-  virtual void PrintDebugMessage() override {}
   // //////////////////////////////////////////////////////////////////////////////////////////
 
  private:

@@ -18,7 +18,7 @@ Status BaseModelConfigParser::ParseModelConfig(const nlohmann::json &config_json
 }
 
 // Parse config from gguf files.
-Status BaseModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue> &gguf_meta,
+Status BaseModelConfigParser::ParseModelConfig(const std::unordered_map<std::string, GGUFMetaValue> &gguf_meta,
                                                std::shared_ptr<BaseModelConfig> &model_config) {
   KLLM_THROW("ParseModelConfig from gguf meta not implemented.");
   return Status();

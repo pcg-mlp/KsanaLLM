@@ -11,7 +11,7 @@
 namespace ksana_llm {
 
 Status GGUFConfigParser::GetGGUFMeta(const std::string& model_dir,
-                                     std::unordered_map<std::string, NewGGUFMetaValue>& gguf_meta,
+                                     std::unordered_map<std::string, GGUFMetaValue>& gguf_meta,
                                      ModelArchitecture& model_arch) {
   std::vector<std::string> model_file_list;
   Status status = GetModelFileList(model_dir, model_file_list);

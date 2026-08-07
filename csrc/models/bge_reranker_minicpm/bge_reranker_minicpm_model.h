@@ -6,7 +6,6 @@
 #include "configure/environment.h"
 #include "configure/model_config_parser.h"
 #include "models/common/common_model.h"
-#include "models/common/common_weight.h"
 #include "models/common/model_interface.h"
 #include "runtime/forward_request.h"
 #include "utils/status.h"

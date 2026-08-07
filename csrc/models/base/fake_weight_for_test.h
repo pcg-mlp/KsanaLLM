@@ -158,16 +158,6 @@ class FakeWeight : public BaseWeight {
     return weights_map_[weight_name];
   }
 
-  Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
-                             const std::vector<std::string>& weight_name_list,
-                             const std::vector<std::string>& custom_name_list) override {
-    return Status();
-  }
-
-  void ProcessWeights() {}
-
-  void SetEmbeddingsConfig() {}
-
  public:
   bool CreateWeight(const std::string& weight_name, const std::vector<size_t> shape, const DataType dtype,
                     const MemoryLocation location) {

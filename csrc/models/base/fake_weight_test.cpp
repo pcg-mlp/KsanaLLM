@@ -46,12 +46,6 @@ TEST_F(FakeWeightTest, FakeWeightBasic) {
   EXPECT_EQ(weight.location, MemoryLocation::LOCATION_HOST);
 }
 
-TEST_F(FakeWeightTest, GetCacheFolder) {
-  FakeWeight fake_weight(rank_);
-  std::string cache_folder = fake_weight.GetCacheFolder();
-  EXPECT_TRUE(cache_folder.find("cached_model_") != std::string::npos);
-}
-
 bool IsVectorSame(const std::vector<size_t>& a, const std::vector<size_t>& b) {
   if (a.size() != b.size()) {
     return false;

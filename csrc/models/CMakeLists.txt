@@ -10,19 +10,15 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/models/quant/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/weight_method/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/llama/*.cpp
-  ${PROJECT_SOURCE_DIR}/csrc/models/llama4/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/qwen/*.cpp
-  ${PROJECT_SOURCE_DIR}/csrc/models/baichuan/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/bge_reranker_minicpm/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/chatglm/*.cpp
-  ${PROJECT_SOURCE_DIR}/csrc/models/gpt/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/common_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/mixtral/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/qwen2_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/qwen3_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/internlm2/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/internlmxcomposer2/*.cpp
-  ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_large/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v3/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v4/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/kimi_k3/*.cpp

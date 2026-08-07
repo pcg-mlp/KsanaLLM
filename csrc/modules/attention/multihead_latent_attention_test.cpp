@@ -19,7 +19,6 @@
 #include "tests/test.h"
 #include "utils/attention_backend/attention_backend_manager.h"
 #include "utils/calc_intvec_hash.h"
-#include "utils/get_custom_weight_name.h"
 #include "utils/memory_allocator.h"
 #include "utils/search_path.h"
 #include "utils/singleton.h"
@@ -282,15 +281,6 @@ class TestWeight : public BaseWeight {
     }
     return it->second;
   }
-
-  virtual Status LoadWeightsFromFile(const std::shared_ptr<BaseFileTensorLoader> weights_loader,
-                                     const std::vector<std::string>& weight_name_list,
-                                     const std::vector<std::string>& custom_name_list) override {
-    return Status();
-  }
-
-  virtual void ProcessWeights() override { return; }
-  virtual void SetEmbeddingsConfig() override { return; }
 
   void AddMlaWeight(int device_id = 0) {
     std::unordered_map<std::string, std::vector<size_t>> add_tensor_map;

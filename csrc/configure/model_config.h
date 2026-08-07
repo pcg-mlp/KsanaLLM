@@ -242,8 +242,6 @@ struct MoeConfig {
   // TODO(winminkong): 增加临时算子选择项，后期改为配置项
   bool use_vllm_moe = false;
 
-  // for llama4
-  size_t interleave_moe_layer_step = 1;
   // when is_moe == true,
   // if moe_layers.empty() means all layers' mlp use moe,
   // else only layer_idx in moe_layers use moe.
@@ -342,15 +340,15 @@ struct ModelConfig {
   uint32_t start_id;
   std::vector<uint32_t> end_ids;
   uint32_t pad_id;
-  size_t num_key_value_heads;  // nobody use it, to be removed
+  size_t num_key_value_heads;
   int max_position_embeddings;
 
   // Parallel Token Prediction (PTP)
   size_t ptp_step_num;
   uint32_t ptp_token_id;
 
-  std::vector<float> k_scales;  // to be removed
-  std::vector<float> v_scales;  // to be removed
+  std::vector<float> k_scales;
+  std::vector<float> v_scales;
 
   RoPEScalingFactor rope_scaling_factor_config;
 
@@ -421,13 +419,6 @@ struct ModelConfig {
   // For dspark model
   DsparkConfig dspark_config;
 
-  // For arc-hunyuan-video
-  // TODO(jinxcwu) 后续要简化下，不是所有都需要的
-  uint32_t eod_token_id = 0;
-  uint32_t im_end_id = 0;
-  uint32_t im_newline_id = 0;
-  uint32_t im_start_id = 0;
-  uint32_t image_token_id = 0;
   bool position_embedding_xdrope = false;
 
   // Number of DeepStack injection layers (from vision_config.deepstack_visual_indexes).
@@ -435,7 +426,7 @@ struct ModelConfig {
   int num_deepstack_layers = 0;
 
   // Whether to normalize q and k before rotary position embedding in attention.
-  bool enable_qk_pre_norm_before_rotary_pos = false;  // to be removed
+  bool enable_qk_pre_norm_before_rotary_pos = false;
 
   bool enable_add_qkv_bias = false;  // TODO(robertyuan): this is a model config, not func switch. Change name
 
@@ -444,7 +435,6 @@ struct ModelConfig {
   size_t attn_temperature_tuning = 0;
   float attn_scale = 0;
   size_t floor_scale = 0;
-  size_t attention_chunk_size = 0;
 
   // The word embedding scale factor.
   float emb_scale = 1.f;

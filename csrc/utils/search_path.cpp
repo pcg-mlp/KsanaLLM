@@ -4,7 +4,7 @@
 
 #include "utils/search_path.h"
 #include <filesystem>
-#include "utils/gguf_file_tensor_loader.h"
+#include "utils/gguf_file_utils.h"
 
 namespace ksana_llm {
 

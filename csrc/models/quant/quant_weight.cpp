@@ -27,8 +27,6 @@
 
 #include <regex>
 
-#include "nlohmann/json.hpp"
-
 #include "device/common_device.h"
 
 #ifdef ENABLE_CUDA
@@ -39,7 +37,6 @@
 #include "kernels/permute.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
-#include "utils/optional_file.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {

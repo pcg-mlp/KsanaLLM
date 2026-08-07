@@ -4,7 +4,6 @@
 
 #include "utils/request.h"
 #include "profiler/reporter.h"
-#include "utils/finite_state_machine.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {

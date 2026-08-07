@@ -3,7 +3,7 @@
 ==============================================================================*/
 
 #include "modules/basic/mhc.h"
-#include "models/common/common_weight.h"
+#include "models/base/base_weight.h"
 #include "modules/basic/layernorm.h"
 #include "tests/test.h"
 #include "utils/random_generator.h"
@@ -11,16 +11,21 @@
 using namespace ksana_llm;
 
 template <typename T>
-class MhcWeight : public CommonWeight<T> {
-  using CommonWeight<T>::weights_map_;
-  using CommonWeight<T>::context_;
+class MhcWeight : public BaseWeight {
+  using BaseWeight::context_;
+  using BaseWeight::weights_map_;
 
  public:
   MhcWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
             std::shared_ptr<Context> context)
-      : CommonWeight<T>(model_config, runtime_config, rank, context) {}
+      : BaseWeight(model_config, runtime_config, rank, context) {}
 
   ~MhcWeight() override = default;
+
+  Tensor GetModelWeights(const std::string& weight_name) override {
+    if (weights_map_.count(weight_name)) return weights_map_[weight_name];
+    return Tensor();
+  }
 
   void AddWeight() {
     const size_t hidden_size = 7168;

@@ -9,27 +9,21 @@
 #include <vector>
 
 #include "device/device_types.h"
-#include "nlohmann/json.hpp"
-#include "utils/get_custom_weight_name.h"
 #include "utils/logger.h"
 #include "utils/optional_file.h"
 #include "utils/status.h"
 
 #include "models/arc_hunyuan_video/arc_hunyuan_video_model.h"
-#include "models/baichuan/baichuan_model.h"
 #include "models/bge_reranker_minicpm/bge_reranker_minicpm_model.h"
 #include "models/chatglm/chatglm_model.h"
 #include "models/deepseek_v3/deepseek_v3_model.h"
 #include "models/deepseek_v4/deepseek_v4_model.h"
 #include "models/glm4_moe/glm4_moe_model.h"
-#include "models/gpt/gpt_model.h"
-#include "models/hunyuan_large/hunyuan_large_model.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "models/internlm2/internlm2_model.h"
 #include "models/internlmxcomposer2/internlmxcomposer2_model.h"
 #include "models/kimi_k3/kimi_k3_model.h"
 #include "models/llama/llama_model.h"
-#include "models/llama4/llama4_model.h"
 #include "models/mixtral/mixtral_model.h"
 #include "models/qwen/qwen_embedding_model.h"
 #include "models/qwen/qwen_model.h"
@@ -54,11 +48,7 @@ void ModelInstance::Load() {
   // unify it to lower case
   std::transform(unified_model_type.begin(), unified_model_type.end(), unified_model_type.begin(),
                  [](unsigned char c) { return std::tolower(c); });
-  if (unified_model_type.find("llama4") != std::string::npos) {
-    type = "llama4";
-    CreateModelInstance<Llama4Model>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
-                                     block_cache_layout_);
-  } else if (unified_model_type.find("llama") != std::string::npos) {
+  if (unified_model_type.find("llama") != std::string::npos) {
     type = "llama";
     CreateModelInstance<LlamaModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                     block_cache_layout_);
@@ -86,18 +76,10 @@ void ModelInstance::Load() {
     model_config_.enable_add_qkv_bias = true;
     CreateModelInstance<QwenModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                    block_cache_layout_);
-  } else if (unified_model_type.find("baichuan") != std::string::npos) {
-    type = "baichuan";
-    CreateModelInstance<BaichuanModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
-                                       block_cache_layout_);
   } else if (unified_model_type.find("chatglm") != std::string::npos) {
     type = "chatglm";
     CreateModelInstance<ChatglmModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                       block_cache_layout_);
-  } else if (unified_model_type.find("gpt") != std::string::npos ||
-             unified_model_type.find("fairseq-transformer") != std::string::npos) {
-    CreateModelInstance<GptModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
-                                  block_cache_layout_);
   } else if (unified_model_type.find("internlm2") != std::string::npos ||
              unified_model_type.find("internvl_chat") != std::string::npos) {
     type = "internlm2";
@@ -112,13 +94,9 @@ void ModelInstance::Load() {
     type = "arc_hunyuan_video";
     CreateModelInstance<ArcHunyuanVideoModel>(model_config_, runtime_config_, context_, model_instance_,
                                               weight_instance_, block_cache_layout_);
-  } else if (unified_model_type.find("hunyuan") != std::string::npos && !model_config_.is_moe) {
+  } else if (unified_model_type.find("hunyuan") != std::string::npos) {
     type = "hunyuan";
     CreateModelInstance<HunyuanTurboModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
-                                           block_cache_layout_);
-  } else if (unified_model_type.find("hunyuan") != std::string::npos && model_config_.is_moe) {
-    type = "hunyuan";
-    CreateModelInstance<HunyuanLargeModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                            block_cache_layout_);
   } else if (unified_model_type.find("mixtral") != std::string::npos) {
     type = "mixtral";

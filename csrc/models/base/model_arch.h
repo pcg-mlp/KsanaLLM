@@ -21,12 +21,8 @@ enum class ModelArchitecture {
   ARCH_QWEN2_VL,
   // qwen
   ARCH_QWEN,
-  // baichuan
-  ARCH_BAICHUAN,
   // chatglm
   ARCH_CHATGLM,
-  // gpt
-  ARCH_GPT,
   // bge reranker
   ARCH_MINICPM,
   // mixtral
@@ -39,8 +35,6 @@ enum class ModelArchitecture {
   ARCH_INTERNLMXCOMPOSER2,
   // arc_hunyuan_video
   ARCH_ARC_HUNYUAN_VIDEO,
-  // Hunyuan Large
-  ARCH_HUNYUAN_LARGE,
   // Hunyuan Turbo
   ARCH_HUNYUAN_TURBO,
   // GLM4-MoE

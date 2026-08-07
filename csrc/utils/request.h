@@ -12,7 +12,6 @@
 #include "pd_v2/public/pd_v2_types.h"
 #include "pybind11/pybind11.h"
 #include "runtime/structured_generation/structured_generator_interface.h"
-#include "utils/finite_state_machine.h"
 #include "utils/grammar_matcher.h"
 #include "utils/id_generator.h"
 #include "utils/status.h"

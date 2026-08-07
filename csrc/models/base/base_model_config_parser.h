@@ -22,7 +22,7 @@ class BaseModelConfigParser {
                                   std::shared_ptr<BaseModelConfig> &model_config);
 
   // Parse config from gguf files.
-  virtual Status ParseModelConfig(const std::unordered_map<std::string, NewGGUFMetaValue> &gguf_meta,
+  virtual Status ParseModelConfig(const std::unordered_map<std::string, GGUFMetaValue> &gguf_meta,
                                   std::shared_ptr<BaseModelConfig> &model_config);
 };
 

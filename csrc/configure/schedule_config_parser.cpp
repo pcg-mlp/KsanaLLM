@@ -21,7 +21,6 @@
 #include "device/device_utils.h"
 #include "models/common/common_config.h"
 #include "models/common_moe/moe_config.h"
-#include "utils/gguf_file_tensor_loader.h"
 #include "utils/logger.h"
 #include "utils/optional_file.h"
 #include "utils/ret_code.h"

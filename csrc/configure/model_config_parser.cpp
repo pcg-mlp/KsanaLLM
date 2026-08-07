@@ -24,12 +24,10 @@
 #include "models/common_moe/moe_config.h"
 #include "models/deepseek_v3/deepseek_v3_config.h"
 #include "models/deepseek_v4/deepseek_v4_config.h"
-#include "models/gpt/gpt_config.h"
 #include "models/kimi_k3/kimi_k3_config.h"
-#include "utils/gguf_file_tensor_loader.h"
+#include "utils/gguf_file_utils.h"
 #include "utils/logger.h"
 #include "utils/memory_utils.h"
-#include "utils/optional_file.h"
 #include "utils/ret_code.h"
 #include "utils/status.h"
 #include "utils/string_utils.h"
@@ -504,17 +502,6 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
 
     if (model_config.type == "chatglm") {
       PrepareChatglmAttributes(config_json, model_config);
-    } else if (model_config.type == "openai-gpt") {  // GPT-1
-      // For fairseq transformer, we use the same config as huggingface openai-gpt, and distinguish them by the vocab
-      // size.
-      if (config_json.at("vocab_size") == 7000) {
-        model_config.type = "fairseq-transformer";
-        PrepareFairseqTransformerAttributes(config_json, model_config);
-      } else {
-        PrepareGPT1Attributes(config_json, model_config);
-      }
-    } else if (model_config.type == "gpt2") {
-      PrepareGPT2Attributes(config_json, model_config);
     } else if (model_config.type == "qwen2_moe" || model_config.type == "qwen3_moe") {
       PrepareQwenMoeAttributes(config_json, model_config);
       if (model_config.type == "qwen3_moe") {
@@ -552,10 +539,6 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
         model_config.moe_config.use_vllm_moe = true;
       }
 #endif
-    } else if (model_config.type == "llama4") {
-      config_json = config_json["text_config"];
-      model_config.weight_data_type = GetModelDataType(config_json, model_config);
-      PrepareLlama4Attributes(config_json, model_config);
     } else if (model_config.type == "mixtral") {
       PrepareMixtralAttributes(config_json, model_config);
     } else if (model_config.type.find("hunyuan") != std::string::npos) {

@@ -5,7 +5,6 @@
 
 #include "configure/environment.h"
 #include "models/common/common_model.h"
-#include "models/common/common_weight.h"
 #include "utils/status.h"
 #include "utils/utils.h"
 

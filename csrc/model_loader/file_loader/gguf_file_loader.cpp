@@ -23,75 +23,75 @@ GGUFFileLoader::~GGUFFileLoader() {
   }
 }
 
-Status ReadGGUFMetadataValue(std::ifstream& gguf_file, NewGGUFMetaValueType type, std::any& any_value) {
+Status ReadGGUFMetadataValue(std::ifstream& gguf_file, GGUFMetaValueType type, std::any& any_value) {
   switch (type) {
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_UINT8: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_UINT8: {
       uint8_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(uint8_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_INT8: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_INT8: {
       int8_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(int8_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_UINT16: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_UINT16: {
       uint16_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(uint16_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_INT16: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_INT16: {
       int16_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(int16_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_UINT32: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_UINT32: {
       uint32_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(uint32_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_INT32: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_INT32: {
       int32_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(int32_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_UINT64: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_UINT64: {
       uint64_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(uint64_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_INT64: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_INT64: {
       int64_t value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(int64_t));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_FLOAT32: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_FLOAT32: {
       float value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(float));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_FLOAT64: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_FLOAT64: {
       double value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(double));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_BOOL: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_BOOL: {
       bool value;
       gguf_file.read(reinterpret_cast<char*>(&value), sizeof(bool));
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_STRING: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_STRING: {
       uint64_t length;
       gguf_file.read(reinterpret_cast<char*>(&length), sizeof(uint64_t));
       std::string value(length, '\0');
@@ -99,10 +99,10 @@ Status ReadGGUFMetadataValue(std::ifstream& gguf_file, NewGGUFMetaValueType type
       any_value = value;
       break;
     }
-    case NewGGUFMetaValueType::NEW_GGUF_METADATA_VALUE_TYPE_ARRAY: {
+    case GGUFMetaValueType::GGUF_METADATA_VALUE_TYPE_ARRAY: {
       uint32_t elem_type_raw;
       gguf_file.read(reinterpret_cast<char*>(&elem_type_raw), sizeof(uint32_t));
-      NewGGUFMetaValueType elem_type = static_cast<NewGGUFMetaValueType>(elem_type_raw);
+      GGUFMetaValueType elem_type = static_cast<GGUFMetaValueType>(elem_type_raw);
 
       uint64_t length;
       gguf_file.read(reinterpret_cast<char*>(&length), sizeof(uint64_t));
@@ -155,29 +155,29 @@ Status ReadDataFromFile(std::ifstream& gguf_file, T& value) {
 
 DataType GetTensorDataType(uint32_t ggml_type) {
   switch (ggml_type) {
-    case NewGGMLType::NEW_GGML_TYPE_F32:
+    case GGMLType::GGML_TYPE_F32:
       return TYPE_FP32;
-    case NewGGMLType::NEW_GGML_TYPE_F16:
+    case GGMLType::GGML_TYPE_F16:
       return TYPE_FP16;
-    case NewGGMLType::NEW_GGML_TYPE_I8:
+    case GGMLType::GGML_TYPE_I8:
       return TYPE_INT8;
-    case NewGGMLType::NEW_GGML_TYPE_I16:
+    case GGMLType::GGML_TYPE_I16:
       return TYPE_INT16;
-    case NewGGMLType::NEW_GGML_TYPE_I32:
+    case GGMLType::GGML_TYPE_I32:
       return TYPE_INT32;
-    case NewGGMLType::NEW_GGML_TYPE_I64:
+    case GGMLType::GGML_TYPE_I64:
       return TYPE_INT64;
-    case NewGGMLType::NEW_GGML_TYPE_F64:
+    case GGMLType::GGML_TYPE_F64:
       return TYPE_FP64;
-    case NewGGMLType::NEW_GGML_TYPE_BF16:
+    case GGMLType::GGML_TYPE_BF16:
       return TYPE_BF16;
     default:
       return TYPE_INVALID;
   }
 }
 
-Status ReadMeta(std::ifstream& gguf_file, std::shared_ptr<NewGGUFContext> gguf_context,
-                std::unordered_map<std::string, NewGGUFMetaValue>& result) {
+Status ReadMeta(std::ifstream& gguf_file, std::shared_ptr<GGUFContext> gguf_context,
+                std::unordered_map<std::string, GGUFMetaValue>& result) {
   gguf_file.read(reinterpret_cast<char*>(&gguf_context->header.magic), sizeof(uint32_t));
   if (gguf_context->header.magic != GGUF_MAGIC) {
     return Status(RET_INVALID_ARGUMENT, "Invalid GGUF magic number.");
@@ -192,7 +192,7 @@ Status ReadMeta(std::ifstream& gguf_file, std::shared_ptr<NewGGUFContext> gguf_c
   gguf_file.read(reinterpret_cast<char*>(&gguf_context->header.metadata_kv_count), sizeof(uint64_t));
 
   for (uint64_t i = 0; i < gguf_context->header.metadata_kv_count; ++i) {
-    NewGGUFMetaValue meta_data;
+    GGUFMetaValue meta_data;
     uint64_t key_length;
     gguf_file.read(reinterpret_cast<char*>(&key_length), sizeof(uint64_t));
     if (key_length > MAX_STRING_LENGTH) {
@@ -204,7 +204,7 @@ Status ReadMeta(std::ifstream& gguf_file, std::shared_ptr<NewGGUFContext> gguf_c
 
     uint32_t value_type_int;
     gguf_file.read(reinterpret_cast<char*>(&value_type_int), sizeof(uint32_t));
-    meta_data.type = static_cast<NewGGUFMetaValueType>(value_type_int);
+    meta_data.type = static_cast<GGUFMetaValueType>(value_type_int);
     Status status = ReadGGUFMetadataValue(gguf_file, meta_data.type, meta_data.value);
     if (!status.OK()) {
       return status;
@@ -215,8 +215,8 @@ Status ReadMeta(std::ifstream& gguf_file, std::shared_ptr<NewGGUFContext> gguf_c
   return Status();
 }
 
-Status GGUFFileLoader::GetMetaDict(std::unordered_map<std::string, NewGGUFMetaValue>& result) {
-  std::shared_ptr<NewGGUFContext> gguf_context = std::make_shared<NewGGUFContext>();
+Status GGUFFileLoader::GetMetaDict(std::unordered_map<std::string, GGUFMetaValue>& result) {
+  std::shared_ptr<GGUFContext> gguf_context = std::make_shared<GGUFContext>();
 
   std::ifstream gguf_file(filename_, std::ios::binary | std::ios::ate);
   if (!gguf_file.is_open()) {
@@ -233,7 +233,7 @@ Status GGUFFileLoader::GetMetaDict(std::unordered_map<std::string, NewGGUFMetaVa
 
 Status GGUFFileLoader::LoadGGUFModelMeta() {
   if (!loaded_) {
-    gguf_context_ = std::make_shared<NewGGUFContext>();
+    gguf_context_ = std::make_shared<GGUFContext>();
 
     gguf_file_.open(filename_, std::ios::binary | std::ios::ate);
     if (!gguf_file_.is_open()) {
@@ -262,7 +262,7 @@ Status GGUFFileLoader::LoadWeightNames(std::vector<std::string>& weight_names) {
   }
 
   for (uint64_t i = 0; i < gguf_context_->header.tensor_count; ++i) {
-    NewGGUFTensorInfo tensor_info;
+    GGUFTensorInfo tensor_info;
     tensor_info.name = ReadStringFromFile(gguf_file_);
     weight_names.push_back(tensor_info.name);
 
@@ -337,7 +337,7 @@ Status GGUFFileLoader::LoadModelWeights(const std::vector<std::string>& weight_n
     char* weights_buffer = new char[data_size];
     gguf_file_.read(weights_buffer, data_size);
     for (const auto& item : gguf_context_->tensor_info_map) {
-      const NewGGUFTensorInfo& tensor_info = item.second;
+      const GGUFTensorInfo& tensor_info = item.second;
 
       if (weight_name_set.find(tensor_info.name) == weight_name_set.end()) {
         KLLM_LOG_DEBUG << "Skip weight tensor name " << tensor_info.name;

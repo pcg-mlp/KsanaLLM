@@ -10,8 +10,8 @@
 #include "executor/inflight_resource.h"
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
+#include "models/base/base_weight.h"
 #include "models/common/common_model.h"
-#include "models/common/common_weight.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_attention_meta_creator.h"
 #include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "modules/attention/dsv4_mqa.h"
@@ -137,15 +137,20 @@ class Dsv4MqaTestModel : public CommonModel {
   }
 };
 
-class Dsv4MqaWeight : public CommonWeight<bfloat16> {
-  using CommonWeight<bfloat16>::weights_map_;
-  using CommonWeight<bfloat16>::context_;
+class Dsv4MqaWeight : public BaseWeight {
+  using BaseWeight::context_;
+  using BaseWeight::weights_map_;
 
  public:
   Dsv4MqaWeight(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
                 std::shared_ptr<Context> context)
-      : CommonWeight<bfloat16>(model_config, runtime_config, rank, context) {}
+      : BaseWeight(model_config, runtime_config, rank, context) {}
   ~Dsv4MqaWeight() override = default;
+
+  Tensor GetModelWeights(const std::string& weight_name) override {
+    if (weights_map_.count(weight_name)) return weights_map_[weight_name];
+    return Tensor();
+  }
 
   void AddDsv4MqaWeight(int device_id = 0) {
     const auto& dsv4_attn_config = model_config_.dsv4_attn_config;

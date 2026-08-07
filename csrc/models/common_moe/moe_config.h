@@ -151,7 +151,6 @@ inline void PrepareLlama4Attributes(const nlohmann::json &config_json, ModelConf
                                  model_config.moe_config.num_experts, model_config.moe_config.experts_topk);
   }
   size_t interleave_moe_layer_step = config_json.value("interleave_moe_layer_step", 1);
-  model_config.moe_config.interleave_moe_layer_step = interleave_moe_layer_step;
   if (config_json.contains("moe_layers") && config_json["moe_layers"].is_array()) {
     model_config.moe_config.moe_layers = config_json["moe_layers"].get<std::vector<size_t>>();
   }
@@ -178,10 +177,7 @@ inline void PrepareLlama4Attributes(const nlohmann::json &config_json, ModelConf
 
   model_config.moe_config.router_aux_loss_coef = config_json.value("router_aux_loss_coef", 0.001);
   model_config.moe_config.router_jitter_noise = config_json.value("router_jitter_noise", 0.0);
-  model_config.attention_chunk_size = config_json.value("attention_chunk_size", 8192);
   model_config.floor_scale = config_json.value("floor_scale", 8192);
-  KLLM_LOG_WARNING << "Configs router_aux_loss_coef, router_jitter_noise, attention_chunk_size "
-                   << "are not implemented for Llama4.";
 
   model_config.moe_config.topk_method = "fast";
   model_config.moe_config.scoring_func = "sigmoid";
