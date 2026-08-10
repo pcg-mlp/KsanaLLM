@@ -1,4 +1,5 @@
 {
+    "(.*)\\.weight_scale_inv": "$1.weight_scale",
     "model.language_model.embed_tokens.weight": "model.embed_tokens.weight",
     "model.language_model.layers.(\\d+).input_layernorm.weight": "model.layers.$1.input_layernorm.weight",
     "model.language_model.layers.(\\d+).mlp.down_proj.weight": "model.layers.$1.mlp.down_proj.weight",

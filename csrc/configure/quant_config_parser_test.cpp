@@ -222,4 +222,48 @@ TEST(QuantConfigParser, DeepSeekV3Path_GptqStillWorks) {
   EXPECT_FALSE(ds_config->quant_config.is_compressed_tensors);
 }
 
+// ============================================================================
+// Tests for ParseFP8QuantConfig (quant_config_parser.cpp)
+// ============================================================================
+
+// Per-tensor static FP8 (e.g. Qwen3 dense FP8 with activation_scheme=static)
+TEST(QuantConfigParser, ParseFP8_PerTensorStatic) {
+  nlohmann::json config_json = {{"quant_method", "fp8"}, {"activation_scheme", "static"}};
+
+  QuantConfig quant_config;
+  ParseFP8QuantConfig(config_json, /*is_moe=*/false, quant_config);
+
+  EXPECT_EQ(quant_config.method, QUANT_FP8_E4M3);
+  EXPECT_TRUE(quant_config.is_checkpoint_fp8_serialized);
+  EXPECT_TRUE(quant_config.is_activation_scheme_static);
+  EXPECT_FALSE(quant_config.is_fp8_blockwise);
+}
+
+// Blockwise FP8 (e.g. Qwen3-32B-FP8): weight_block_size present, dynamic activation
+TEST(QuantConfigParser, ParseFP8_Blockwise) {
+  nlohmann::json config_json = {
+      {"quant_method", "fp8"}, {"activation_scheme", "dynamic"}, {"weight_block_size", {128, 128}}};
+
+  QuantConfig quant_config;
+  ParseFP8QuantConfig(config_json, /*is_moe=*/false, quant_config);
+
+  EXPECT_EQ(quant_config.method, QUANT_BLOCK_FP8_E4M3);
+  EXPECT_TRUE(quant_config.is_fp8_blockwise);
+  EXPECT_FALSE(quant_config.is_activation_scheme_static);
+  ASSERT_EQ(quant_config.weight_block_size.size(), 2u);
+  EXPECT_EQ(quant_config.weight_block_size[0], 128u);
+  EXPECT_EQ(quant_config.weight_block_size[1], 128u);
+}
+
+// activation_scheme may be omitted by non-standard checkpoints: must not throw, treated as dynamic.
+TEST(QuantConfigParser, ParseFP8_MissingActivationScheme) {
+  nlohmann::json config_json = {{"quant_method", "fp8"}, {"weight_block_size", {128, 128}}};
+
+  QuantConfig quant_config;
+  ASSERT_NO_THROW(ParseFP8QuantConfig(config_json, /*is_moe=*/false, quant_config));
+
+  EXPECT_EQ(quant_config.method, QUANT_BLOCK_FP8_E4M3);
+  EXPECT_FALSE(quant_config.is_activation_scheme_static);
+}
+
 }  // namespace ksana_llm

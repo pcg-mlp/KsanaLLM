@@ -4,9 +4,12 @@
 
 #include "models/weight_method/fp8_e4m3_method.h"
 
+#include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "helpers/model_test_helper.h"
 #include "test.h"
@@ -436,5 +439,146 @@ TEST_F(Fp8E4m3MethodTest, TestLoadAndProcessExpertsProj_StaticFp8) {
     EXPECT_TRUE(device_model_weights_.find(up_proj_name + "input_scale") == device_model_weights_.end());
     EXPECT_TRUE(device_model_weights_.find(down_proj_name + "input_scale") == device_model_weights_.end());
   }
+#endif
+}
+
+// ============================================================================
+// Scale dtype up-cast tests (EnsureScaleIsFp32)
+//
+// FP8 checkpoints may store weight_scale / input_scale as BF16 or FP16, while the
+// scale consumers require FP32. The load path must up-cast them, and must leave
+// already-FP32 scales untouched.
+// ============================================================================
+
+namespace {
+
+// Encode a float as BF16 by truncating the low 16 mantissa bits. Exact for values
+// that are representable in BF16 (used below: powers of two and small integers).
+static inline uint16_t FloatToBf16Bits(float value) {
+  uint32_t bits;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return static_cast<uint16_t>(bits >> 16);
+}
+
+// Create QuantConfig for blockwise FP8 (per-block weight_scale, dynamic activation)
+static inline QuantConfig CreateBlockwiseFp8QuantConfig() {
+  QuantConfig qc;
+  qc.method = QUANT_BLOCK_FP8_E4M3;
+  qc.is_checkpoint_fp8_serialized = true;
+  qc.is_activation_scheme_static = false;
+  qc.is_fp8_blockwise = true;
+  qc.weight_block_size = {128, 128};
+  return qc;
+}
+
+}  // namespace
+
+// A BF16 weight_scale must be up-cast to FP32 without changing its values.
+TEST_F(Fp8E4m3MethodTest, TestScaleBf16UpCastToFp32IsLossless) {
+#ifdef ENABLE_CUDA
+  const auto quant_config = CreateStaticFp8QuantConfig();
+  auto fp8_method = std::make_shared<Fp8E4m3Method>(common_weight_loader_, tp_, quant_config);
+
+  // Values chosen to be exactly representable in BF16, so the up-cast must be bit-exact.
+  const std::vector<float> expected = {1.0f, 0.5f, 2.0f, 0.25f};
+
+  // input_scale takes the non-split path (LoadScaleTensor), isolating the dtype cast.
+  const std::string scale_name = "model.layers.0.self_attn.q_proj.input_scale";
+  Tensor scale(MemoryLocation::LOCATION_HOST, DataType::TYPE_BF16, {expected.size()});
+  uint16_t* host_bits = scale.GetPtr<uint16_t>();
+  for (size_t i = 0; i < expected.size(); ++i) {
+    host_bits[i] = FloatToBf16Bits(expected[i]);
+  }
+
+  Status status = fp8_method->load_attn_q_k_v_proj(device_model_weights_, scale_name, scale, dev_rank_);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ASSERT_TRUE(device_model_weights_.find(scale_name) != device_model_weights_.end());
+  Tensor& dev_scale = device_model_weights_[scale_name];
+  EXPECT_EQ(dev_scale.dtype, DataType::TYPE_FP32) << "BF16 scale was not up-cast to FP32";
+  ASSERT_EQ(dev_scale.GetElementNumber(), expected.size());
+
+  StreamSynchronize(context_->device->GetMemoryManageStream());
+  std::vector<float> actual(expected.size(), 0.0f);
+  Memcpy(actual.data(), dev_scale.GetPtr<void>(), dev_scale.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_FLOAT_EQ(actual[i], expected[i]) << "value mismatch at index " << i;
+  }
+#endif
+}
+
+// An FP16 weight_scale must also be up-cast to FP32.
+TEST_F(Fp8E4m3MethodTest, TestScaleFp16UpCastToFp32) {
+#ifdef ENABLE_CUDA
+  const auto quant_config = CreateStaticFp8QuantConfig();
+  auto fp8_method = std::make_shared<Fp8E4m3Method>(common_weight_loader_, tp_, quant_config);
+
+  const std::string scale_name = "model.layers.0.self_attn.q_proj.input_scale";
+  Tensor scale(MemoryLocation::LOCATION_HOST, DataType::TYPE_FP16, {4});
+
+  Status status = fp8_method->load_attn_q_k_v_proj(device_model_weights_, scale_name, scale, dev_rank_);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ASSERT_TRUE(device_model_weights_.find(scale_name) != device_model_weights_.end());
+  EXPECT_EQ(device_model_weights_[scale_name].dtype, DataType::TYPE_FP32)
+      << "FP16 scale was not up-cast to FP32";
+#endif
+}
+
+// An already-FP32 scale must pass through unchanged (no-op branch).
+TEST_F(Fp8E4m3MethodTest, TestScaleFp32IsNotModified) {
+#ifdef ENABLE_CUDA
+  const auto quant_config = CreateStaticFp8QuantConfig();
+  auto fp8_method = std::make_shared<Fp8E4m3Method>(common_weight_loader_, tp_, quant_config);
+
+  const std::vector<float> expected = {0.125f, 3.0f, 7.5f, 16.0f};
+
+  const std::string scale_name = "model.layers.0.self_attn.q_proj.input_scale";
+  Tensor scale(MemoryLocation::LOCATION_HOST, DataType::TYPE_FP32, {expected.size()});
+  float* host_values = scale.GetPtr<float>();
+  for (size_t i = 0; i < expected.size(); ++i) {
+    host_values[i] = expected[i];
+  }
+
+  Status status = fp8_method->load_attn_q_k_v_proj(device_model_weights_, scale_name, scale, dev_rank_);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  Tensor& dev_scale = device_model_weights_[scale_name];
+  EXPECT_EQ(dev_scale.dtype, DataType::TYPE_FP32);
+  ASSERT_EQ(dev_scale.GetElementNumber(), expected.size());
+
+  StreamSynchronize(context_->device->GetMemoryManageStream());
+  std::vector<float> actual(expected.size(), 0.0f);
+  Memcpy(actual.data(), dev_scale.GetPtr<void>(), dev_scale.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST);
+  for (size_t i = 0; i < expected.size(); ++i) {
+    EXPECT_FLOAT_EQ(actual[i], expected[i]) << "value mismatch at index " << i;
+  }
+#endif
+}
+
+// Blockwise weight_scale goes through the TP-split path; it must still end up FP32.
+TEST_F(Fp8E4m3MethodTest, TestBlockwiseWeightScaleIsFp32AfterTPSplit) {
+#ifdef ENABLE_CUDA
+  const auto quant_config = CreateBlockwiseFp8QuantConfig();
+  auto fp8_method = std::make_shared<Fp8E4m3Method>(common_weight_loader_, tp_, quant_config);
+
+  // 2D per-block scale whose split dim is divisible by tp_, so LoadWeightScaleWithTPSplit
+  // takes the TensorParallelSplit branch rather than the full-copy fallback.
+  const size_t blocks_n = 4;
+  const size_t blocks_k = 2;
+  ASSERT_EQ(blocks_n % tp_, 0u);
+
+  const std::string scale_name = "model.layers.0.self_attn.q_proj.weight_scale";
+  Tensor scale(MemoryLocation::LOCATION_HOST, DataType::TYPE_BF16, {blocks_n, blocks_k});
+
+  // q_proj is row parallel => split along dim 0.
+  Status status = fp8_method->load_attn_q_k_v_proj(device_model_weights_, scale_name, scale, dev_rank_);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+
+  ASSERT_TRUE(device_model_weights_.find(scale_name) != device_model_weights_.end());
+  Tensor& dev_scale = device_model_weights_[scale_name];
+  EXPECT_EQ(dev_scale.shape[0], blocks_n / tp_) << "scale was not split across TP ranks";
+  EXPECT_EQ(dev_scale.shape[1], blocks_k);
+  EXPECT_EQ(dev_scale.dtype, DataType::TYPE_FP32) << "scale was not FP32 after TP split";
 #endif
 }

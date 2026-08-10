@@ -146,7 +146,8 @@ Status QwenWeightLoader::PreProcessModelWeights(const std::unordered_map<std::st
     REGISTER_GPTQ(process, attn_o_proj);
     REGISTER_GPTQ(process, mlp_gate_up_proj);
     REGISTER_GPTQ(process, mlp_down_proj);
-  } else if (qwen_config->quant_config.method == QUANT_FP8_E4M3) {
+  } else if (qwen_config->quant_config.method == QUANT_FP8_E4M3 ||
+             qwen_config->quant_config.method == QUANT_BLOCK_FP8_E4M3) {
     REGISTER_FP8E4M3(load, attn_q_k_v_proj);
     REGISTER_FP8E4M3(load, attn_o_proj);
     REGISTER_FP8E4M3(load, mlp_gate_up_proj);

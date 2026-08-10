@@ -85,15 +85,9 @@ Status QwenConfigParser::ParseQuantConfig(const nlohmann::json &config_json,
       // NOTE: Qwen dense model, so is_moe = false.
       ParseAWQQuantConfig(config_json["quantization_config"], /*is_moe=*/false, qwen_config->quant_config);
     } else if (quant_method == "fp8") {
-      // Handle static FP8 quantization from checkpoint
-      qwen_config->quant_config.method = QUANT_FP8_E4M3;
-      qwen_config->quant_config.is_checkpoint_fp8_serialized = true;
-      qwen_config->quant_config.is_activation_scheme_static =
-          config_json["quantization_config"].value("activation_scheme", "") == "static";
-      KLLM_LOG_INFO << fmt::format(
-          "using static fp8 quant model, is_checkpoint_fp8_serialized: {}, is_activation_scheme_static: {}",
-          qwen_config->quant_config.is_checkpoint_fp8_serialized,
-          qwen_config->quant_config.is_activation_scheme_static);
+      // Parse FP8 from checkpoint: detects per-tensor (static) vs blockwise (weight_block_size present,
+      // dynamic activation). Shared with qwen3_moe/deepseek so dense Qwen3 also supports blockwise FP8.
+      ParseFP8QuantConfig(config_json["quantization_config"], qwen_config->is_moe, qwen_config->quant_config);
     } else {
       // TODO(jinxcwu) 支持所有量化类型后，需要修改回 KLLM_THROW
       KLLM_LOG_ERROR << fmt::format("Not support quant method: {}", quant_method);

@@ -17,10 +17,11 @@
 namespace ksana_llm {
 
 // Dictionary mapping quantization methods to their weight suffixes that need to be filtered
-static const std::unordered_map<QuantMode, std::vector<std::string>> kQuantWeightSuffixFilters = {
+inline const std::unordered_map<QuantMode, std::vector<std::string>> kQuantWeightSuffixFilters = {
     {QUANT_AWQ, {".scales"}},
     {QUANT_GPTQ, {".scales"}},
     {QUANT_FP8_E4M3, {".weight_scale", ".input_scale"}},
+    {QUANT_BLOCK_FP8_E4M3, {".weight_scale", ".input_scale"}},
     {QUANT_W4A8_AWQ, {".input_scale", ".weight_scale", ".weight_scale_2", ".pre_quant_scale"}},
 };
 

@@ -70,6 +70,9 @@ class Fp8E4m3Method {
   Status LoadScaleTensor(std::unordered_map<std::string, Tensor>& device_model_weights, const std::string& weight_name,
                          const Tensor& weight_tensor, int dev_rank);
 
+  // Up-cast a scale tensor to FP32 in place (no-op if already FP32); scale consumers require FP32.
+  Status EnsureScaleIsFp32(Tensor& scale_tensor, int dev_rank);
+
   // Load weight scale and split it across TP ranks to match the local weight's block layout.
   // For TP=1 or non-splittable shapes, falls back to full copy.
   Status LoadWeightScaleWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,

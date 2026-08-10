@@ -31,10 +31,18 @@ Status Fp8E4m3Method::LoadWeightWithTPSplit(std::unordered_map<std::string, Tens
   return Status();
 }
 
+Status Fp8E4m3Method::EnsureScaleIsFp32(Tensor& scale_tensor, int dev_rank) {
+  if (scale_tensor.dtype != DataType::TYPE_FP32) {
+    return common_weight_loader_->CastDeviceTensorType(scale_tensor, DataType::TYPE_FP32, dev_rank);
+  }
+  return Status();
+}
+
 Status Fp8E4m3Method::LoadScaleTensor(std::unordered_map<std::string, Tensor>& device_model_weights,
                                       const std::string& weight_name, const Tensor& weight_tensor, int dev_rank) {
   device_model_weights[weight_name] = common_weight_loader_->MoveToDevice(weight_tensor, dev_rank);
-  return Status();
+  // Scale consumers require FP32; up-cast checkpoints that store scales as BF16/FP16 (lossless).
+  return EnsureScaleIsFp32(device_model_weights[weight_name], dev_rank);
 }
 
 Status Fp8E4m3Method::LoadWeightScaleWithTPSplit(std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -55,7 +63,7 @@ Status Fp8E4m3Method::LoadWeightScaleWithTPSplit(std::unordered_map<std::string,
     TensorParallelMode tp_mode = is_row_parallel ? TensorParallelMode::RowPara : TensorParallelMode::ColPara;
     device_model_weights[weight_name] =
         common_weight_loader_->TensorParallelSplit(weight_tensor, dev_rank, tp_, tp_mode);
-    return Status();
+    return EnsureScaleIsFp32(device_model_weights[weight_name], dev_rank);
   }
 
   // Fallback: per-tensor scalar scale or 1D scale that cannot be split

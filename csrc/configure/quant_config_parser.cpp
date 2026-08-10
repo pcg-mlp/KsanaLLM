@@ -34,7 +34,9 @@ void ParseAWQQuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
 void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantConfig &quant_config) {
   quant_config.method = QUANT_FP8_E4M3;
   quant_config.is_checkpoint_fp8_serialized = true;
-  quant_config.is_activation_scheme_static = (config_json.at("activation_scheme") == "static");
+  // Use value() rather than at(): some FP8 checkpoints (notably blockwise ones, where activation
+  // quantization is always dynamic) omit activation_scheme. Missing field => dynamic.
+  quant_config.is_activation_scheme_static = (config_json.value("activation_scheme", "") == "static");
   if (config_json.contains("weight_block_size") && config_json["weight_block_size"].is_array()) {
     quant_config.is_fp8_blockwise = true;
     quant_config.method = QUANT_BLOCK_FP8_E4M3;
@@ -47,8 +49,8 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
   KLLM_LOG_INFO << fmt::format(
       "using quant model, quant method fp8, method type: {}, is_checkpoint_fp8_serialized: {}, "
       "is_activation_scheme_static: {}, scale_fmt: {}",
-      quant_config.method, quant_config.is_checkpoint_fp8_serialized, quant_config.is_activation_scheme_static,
-      quant_config.scale_fmt);
+      GetQuantModeString(quant_config.method), quant_config.is_checkpoint_fp8_serialized,
+      quant_config.is_activation_scheme_static, quant_config.scale_fmt);
 }
 
 void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, QuantConfig &quant_config) {
