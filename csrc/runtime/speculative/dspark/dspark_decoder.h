@@ -28,8 +28,11 @@ class Waiter;
 // Implements DraftGeneratorInterface, with GenerateDraft as a no-op —
 // draft tokens are produced in ExecuteForward.
 //
-// Owns the prev_dspark_done_ Waiter used to serialize main forward against DSpark forward
-// on PP > 1 ranks to avoid collective operation deadlocks.
+// Owns the prev_dspark_done_ Waiter used to serialize main forward against DSpark forward.
+// When enabled (IsSamplingNode), this ensures the shared dspark_hidden_tensor_ buffer is not
+// overwritten by the next decode step's main forward before the current step's DSpark forward
+// finishes reading it. It also guards against the TrtAllReduce-ordering deadlock in PP > 1
+// deployments (see DSparkDecoderAdapter::PreMainForward).
 class DSparkDecoder : public DraftGeneratorInterface {
  public:
   // Constructor.
@@ -38,7 +41,13 @@ class DSparkDecoder : public DraftGeneratorInterface {
   // - infer_req_mutex: ExecutorRuntime::infer_req_mutex_, shared with UpdateCachedRequests
   //   (Preprocess thread) to prevent it from racing with ExecuteForward's forward loop over the
   //   same ExecutorInferRequest fields (non-owning, lifetime > DSparkDecoder).
-  // - serialize_dspark: true if main forward must wait for DSpark completion (PP > 1, sampling node).
+  // - serialize_dspark: true if main forward must wait for DSpark completion (IsSamplingNode).
+  //   Required to protect the shared dspark_hidden_tensor_ buffer: main forward writes
+  //   cross-layer hidden states, DSpark forward reads them for markov-head correction.
+  //   Without serialization, the next decode step's main forward could overwrite the
+  //   buffer before the current step's DSpark forward finishes reading it, regardless of
+  //   pipeline-parallel batch depth. This also guards against the TrtAllReduce-ordering
+  //   deadlock that originally motivated serialization for PP > 1 only.
   DSparkDecoder(size_t dspark_block_size, int dspark_noise_token_id, std::mutex* infer_req_mutex,
                 bool serialize_dspark);
 
@@ -61,7 +70,8 @@ class DSparkDecoder : public DraftGeneratorInterface {
   // Get the Waiter shared with ExecutorRuntime::Forward() for main/DSpark serialization.
   std::shared_ptr<Waiter> GetPrevDsparkDoneWaiter() const { return prev_dspark_done_; }
 
-  // Whether main-DSpark serialization is required (PP > 1). Used by DSparkDecoderAdapter::PreMainForward.
+  // Whether main-DSpark serialization is required (IsSamplingNode).
+  // Used by DSparkDecoderAdapter::PreMainForward.
   bool IsSerializationRequired() const { return serialize_dspark_; }
 
  private:
@@ -69,7 +79,8 @@ class DSparkDecoder : public DraftGeneratorInterface {
   int dspark_noise_token_id_;
   bool serialize_dspark_;
 
-  // Serialize main forward against DSpark forward on PP > 1 sampling ranks to avoid TrtAllReduce deadlock.
+  // Serialize main forward against DSpark forward to protect the shared
+  // dspark_hidden_tensor_ buffer and avoid TrtAllReduce deadlock on PP > 1.
   std::shared_ptr<Waiter> prev_dspark_done_;
 
   // Protect concurrent modification of infer_request by DSpark forward and UpdateInferRequest.

@@ -42,10 +42,12 @@ void DSparkDecoderAdapter::ExecuteForward(SpecContext& ctx) {
 void DSparkDecoderAdapter::PreMainForward(SpecContext& ctx) {
   if (!dspark_decoder_) return;
 
-  // Serialize main forward against DSpark forward to avoid TrtAllReduce deadlock.
-  // On a sampling rank with PP > 1, the per-model TrtAllReduce can be acquired in
-  // different order on different TP ranks (main on one rank vs. DSpark on its peer),
-  // causing both ranks to enter different TrtAllReduce collectives and deadlock.
+  // Serialize main forward against DSpark forward:
+  // 1) Protect the shared dspark_hidden_tensor_ buffer — main forward writes
+  //    cross-layer hidden states, DSpark forward reads them for markov-head correction.
+  //    Without serialization, the next decode step's main forward (Execute thread) can
+  //    overwrite the buffer while DSpark forward (Postprocess thread) is still reading it.
+  // 2) Guard against TrtAllReduce-ordering deadlock on PP > 1 sampling ranks.
   // Wait/Reset/Notify run on the same main inference thread, so no extra lock is needed.
   if (dspark_decoder_->IsSerializationRequired()) {
     auto waiter = dspark_decoder_->GetPrevDsparkDoneWaiter();
@@ -112,15 +114,23 @@ const bool kDSparkPostInitRegistered = []() {
                                                     model_instance = ctx.model_instance, context = ctx.context,
                                                     executor_runtime = ctx.executor_runtime, block_size]() {
       int noise_id = context->global->GetDSparkNoiseTokenId();
-      const bool dspark_serialize = context->global->IsSamplingNode() && context->global->GetMaxPpBatchNum() > 1;
+      // Main forward and DSpark's own forward share a single model-owned cross-layer
+      // hidden-state capture buffer (DeepSeekV4Model::dspark_hidden_tensor_), written by
+      // the main forward and read back by DSpark's markov-head correction. Without
+      // serialization, ExecutorRuntime::Forward() for the next decode step (Execute thread)
+      // can start overwriting that buffer while DSparkDecoder::ExecuteForward (Postprocess
+      // thread) is still reading it, corrupting the draft prediction for any request whose
+      // GPU work hasn't completed yet — this is unrelated to the TrtAllReduce-ordering
+      // required whenever DSpark is active, regardless of pipeline-parallel batch depth.
+      const bool serialize_dspark = context->global->IsSamplingNode();
       auto dspark_decoder = std::make_shared<DSparkDecoder>(block_size, noise_id, &executor_runtime->GetInferReqMutex(),
-                                                            dspark_serialize);
+                                                            serialize_dspark);
       auto adapter = std::make_unique<DSparkDecoderAdapter>(
           dspark_decoder, executor_runtime->GetModelExecutor().get(), executor_runtime->GetModelSampler().get(),
           executor_runtime->GetModelBuilder().get(), model_instance.get());
       composite_decoder->Register(std::move(adapter));
       KLLM_LOG_INFO << "DSpark decoder registered: block_size=" << block_size << ", noise_id=" << noise_id
-                    << ", serialize=" << dspark_serialize;
+                    << ", serialize=" << serialize_dspark;
     });
   });
   return true;

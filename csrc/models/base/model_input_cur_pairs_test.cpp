@@ -130,14 +130,16 @@ ForwardRequest MakeDecodeForwardRequest(int64_t req_id, const std::vector<int>& 
 
 // PrepareInputIds 由 ParseFromRequests 调用时会先累加 total_sampling_token_num_；
 // 单测直调时需手动设置，否则 logits_idx_list 长度为 0 会越界。
-void InvokePrepareInputIds(ModelInput* model_input, const std::vector<ForwardRequest>& forward_reqs) {
+void InvokePrepareInputIds(ModelInput* model_input, const std::vector<ForwardRequest>& forward_reqs,
+                           RunMode run_mode = RunMode::kMain) {
   size_t total_sampling = 0;
   for (const auto& req : forward_reqs) {
     total_sampling += req.sampling_token_num;
   }
   // 测试目标带 -fno-access-control，可直写 ParseFromRequests 才会设置的字段。
   model_input->total_sampling_token_num_ = total_sampling;
-  model_input->PrepareInputIds(forward_reqs);
+  model_input->batch_size = forward_reqs.size();
+  model_input->PrepareInputIds(forward_reqs, run_mode);
 }
 
 }  // namespace
@@ -345,6 +347,38 @@ TEST_F(ModelInputCurPairsTest, PrepareInputIdsUnifiedPackH2DMatchesCpuSources) {
               ids_via_pack.size() * sizeof(int32_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
   StreamSynchronize(context_->device->GetH2DStream());
   EXPECT_EQ(ids_via_pack, expect_ids);
+}
+
+// DSpark ForwardHead expects step-major logits: [block_size, batch_size, V].
+// PrepareInputIds with RunMode::kDSpark must transpose logits_idx from
+// batch-major [req0_s0, req0_s1, ..., req1_s0, req1_s1, ...] to
+// step-major    [req0_s0, req1_s0, req0_s1, req1_s1, ...].
+TEST_F(ModelInputCurPairsTest, PrepareInputIdsTransposesDsparkLogitsIdx) {
+  // 2 requests x 3 sampling steps → 6 logits_idx entries.
+  // req0: forwarding_tokens = 5, kv_cached = 2 → input_ids_len = 3
+  //       logits_idx = [0, 1, 2]  (last 3 positions in flat input_ids)
+  // req1: forwarding_tokens = 6, kv_cached = 3 → input_ids_len = 3
+  //       logits_idx = [3, 4, 5]  (positions 3,4,5)
+  // Batch-major before transpose: [0, 1, 2, 3, 4, 5]
+  // Step-major after transpose:   [0, 3, 1, 4, 2, 5]
+  auto req0 = MakeDecodeForwardRequest(701, {10, 20, 30, 40, 50}, /*kv_cached=*/2);
+  req0.sampling_token_num = 3;
+  auto req1 = MakeDecodeForwardRequest(702, {11, 22, 33, 44, 55, 66}, /*kv_cached=*/3);
+  req1.sampling_token_num = 3;
+
+  InvokePrepareInputIds(model_input_.get(), {req0, req1}, RunMode::kDSpark);
+  StreamSynchronize(context_->device->GetH2DStream());
+
+  ASSERT_EQ(model_input_->logits_idx_uint64_tensor.shape[0], 6u);
+
+  std::vector<uint64_t> logits_dev(6);
+  MemcpyAsync(logits_dev.data(), model_input_->logits_idx_uint64_tensor.GetPtr<void>(),
+              logits_dev.size() * sizeof(uint64_t), MEMCPY_DEVICE_TO_HOST, context_->device->GetH2DStream());
+  StreamSynchronize(context_->device->GetH2DStream());
+
+  // Step-major layout: [r0s0, r1s0, r0s1, r1s1, r0s2, r1s2]
+  const std::vector<uint64_t> expected = {0, 3, 1, 4, 2, 5};
+  EXPECT_EQ(logits_dev, expected);
 }
 
 }  // namespace ksana_llm

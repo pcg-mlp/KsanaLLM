@@ -32,7 +32,7 @@ class ModelInput {
   ~ModelInput();
 
   // Parse forward request into model input tensors.
-  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs);
+  void ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
   // build-ahead: 指定本 step 使用的 ModelInput slot，H2D 走对应 slot stream。
   void SetParseSlot(size_t slot) { parse_slot_ = slot; }
@@ -351,7 +351,7 @@ class ModelInput {
   // Divide the forward requests into two categories: flash, page (with different lengths)
   void PrepareInputInfo(const std::vector<ForwardRequest>& forward_reqs);
   // Prepare information related to tokens of the current batch of requests
-  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs);
+  void PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode = RunMode::kMain);
 
   void PreparePrefill();
   void PrepareDecode();

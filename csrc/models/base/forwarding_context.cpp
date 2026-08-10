@@ -366,7 +366,7 @@ void ForwardingContext::PrepareModelInputGpu(const std::vector<ForwardRequest>& 
       fmt::format("PrepareModelInputGpu slot {} not allocated (enable_executor_build_ahead config mismatch).",
                   model_input_slot));
   model_inputs_[model_input_slot]->SetParseSlot(model_input_slot);
-  model_inputs_[model_input_slot]->ParseFromRequests(forward_reqs);
+  model_inputs_[model_input_slot]->ParseFromRequests(forward_reqs, run_mode);
 }
 
 void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,
@@ -387,7 +387,7 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward
 
   if (!gpu_input_already_prepared) {
     model_input->SetParseSlot(model_input_slot);
-    model_input->ParseFromRequests(forward_reqs);
+    model_input->ParseFromRequests(forward_reqs, run_mode);
   }
 
   // create forward shape tensor

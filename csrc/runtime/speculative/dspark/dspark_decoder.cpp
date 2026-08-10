@@ -46,6 +46,9 @@ Status DSparkDecoder::ExecuteForward(std::vector<std::shared_ptr<ExecutorInferRe
                                      ModelSampler* model_sampler, ModelBuilder* model_builder,
                                      ModelInstance* model_instance) {
   if (dspark_block_size_ == 0 || reqs.empty()) {
+    if (serialize_dspark_) {
+      prev_dspark_done_->Notify();
+    }
     return Status();
   }
 

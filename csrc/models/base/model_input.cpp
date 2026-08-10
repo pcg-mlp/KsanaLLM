@@ -316,7 +316,7 @@ void ModelInput::SetInflightResourceManager(InflightResourceManager* mgr) {
   }
 }
 
-void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs) {
+void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   // NOTE(karlluo): check batch size
   PROFILE_EVENT_SCOPE(StartPrepareReqs, "StartPrepareReqs", rank_);
   batch_size = forward_reqs.size();
@@ -362,7 +362,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
       dp_multi_token_request_num, dp_context_tokens, dp_single_token_request_num, dp_decode_tokens, dp_total_prefix_len,
       page_metas.size());
 
-  PrepareInputIds(forward_reqs);
+  PrepareInputIds(forward_reqs, run_mode);
   PrepareVLInputRefit(forward_reqs);
   PrepareInputRefit(forward_reqs);
 
@@ -909,7 +909,19 @@ void ModelInput::PrepareDecode() {
   }
 }
 
-void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs) {
+// DSpark ForwardHead expects step-major logits layout [block_size, batch_size, V].
+// The standard logits_idx is batch-major [req0_s0, req0_s1, ..., req1_s0, ...];
+// it must be transposed to step-major [req0_s0, req1_s0, req0_s1, req1_s1, ...]
+// for the DSpark forward path to correctly slice per-step logits rows.
+// Only applies when run_mode is explicitly kDSpark (not kMain or kNextN),
+// the batch has multiple requests, and multi-step sampling is active.
+inline bool ShouldTransposeDsparkLogitsIdx(RunMode run_mode, size_t batch_size,
+                                           const std::vector<ForwardRequest>& forward_reqs) {
+  return run_mode == RunMode::kDSpark && batch_size > 1 && !forward_reqs.empty() &&
+         forward_reqs.front().sampling_token_num > 1;
+}
+
+void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs, const RunMode run_mode) {
   PROFILE_EVENT_SCOPE(PrepareInputIds, "PrepareInputIds", rank_);
   BatchSchedulerConfig batch_scheduler_config;
   Singleton<Environment>::GetInstance()->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -1014,6 +1026,24 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
     cur_batch_pairs_tensor.dtype = TYPE_INT64;
   } else {
     cur_batch_pairs_tensor.shape = {0};
+  }
+
+  // DSpark ForwardHead slices logits as [block_size, batch_size, V] (step-major).
+  // Standard logits_idx fills batch-major: [req0_steps..., req1_steps..., ...].
+  // Transpose to step-major: [step0_all_reqs, step1_all_reqs, ...].
+  if (ShouldTransposeDsparkLogitsIdx(run_mode, batch_size, forward_reqs)) {
+    const size_t block_size = forward_reqs.front().sampling_token_num;
+    KLLM_CHECK_WITH_INFO(logits_idx_list.size() == batch_size * block_size,
+                         fmt::format("DSpark logits_idx size mismatch: got {}, expect {} "
+                                     "(= batch_size {} * block_size {})",
+                                     logits_idx_list.size(), batch_size * block_size, batch_size, block_size));
+    std::vector<size_t> transposed(logits_idx_list.size());
+    for (size_t req_idx = 0; req_idx < batch_size; ++req_idx) {
+      for (size_t step = 0; step < block_size; ++step) {
+        transposed[step * batch_size + req_idx] = logits_idx_list[req_idx * block_size + step];
+      }
+    }
+    logits_idx_list.swap(transposed);
   }
 
   logits_idx_uint64_tensor.shape = {logits_idx_list.size()};
