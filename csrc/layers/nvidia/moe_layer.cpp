@@ -3,10 +3,14 @@
 ==============================================================================*/
 #include "layers/moe_layer.h"
 
+#include <type_traits>
+
 #include "configure/environment.h"
 #include "csrc/kernels/nvidia/asymmetric_gemm/cutlass_preprocessors.h"
+#include "csrc/kernels/nvidia/moe/hpc_moe/hpc_moe.h"
 #include "kernels/nvidia/basic_kernel_wrapper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
+#include "kernels/nvidia/moe_kernel_wrapper.h"
 #include "layers/grouped_topk_layer.h"
 #include "layers/topk_softplus_sqrt_layer.h"
 #include "utils/singleton.h"
@@ -37,6 +41,7 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   KLLM_LOG_INFO << fmt::format("Rank[{}] MoeLayer Init with {}", rank_, params_.ToString());
 
   w4afp8_moe_backend_ = runtime_config.w4afp8_moe_backend;
+  use_hpc_moe_ = runtime_config.moe_backend_config.use_hpc_moe;
 
   // 权重&计算类型处理
   weight_dtype_ = GetDataType<T>();
@@ -44,6 +49,16 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
   if (params_.fp8_weight_dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
     weight_dtype_ = DataType::TYPE_BLOCK_FP8_E4M3;
     compute_dtype_ = DataType::TYPE_BLOCK_FP8_E4M3;
+  } else if (params_.fp8_weight_dtype == DataType::TYPE_FP8_E4M3 && use_hpc_moe_) {
+    // Per-tensor (static activation scale) FP8 experts. The hpc-ops fused MoE is the only
+    // per-tensor path MoeLayer has — the Triton fallback below has no such kernel — so the dtype
+    // only switches when hpc is on; otherwise these parameters build an Fp8MoeLayer (cutlass),
+    // which drives its own Forward and leaves both members at the activation dtype, as before.
+    KLLM_CHECK_WITH_INFO(params_.use_vllm_moe,
+                         "MoeLayer: hpc-ops per-tensor FP8 MoE requires use_vllm_moe=true, which is what puts "
+                         "up_gate_proj in the [gate, up] layout the hpc kernel expects.");
+    weight_dtype_ = DataType::TYPE_FP8_E4M3;
+    compute_dtype_ = DataType::TYPE_FP8_E4M3;
   } else if (params_.int_weight_dtype == DataType::TYPE_UINT4x2 || params_.int_weight_dtype == DataType::TYPE_INT4x2) {
     weight_dtype_ = params_.int_weight_dtype;
     compute_dtype_ = (w4afp8_moe_backend_ == W4AFP8_MOE_BACKEND::GroupTriton ||
@@ -223,6 +238,11 @@ size_t MoeLayer::GetWorkspaceSizeT() {
           dequant_workspace_size = AlignAddress(params_.expert_num_per_node * params_.expert_hidden_size *
                                                 params_.expert_inter_size * 2 * sizeof(char));
         }
+      } else if (compute_dtype_ == DataType::TYPE_FP8_E4M3) {
+        // Per-tensor FP8 (hpc-ops): only the fp8 activation buffer is needed — its scale is a
+        // scalar weight, and the intermediate requantization uses the fused kernel's own scratch.
+        a1_q_size = AlignAddress(m * params_.expert_hidden_size * sizeof(char));
+        a1_and_a2_q_size = a1_q_size;
       }
       if (weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
         // FP4 dequant output: FP8 weights + BF16 merged scales
@@ -345,6 +365,9 @@ Status MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_outp
               weight_dtype_ == DataType::TYPE_FP4_E2M1FN_x2) {
             dequant_workspace_ = reinterpret_cast<uint8_t*>(a1_scale_) + a1_and_a2_scale_size;
           }
+        } else if (compute_dtype_ == DataType::TYPE_FP8_E4M3) {
+          // Per-tensor FP8 (hpc-ops): a1_q only, no per-token scale plane.
+          a1_q_ = reinterpret_cast<uint8_t*>(intermediate_cache2_) + intermediate_cache2_size;
         }
       }
       // LCOV_EXCL_STOP
@@ -354,7 +377,9 @@ Status MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_outp
   if (params_.use_vllm_moe) {
     void* w1_scale = nullptr;
     void* w2_scale = nullptr;
-    if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+    if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 || weight_dtype_ == DataType::TYPE_FP8_E4M3) {
+      // Blockwise: [E, N/128, K/128] scale grid. Per-tensor: one [E] scale, already folded with
+      // the activation input_scale by QuantWeight::BindFp8E4m3ScaleOfMoeWeight.
       w1_scale = w1->weight_scales->GetPtr<void>();
       w2_scale = w2->weight_scales->GetPtr<void>();
     } else if (weight_dtype_ == DataType::TYPE_UINT4x2 || weight_dtype_ == DataType::TYPE_INT4x2) {
@@ -407,6 +432,73 @@ Status MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_outp
     // LCOV_EXCL_START
     auto AutoInvoke = [&](auto template_param, void* hidden_states_ptr, void* output_hidden_states_ptr,
                           int num_tokens_arg) {
+      // hpc-ops FP8 fused MoE, selected by `setting.moe_backend.moe_impl` ('auto' resolves it from
+      // the model + quantization config, 'hpc'/'default' force it either way; see ResolveUseHpcMoe).
+      // Covers both FP8 expert formats with bf16 compute — blockwise-128x128 and per-tensor; any
+      // other model/dtype falls through to the default MoE unchanged. This is the shared per-node
+      // compute chokepoint, so single-card and expert-parallel multi-card are both covered by
+      // construction — the surrounding dispatch / expert-map / Combine still run in the EP branches.
+      // EP params follow hpc's convention (local experts on this rank, global pool, ep rank).
+      // NOTE: single-card is validated; EP/multi-card correctness (rank_ep semantics, deepep's
+      // pre-dispatched layout, expert_map-remapped topk_ids) is operator-verified.
+      if constexpr (std::is_same_v<T, __nv_bfloat16>) {
+        // Shape prerequisite: hpc-ops requires params_.expert_hidden_size and params_.expert_inter_size both to be
+        // multiples of 128 (the blockwise-FP8 block size, also the group-GEMM tile). E.g. Qwen3-30B
+        // moe_inter=768 works at TP=1/2, but TP=4 leaves moe_inter/tp=192 which is not a multiple of
+        // 128. moe_impl=auto checks this (ResolveUseHpcMoe); moe_impl=hpc trusts the deployer.
+        const bool hpc_fp8_moe = use_hpc_moe_ && hidden_states_ptr != nullptr &&
+                                 (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3 ||
+                                  weight_dtype_ == DataType::TYPE_FP8_E4M3) &&
+                                 compute_dtype_ == weight_dtype_;
+        if (hpc_fp8_moe) {
+          cudaStream_t hpc_stream = context_->device->GetPrimaryComputeStream().Get();
+          const int local_e = static_cast<int>(params_.expert_num_per_node);
+          const int total_e = static_cast<int>(params_.expert_num_per_node * global_expert_para_size_);
+          // hpc-ops uses ep_rank as the base expert offset:
+          //   start_expert = ep_rank * num_experts_local
+          //   end_expert   = (ep_rank + 1) * num_experts_local
+          // so it must be the EXPERT-parallel rank, not the tensor-parallel rank_. In pure-TP mode
+          // (expert_parallel_size == expert_world_size == 1) all experts are local on every rank
+          // and topk_ids reference [0, local_e); passing rank_ would shift start_expert to
+          // rank_ * local_e and zero the output on rank_>0. In EP mode the caller's expert_map
+          // already remaps topk_ids to the local [0, local_e) range, so ep_rank must again be 0
+          // from hpc-ops' point of view. The only case where a nonzero ep_rank could be right is
+          // if hpc-ops were used *without* the expert_map remap — which the layer never does. So
+          // ep_rank is always 0 at this call site.
+          const int ep_rank = 0;
+          if (weight_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) {
+            // Quantize hidden_states -> a1_q_ (fp8) + a1_scale_ (fp32, row-major [T, hidden/128]).
+            InvokePerTokenGroupQuantFp8E4m3<T>(hidden_states_ptr, a1_q_, a1_scale_, num_tokens_arg,
+                                               static_cast<int>(params_.expert_hidden_size),
+                                               /*is_column_major=*/false, hpc_stream);
+            llm_kernels::nvidia::InvokeHpcBlockwiseFp8Moe(
+                a1_q_, a1_scale_, w1->GetPtr<void>(), w1_scale, w2->GetPtr<void>(), w2_scale, topk_ids_ptr_,
+                topk_weights_ptr_, output_hidden_states_ptr, num_tokens_arg,
+                static_cast<int>(params_.expert_hidden_size), static_cast<int>(params_.expert_inter_size), local_e,
+                total_e,
+                // routed_scaling_factor is already folded into topk_weights by the gate above, so pass
+                // 1.0f (no extra scaling); the param is kept for forward-compat with gates that don't fold.
+                ep_rank, static_cast<int>(params_.expert_topk), /*routed_scaling_factor=*/1.0f, hpc_stream);
+          } else {
+#ifdef ENABLE_FP8
+            // Per-tensor FP8: hidden_states / w1.input_scale -> a1_q_ (is_static=true reads the
+            // scale instead of recomputing it). The GEMM output scales and the intermediate
+            // requant scale are pre-folded weights, see InvokeHpcPerTensorFp8Moe's contract.
+            Fp8E4m3Quantize<T>(/*num_channels=*/1, num_tokens_arg * static_cast<int>(params_.expert_hidden_size),
+                               static_cast<const T*>(hidden_states_ptr), a1_q_,
+                               static_cast<float*>(w1_input_scale), /*is_static=*/true, hpc_stream);
+            llm_kernels::nvidia::InvokeHpcPerTensorFp8Moe(
+                a1_q_, w1->GetPtr<void>(), w1_scale, w2_input_scale, w2->GetPtr<void>(), w2_scale,
+                topk_ids_ptr_, topk_weights_ptr_, output_hidden_states_ptr, num_tokens_arg,
+                static_cast<int>(params_.expert_hidden_size), static_cast<int>(params_.expert_inter_size), local_e,
+                total_e, ep_rank, static_cast<int>(params_.expert_topk), /*use_bf16_mul=*/false, hpc_stream);
+#else
+            KLLM_THROW("MoeLayer: per-tensor FP8 MoE requires an FP8-enabled build (CUDA >= 11.8).");
+#endif
+          }
+          return;
+        }
+      }
       // 当启用 low_latency 模式时，使用 InvokeFusedBatchedMoe
       if (low_latency_mode_) {
         void* input_scale = (compute_dtype_ == DataType::TYPE_BLOCK_FP8_E4M3) ? a1_scale_ : nullptr;

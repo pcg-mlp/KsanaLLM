@@ -359,9 +359,29 @@ struct AttnBackendConfig {
     FA3,       // FlashAttention 3
     VLLM_V26,  // vLLM FlashAttention 2.6+
     FA2_V26,   // FlashAttention 2.6+
-    FA2_V25    // FlashAttention 2.5+
+    FA2_V25,   // FlashAttention 2.5+
+    HPC        // hpc-ops attention (SM90+; enabled by this switch alone, validated on qwen3_moe)
   };
   FlashAttnImplChoice flash_attn_impl_choice = FlashAttnImplChoice::AUTO;
+};
+
+// The quant block size the hpc-ops MoE kernels are built around; it also bounds their group-GEMM
+// tiles, so hidden_size / moe_inter_size_per_rank must be multiples of it.
+constexpr size_t kHpcMoeBlockSize = 128;
+
+// The config of MoE backend.
+struct MoeBackendConfig {
+  // User preference for the MoE compute implementation, as written in the yaml.
+  enum class MoeImplChoice {
+    AUTO = 0,  // Let the runtime pick (default); see ResolveUseHpcMoe.
+    DEFAULT,   // Force the default KsanaLLM fused MoE path.
+    HPC        // Force the hpc-ops fused MoE (SM90+, FP8 experts only).
+  };
+  MoeImplChoice moe_impl_choice = MoeImplChoice::AUTO;
+
+  // Resolved by ScheduleConfigParser::UpdateModelConfig once the model + parallelism config is
+  // known. This — not moe_impl_choice — is what MoeLayer and MoeLayerFactory read.
+  bool use_hpc_moe = false;
 };
 
 struct ParallelismBasicConfig {
@@ -384,6 +404,16 @@ enum class MoeAllToAllMode {
   DEEPEP_LOW_LATENCY = 2  // Use DeepEP low-latency communication
 };
 
+// Decide whether the hpc-ops fused MoE runs, given the yaml request and the model.
+// HPC/DEFAULT are obeyed as-is. AUTO enables hpc only where it is known-good: Hopper (the kernels
+// are sm90a-only), a MoE model with bf16 activations and FP8 experts (blockwise-128x128 or
+// per-tensor with a static activation scale), hidden_size and moe_inter_size/moe_tensor_para_size
+// both multiples of 128 (the group-GEMM tile — e.g. Qwen3-30B at TP=4 leaves 192 and must not),
+// not deepseek/kimi/glm (they drive the MoE through their own paths), and DeepEP off (its dispatch
+// hands the MoE a per-expert batched layout the hpc kernel does not consume).
+bool ResolveUseHpcMoe(MoeBackendConfig::MoeImplChoice choice, const ModelConfig &model_config,
+                      size_t moe_tensor_para_size, MoeAllToAllMode moe_all_to_all_mode, int device_sm_version);
+
 // Config info used during runtime
 // Some configs are determined by ModelConfig and BatchSchedulerConfig
 struct RuntimeConfig {
@@ -393,6 +423,8 @@ struct RuntimeConfig {
   // Group 2: execution graph config
   // For attention backend.
   AttnBackendConfig attn_backend_config;
+  // For MoE backend.
+  MoeBackendConfig moe_backend_config;
   bool enable_full_shared_expert = false;
   bool separate_prefill_decode = false;
   CompressorConfig compressor_config;

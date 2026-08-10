@@ -20,6 +20,9 @@
 #include "cache_manager/cache_layout/cache_layout_factory.h"
 #include "cache_manager/cache_layout/mamba_cache_layout.h"
 #include "device/device_utils.h"
+#ifdef ENABLE_CUDA
+#include "device/nvidia/cuda_utils.h"
+#endif
 #include "models/common/common_config.h"
 #include "models/common_moe/moe_config.h"
 #include "utils/logger.h"
@@ -75,6 +78,69 @@ void PrepareKVScales(const std::string &model_dir, ModelConfig &model_config) {
 
   KLLM_LOG_INFO << fmt::format(
       "Successfully Loaded KV cache scaling factors. Currently K and V are using the same scaling factors.");
+}
+
+bool ResolveUseHpcMoe(MoeBackendConfig::MoeImplChoice choice, const ModelConfig &model_config,
+                      size_t moe_tensor_para_size, MoeAllToAllMode moe_all_to_all_mode, int device_sm_version) {
+  using MoeChoice = MoeBackendConfig::MoeImplChoice;
+  if (choice == MoeChoice::HPC) {
+    return true;
+  }
+  if (choice == MoeChoice::DEFAULT) {
+    return false;
+  }
+
+  // ---- auto ----
+  auto reject = [](const std::string &why) {
+    KLLM_LOG_INFO << "moe_impl=auto: using the default MoE path (" << why << ").";
+    return false;
+  };
+
+  if (device_sm_version != 90) {
+    return reject(fmt::format("hpc-ops MoE is built for sm90a only, device is sm{}", device_sm_version));
+  }
+  if (!model_config.is_moe) {
+    return reject("not a MoE model");
+  }
+  if (model_config.weight_data_type != TYPE_BF16) {
+    // The hpc-ops MoE emits bf16 and is only instantiated for bf16 activations.
+    return reject(fmt::format("activation dtype is {}, not bf16", GetTypeString(model_config.weight_data_type)));
+  }
+  if (moe_all_to_all_mode != MoeAllToAllMode::DISABLED) {
+    return reject("DeepEP all-to-all is enabled");
+  }
+  // Models with a MoE path of their own; hpc-ops has not been validated against them.
+  for (const char *excluded : {"deepseek", "kimi", "glm"}) {
+    if (model_config.type.find(excluded) != std::string::npos) {
+      return reject(fmt::format("model type '{}' is excluded", model_config.type));
+    }
+  }
+
+  const QuantConfig &quant = model_config.quant_config;
+  const bool fp8_blockwise_128 =
+      quant.is_fp8_blockwise && quant.weight_block_size.size() == 2 &&
+      quant.weight_block_size[0] == kHpcMoeBlockSize && quant.weight_block_size[1] == kHpcMoeBlockSize;
+  const bool fp8_per_tensor = !quant.is_fp8_blockwise && quant.method == QUANT_FP8_E4M3 &&
+                              quant.is_checkpoint_fp8_serialized && quant.is_activation_scheme_static;
+  if (!fp8_blockwise_128 && !fp8_per_tensor) {
+    return reject("experts are not FP8 blockwise-128x128 nor per-tensor FP8");
+  }
+  if (quant.enable_moe_int4 || quant.expert_dtype == "fp4") {
+    return reject("experts are re-quantized to int4/fp4");
+  }
+
+  const size_t hidden_size = static_cast<size_t>(model_config.hidden_units);
+  const size_t moe_inter_size_per_rank =
+      DivRoundUp(model_config.moe_config.moe_inter_size, std::max<size_t>(moe_tensor_para_size, 1));
+  if (hidden_size % kHpcMoeBlockSize != 0 || moe_inter_size_per_rank % kHpcMoeBlockSize != 0) {
+    return reject(fmt::format("hidden_size={} / moe_inter_size_per_rank={} are not both multiples of {}", hidden_size,
+                              moe_inter_size_per_rank, kHpcMoeBlockSize));
+  }
+
+  KLLM_LOG_INFO << fmt::format(
+      "moe_impl=auto: using the hpc-ops fused MoE ({} FP8, hidden_size={}, moe_inter_size_per_rank={}).",
+      fp8_blockwise_128 ? "blockwise-128x128" : "per-tensor", hidden_size, moe_inter_size_per_rank);
+  return true;
 }
 
 ScheduleConfigParser::ScheduleConfigParser() { Reset(); }
@@ -539,18 +605,60 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       choice = Choice::FA2_V26;
     } else if (impl_lower == "flashattn_v25" || impl_lower == "fa2_v25" || impl_lower == "flash_attn_v25") {
       choice = Choice::FA2_V25;
+    } else if (impl_lower == "hpc") {
+      choice = Choice::HPC;
     } else {
       KLLM_LOG_WARNING << "Unknown setting.attn_backend.flash_attn_impl='" << impl << "', fallback to 'auto'.";
       choice = Choice::AUTO;
     }
+    // The switch alone decides: it is the operator's responsibility to only turn hpc on for configs it
+    // supports (see attention_kernel_wrapper). No model-type second-guessing here.
     runtime_config_.attn_backend_config.flash_attn_impl_choice = choice;
 
     const char *choice_str = (choice == Choice::AUTO)       ? "auto"
                              : (choice == Choice::FA3)      ? "fa3"
                              : (choice == Choice::VLLM_V26) ? "vllm_v26"
                              : (choice == Choice::FA2_V26)  ? "flashattn_v26"
-                                                            : "flashattn_v25";
+                             : (choice == Choice::FA2_V25)  ? "flashattn_v25"
+                                                            : "hpc";
     KLLM_LOG_INFO << "flash_attn_impl: " << choice_str;
+  }
+
+  // Parse MoE implementation preference (optional). Mirrors flash_attn_impl above, but lives under
+  // setting.moe_backend since it is orthogonal to the attention backend. Only the *request* is
+  // recorded here; the AUTO case is resolved in UpdateModelConfig, once the model type,
+  // quantization and MoE parallelism are all known (see ResolveUseHpcMoe).
+  {
+    std::string impl =
+        yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "setting.moe_backend.moe_impl", "auto");
+    auto is_space = [](unsigned char c) {
+      return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+    };
+    impl.erase(impl.begin(), std::find_if(impl.begin(), impl.end(), [&](unsigned char ch) { return !is_space(ch); }));
+    impl.erase(std::find_if(impl.rbegin(), impl.rend(), [&](unsigned char ch) { return !is_space(ch); }).base(),
+               impl.end());
+    if (impl.empty()) {
+      impl = "auto";
+    }
+    std::string impl_lower = impl;
+    std::transform(impl_lower.begin(), impl_lower.end(), impl_lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+
+    using MoeChoice = MoeBackendConfig::MoeImplChoice;
+    MoeChoice choice = MoeChoice::AUTO;
+    if (impl_lower == "auto") {
+      choice = MoeChoice::AUTO;
+    } else if (impl_lower == "hpc") {
+      choice = MoeChoice::HPC;
+    } else if (impl_lower == "default") {
+      choice = MoeChoice::DEFAULT;
+    } else {
+      KLLM_LOG_WARNING << "Unknown setting.moe_backend.moe_impl='" << impl << "', fallback to 'auto'.";
+      choice = MoeChoice::AUTO;
+    }
+    runtime_config_.moe_backend_config.moe_impl_choice = choice;
+    KLLM_LOG_INFO << "moe_impl: "
+                  << (choice == MoeChoice::AUTO ? "auto" : choice == MoeChoice::HPC ? "hpc" : "default");
   }
 
   // Read MOE topk score threshold
@@ -1050,6 +1158,17 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.parallel_basic_config.moe_tensor_para_size =
       runtime_config_.parallel_basic_config.tensor_parallel_size /
       runtime_config_.parallel_basic_config.expert_parallel_size;
+
+  // Resolve setting.moe_backend.moe_impl now that the MoE parallelism is known.
+#ifdef ENABLE_CUDA
+  const int device_sm_version = GetCurrentDeviceSmVersion();
+#else
+  const int device_sm_version = 0;
+#endif
+  runtime_config_.moe_backend_config.use_hpc_moe = ResolveUseHpcMoe(
+      runtime_config_.moe_backend_config.moe_impl_choice, model_config,
+      runtime_config_.parallel_basic_config.moe_tensor_para_size, runtime_config_.moe_all_to_all_mode,
+      device_sm_version);
 
   runtime_config_.inter_data_type = model_config.weight_data_type;
   // TODO(robertyuan): These members should be removed from other configs

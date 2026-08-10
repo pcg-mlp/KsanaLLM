@@ -238,6 +238,86 @@ class ScheduleConfigParserTest : public ::testing::Test {
     return temp_file_path.string();
   }
 
+  // 生成含 setting.attn_backend.flash_attn_impl 的临时 YAML（FlashAttention 实现选择解析单测用）。
+  std::string CreateTempYamlConfigWithFlashAttnImpl(const std::string &flash_attn_impl) {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) {
+      return "";
+    }
+
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "    pipeline_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_waiting_queue_len: 100\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    file << "  attn_backend:\n";
+    file << "    flash_attn_impl: \"" << flash_attn_impl << "\"\n";
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+    file.close();
+    return temp_file_path.string();
+  }
+
+  // 生成含 setting.moe_backend.moe_impl 的临时 YAML（MoE 实现选择解析单测用）。
+  std::string CreateTempYamlConfigWithMoeImpl(const std::string &moe_impl) {
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+    std::filesystem::path temp_file_path = temp_dir / filename;
+    temp_files_.push_back(temp_file_path.string());
+
+    std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+    temp_dirs_.push_back(model_dir.string());
+    if (std::filesystem::exists(model_dir)) {
+      std::filesystem::remove_all(model_dir);
+    }
+    std::filesystem::create_directory(model_dir);
+
+    std::ofstream file(temp_file_path);
+    if (!file.is_open()) {
+      return "";
+    }
+
+    file << "setting:\n";
+    file << "  global:\n";
+    file << "    tensor_para_size: 1\n";
+    file << "    pipeline_para_size: 1\n";
+    file << "  batch_scheduler:\n";
+    file << "    max_waiting_queue_len: 100\n";
+    file << "    max_token_len: 4096\n";
+    file << "    max_step_tokens: 4096\n";
+    file << "    max_batch_size: 32\n";
+    file << "  block_manager:\n";
+    file << "    block_token_num: 16\n";
+    file << "    reserved_device_memory_ratio: 0.01\n";
+    file << "  moe_backend:\n";
+    file << "    moe_impl: \"" << moe_impl << "\"\n";
+    file << "model_spec:\n";
+    file << "  base_model:\n";
+    file << "    model_dir: \"" << model_dir.string() << "\"\n";
+    file.close();
+    return temp_file_path.string();
+  }
+
   // Helper function to load ModelConfig from config.json
   ModelConfig LoadModelConfig(const std::string &model_dir, bool is_visual = false) {
     ModelConfig model_config;
@@ -522,6 +602,282 @@ TEST_F(ScheduleConfigParserTest, UpdateMembersAllowsKvScalesNotEqualToOneWhenFla
   ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
   EXPECT_FALSE(runtime_config.attn_backend_config.use_flashinfer_for_decode);
   EXPECT_EQ(runtime_config.attn_backend_config.kv_cache_dtype, model_config.weight_data_type);
+}
+
+// Test: flash_attn_impl='hpc' resolves to HPC when model type is qwen3_moe.
+TEST_F(ScheduleConfigParserTest, ParsesFlashAttnImplHpcForQwen3Moe) {
+  std::string yaml_path = CreateTempYamlConfigWithFlashAttnImpl("hpc");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "qwen3_moe";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.attn_backend_config.flash_attn_impl_choice,
+            AttnBackendConfig::FlashAttnImplChoice::HPC);
+}
+
+// Test: flash_attn_impl='hpc' is honored regardless of model type — the switch alone decides,
+// there is no model-type second-guessing in the parser.
+TEST_F(ScheduleConfigParserTest, FlashAttnImplHpcHonoredRegardlessOfModelType) {
+  std::string yaml_path = CreateTempYamlConfigWithFlashAttnImpl("hpc");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "llama";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.attn_backend_config.flash_attn_impl_choice,
+            AttnBackendConfig::FlashAttnImplChoice::HPC);
+}
+
+// Test: moe_impl='hpc' resolves to HPC when model type is qwen3_moe.
+TEST_F(ScheduleConfigParserTest, ParsesMoeImplHpcForQwen3Moe) {
+  std::string yaml_path = CreateTempYamlConfigWithMoeImpl("hpc");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "qwen3_moe";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.moe_backend_config.moe_impl_choice, MoeBackendConfig::MoeImplChoice::HPC);
+}
+
+// Test: moe_impl='hpc' is honored regardless of model type — the switch alone decides,
+// there is no model-type second-guessing in the parser.
+TEST_F(ScheduleConfigParserTest, MoeImplHpcHonoredRegardlessOfModelType) {
+  std::string yaml_path = CreateTempYamlConfigWithMoeImpl("hpc");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "llama";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.moe_backend_config.moe_impl_choice, MoeBackendConfig::MoeImplChoice::HPC);
+}
+
+// Test: default (no moe_impl key) resolves to AUTO.
+TEST_F(ScheduleConfigParserTest, MoeImplDefaultsToAuto) {
+  std::string yaml_path = CreateTempYamlConfigWithFlashAttnImpl("auto");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "qwen3_moe";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.moe_backend_config.moe_impl_choice, MoeBackendConfig::MoeImplChoice::AUTO);
+}
+
+// Test: moe_impl='default' is parsed as an explicit opt-out of the auto resolution.
+TEST_F(ScheduleConfigParserTest, ParsesMoeImplDefault) {
+  std::string yaml_path = CreateTempYamlConfigWithMoeImpl("default");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "qwen3_moe";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.moe_backend_config.moe_impl_choice, MoeBackendConfig::MoeImplChoice::DEFAULT);
+}
+
+// Test: an unrecognized moe_impl falls back to 'auto' rather than failing the parse.
+TEST_F(ScheduleConfigParserTest, UnknownMoeImplFallsBackToAuto) {
+  std::string yaml_path = CreateTempYamlConfigWithMoeImpl("no_such_backend");
+  ASSERT_FALSE(yaml_path.empty()) << "Failed to create temporary YAML file";
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  std::string model_dir =
+      yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(), "model_spec.base_model.model_dir", "");
+  ASSERT_FALSE(model_dir.empty());
+
+  ModelConfig model_config = LoadModelConfig(model_dir, false);
+  model_config.type = "qwen3_moe";
+
+  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  RuntimeConfig runtime_config;
+  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
+  EXPECT_EQ(runtime_config.moe_backend_config.moe_impl_choice, MoeBackendConfig::MoeImplChoice::AUTO);
+}
+
+// --- ResolveUseHpcMoe: the moe_impl=auto decision matrix ---
+
+namespace {
+
+constexpr int kHopperSm = 90;
+
+// A qwen3_moe-shaped model with blockwise-128x128 FP8 experts: the canonical auto=hpc hit.
+ModelConfig MakeBlockwiseFp8MoeModelConfig() {
+  ModelConfig model_config;
+  model_config.type = "qwen3_moe";
+  model_config.is_moe = true;
+  model_config.hidden_units = 2048;
+  model_config.weight_data_type = TYPE_BF16;
+  model_config.moe_config.moe_inter_size = 768;
+  model_config.quant_config.method = QUANT_BLOCK_FP8_E4M3;
+  model_config.quant_config.is_fp8_blockwise = true;
+  model_config.quant_config.is_checkpoint_fp8_serialized = true;
+  model_config.quant_config.weight_block_size = {128, 128};
+  return model_config;
+}
+
+// The same model quantized per-tensor with a static activation scale.
+ModelConfig MakePerTensorFp8MoeModelConfig() {
+  ModelConfig model_config = MakeBlockwiseFp8MoeModelConfig();
+  model_config.quant_config.method = QUANT_FP8_E4M3;
+  model_config.quant_config.is_fp8_blockwise = false;
+  model_config.quant_config.weight_block_size.clear();
+  model_config.quant_config.is_activation_scheme_static = true;
+  return model_config;
+}
+
+bool ResolveAuto(const ModelConfig &model_config, size_t moe_tensor_para_size = 1,
+                 MoeAllToAllMode mode = MoeAllToAllMode::DISABLED, int sm = kHopperSm) {
+  return ResolveUseHpcMoe(MoeBackendConfig::MoeImplChoice::AUTO, model_config, moe_tensor_para_size, mode, sm);
+}
+
+}  // namespace
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeObeysExplicitChoice) {
+  // A model auto would reject (plain bf16 experts) is still forced on by moe_impl=hpc, and a model
+  // auto would accept is still forced off by moe_impl=default.
+  ModelConfig bf16_moe;
+  bf16_moe.type = "qwen3_moe";
+  bf16_moe.is_moe = true;
+  EXPECT_TRUE(ResolveUseHpcMoe(MoeBackendConfig::MoeImplChoice::HPC, bf16_moe, 1, MoeAllToAllMode::DISABLED, 0));
+  EXPECT_FALSE(ResolveUseHpcMoe(MoeBackendConfig::MoeImplChoice::DEFAULT, MakeBlockwiseFp8MoeModelConfig(), 1,
+                                MoeAllToAllMode::DISABLED, kHopperSm));
+}
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeAutoAcceptsFp8MoeModels) {
+  EXPECT_TRUE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig()));
+  EXPECT_TRUE(ResolveAuto(MakePerTensorFp8MoeModelConfig()));
+  // moe_inter 768 still divides by 128 at moe_tp=2 (384) but not at moe_tp=4 (192).
+  EXPECT_TRUE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), /*moe_tensor_para_size=*/2));
+}
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeAutoRejectsUnsupportedShapes) {
+  // moe_inter_size_per_rank = 768 / 4 = 192, not a multiple of 128.
+  EXPECT_FALSE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), /*moe_tensor_para_size=*/4));
+
+  ModelConfig odd_hidden = MakeBlockwiseFp8MoeModelConfig();
+  odd_hidden.hidden_units = 2000;
+  EXPECT_FALSE(ResolveAuto(odd_hidden));
+}
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeAutoRejectsNonFp8Quantization) {
+  ModelConfig bf16_moe = MakeBlockwiseFp8MoeModelConfig();
+  bf16_moe.quant_config = QuantConfig{};
+  EXPECT_FALSE(ResolveAuto(bf16_moe));
+
+  // Blockwise FP8 with a non-128 quant block is out of scope.
+  ModelConfig block64 = MakeBlockwiseFp8MoeModelConfig();
+  block64.quant_config.weight_block_size = {64, 64};
+  EXPECT_FALSE(ResolveAuto(block64));
+
+  // Per-tensor FP8 needs a static activation scale (i.e. input_scale in the checkpoint).
+  ModelConfig dynamic_act = MakePerTensorFp8MoeModelConfig();
+  dynamic_act.quant_config.is_activation_scheme_static = false;
+  EXPECT_FALSE(ResolveAuto(dynamic_act));
+
+  // FP8 attention weights but int4/fp4 experts.
+  ModelConfig moe_int4 = MakeBlockwiseFp8MoeModelConfig();
+  moe_int4.quant_config.enable_moe_int4 = true;
+  EXPECT_FALSE(ResolveAuto(moe_int4));
+
+  ModelConfig moe_fp4 = MakeBlockwiseFp8MoeModelConfig();
+  moe_fp4.quant_config.expert_dtype = "fp4";
+  EXPECT_FALSE(ResolveAuto(moe_fp4));
+}
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeAutoRejectsExcludedModelTypes) {
+  for (const std::string &type : {"deepseek_v3", "deepseek_v4", "kimi_k2", "glm4_moe"}) {
+    ModelConfig model_config = MakeBlockwiseFp8MoeModelConfig();
+    model_config.type = type;
+    EXPECT_FALSE(ResolveAuto(model_config)) << "model type " << type << " must not auto-select hpc";
+  }
+}
+
+TEST_F(ScheduleConfigParserTest, ResolveUseHpcMoeAutoRejectsUnsupportedRuntime) {
+  // Dense model.
+  ModelConfig dense = MakeBlockwiseFp8MoeModelConfig();
+  dense.is_moe = false;
+  EXPECT_FALSE(ResolveAuto(dense));
+
+  // fp16 activations: the hpc kernels only emit bf16.
+  ModelConfig fp16_model = MakeBlockwiseFp8MoeModelConfig();
+  fp16_model.weight_data_type = TYPE_FP16;
+  EXPECT_FALSE(ResolveAuto(fp16_model));
+
+  // Non-Hopper device (the hpc-ops kernels are compiled for sm90a only).
+  EXPECT_FALSE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), 1, MoeAllToAllMode::DISABLED, /*sm=*/89));
+  EXPECT_FALSE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), 1, MoeAllToAllMode::DISABLED, /*sm=*/100));
+
+  // DeepEP reshapes the MoE input into a per-expert batched layout.
+  EXPECT_FALSE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), 1, MoeAllToAllMode::DEEPEP_NORMAL));
+  EXPECT_FALSE(ResolveAuto(MakeBlockwiseFp8MoeModelConfig(), 1, MoeAllToAllMode::DEEPEP_LOW_LATENCY));
 }
 
 // --- InitConnectorConfig tests ---

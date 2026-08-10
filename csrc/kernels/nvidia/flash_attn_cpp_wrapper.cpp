@@ -45,6 +45,12 @@ bool IsUsingFA3() {
   // For other choices (FA2_V25, FA2_V26, VLLM_V26), FA3 is not used
   return false;
 }
+
+// Public function to check if hpc-ops attention is selected by the user.
+bool IsUsingHpcAttention() {
+  return GetFlashAttnImplChoice() == AttnBackendConfig::FlashAttnImplChoice::HPC;
+}
+
 static bool HasVllmV26() {
   return ksana_llm::FlashAttentionBackend::mha_varlen_fwd_vllm_flash_attn_v26_ != nullptr &&
          ksana_llm::FlashAttentionBackend::mha_fwd_kvcache_vllm_flash_attn_v26_ != nullptr;

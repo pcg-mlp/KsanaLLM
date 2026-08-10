@@ -63,6 +63,7 @@ class PagedAttentionLayer : public AttentionLayer {
   bool enable_blocked_multi_token_forwarding_kv_;
 #ifdef ENABLE_CUDA
   bool use_flashinfer_for_decode_;
+  bool use_hpc_attention_ = false;
   // Shared FlashInfer workspaces across all layers on the same rank.
   void* shared_pinned_host_workspace_ = nullptr;
   std::shared_ptr<Tensor> shared_device_workspace_;

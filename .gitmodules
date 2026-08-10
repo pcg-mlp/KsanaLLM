@@ -13,3 +13,7 @@
 	path = 3rdparty/LLM_kernels/3rdparty/FlashMLA
 	url = https://github.com/deepseek-ai/FlashMLA.git
 	ignore = dirty
+[submodule "3rdparty/LLM_kernels/3rdparty/hpc-ops"]
+	path = 3rdparty/LLM_kernels/3rdparty/hpc-ops
+	url = https://github.com/Tencent/hpc-ops.git
+	ignore = dirty

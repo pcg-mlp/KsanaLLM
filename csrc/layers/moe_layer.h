@@ -173,6 +173,10 @@ class MoeLayer : public BaseMoeLayer {
   bool low_latency_mode_ = false;
   size_t low_latency_max_tokens_ = 0;
 
+  // Cached at Init from the moe_impl=hpc switch; hot path (AutoInvoke) reads this instead of
+  // going through GetRuntimeConfig() on every MoE call.
+  bool use_hpc_moe_ = false;
+
   // Used for Expert-Parallel load balancer.
   bool enable_load_eplb_config_ = false;
   bool enable_dump_eplb_data_ = false;

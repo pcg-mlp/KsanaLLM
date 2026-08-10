@@ -44,7 +44,9 @@ if(WITH_CUDA)
     llm_kernels_nvidia_kernel_sglang_marlin_moe_wna16
     llm_kernels_nvidia_kernel_qknorm_rope
     llm_kernels_nvidia_kernel_sglang_route_radix
-    llm_kernels_nvidia_kernel_vllm_single_group_topk)
+    llm_kernels_nvidia_kernel_vllm_single_group_topk
+    llm_kernels_nvidia_kernel_hpc_attention
+    llm_kernels_nvidia_kernel_hpc_moe)
 
   if(TARGET llm_kernels_nvidia_kernel_humming)
     list(APPEND nvidia_kernels_LIBS llm_kernels_nvidia_kernel_humming)

@@ -116,6 +116,11 @@ __attribute__((unused)) static std::string GetLinearComputeBackendString(LinearC
  * - HUMMING_W4A8_MOE_BACKEND:
  *     DeepSeek-only Humming backend for FP4 expert weights dequantized to FP8 activation
  *     (W4A8). Same fused-MoE JIT path as W4A16, but with FP8 intermediate activation.
+ * - HPC_MOE_BACKEND:
+ *     hpc-ops fused MoE (SM90a). Selected by setting.moe_backend.moe_impl; only used for the
+ *     per-tensor FP8 expert format, which has no other MoeLayer-hosted implementation.
+ *     Blockwise-FP8 keeps routing through TRITON_MOE_BACKEND — the same MoeLayer picks hpc up
+ *     internally from RuntimeConfig::moe_backend_config.use_hpc_moe.
  */
 enum MoeComputeBackend {
   DEFAULT_MOE_BACKEND,
@@ -123,7 +128,8 @@ enum MoeComputeBackend {
   MARLIN_MOE_BACKEND,
   TRITON_MOE_BACKEND,
   HUMMING_W4A16_MOE_BACKEND,
-  HUMMING_W4A8_MOE_BACKEND
+  HUMMING_W4A8_MOE_BACKEND,
+  HPC_MOE_BACKEND
 };
 
 __attribute__((unused)) static std::string GetMoeComputeBackendString(MoeComputeBackend moe_compute_backend) {
@@ -133,7 +139,8 @@ __attribute__((unused)) static std::string GetMoeComputeBackendString(MoeCompute
       {MARLIN_MOE_BACKEND, "marlin_moe"},
       {TRITON_MOE_BACKEND, "triton_moe"},
       {HUMMING_W4A16_MOE_BACKEND, "humming_w4a16_moe"},
-      {HUMMING_W4A8_MOE_BACKEND, "humming_w4a8_moe"}};
+      {HUMMING_W4A8_MOE_BACKEND, "humming_w4a8_moe"},
+      {HPC_MOE_BACKEND, "hpc_moe"}};
   return moe_compute_backend_map.count(moe_compute_backend) ? moe_compute_backend_map.at(moe_compute_backend)
                                                             : "Unknown";
 }

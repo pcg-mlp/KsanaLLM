@@ -57,6 +57,11 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
   builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, MOE_QUANT_BLOCK_FP8_E4M3, TRITON_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<MoeLayer>;
 
+  // for per-tensor fp8 experts on the hpc-ops fused MoE (bf16 activation only — the hpc kernel
+  // emits bf16). MoeLayer supplies the gating + expert map; the per-tensor GEMMs are hpc's.
+  builder_map_[{TYPE_FP8_E4M3, TYPE_BF16, TYPE_BF16, MOE_QUANT_FP8_E4M3, HPC_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<MoeLayer>;
+
   // for deepseek moe-int4
   builder_map_[{TYPE_UINT8, TYPE_FP16, TYPE_FP16, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND}] =
       &MoeLayerFactory::BuildLayer<MoeLayer>;
@@ -262,9 +267,19 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   }
   // FP8 MoE layer creation
   if (weight_type == TYPE_FP8_E4M3) {
-    QuantMode quant_mode = model_config_.quant_config.is_fp8_blockwise ? MOE_QUANT_BLOCK_FP8_E4M3 : MOE_QUANT_FP8_E4M3;
-    MoeComputeBackend backend = model_config_.quant_config.is_fp8_blockwise ? TRITON_MOE_BACKEND : DEFAULT_MOE_BACKEND;
-    return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, quant_mode, backend);
+    if (model_config_.quant_config.is_fp8_blockwise) {
+      // Blockwise FP8 always lands on MoeLayer; it decides internally whether the fused MoE is
+      // Triton's or hpc-ops'.
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_BLOCK_FP8_E4M3,
+                         TRITON_MOE_BACKEND);
+    }
+    // Per-tensor FP8: hpc-ops when it is selected (MoeLayer), cutlass otherwise (Fp8MoeLayer).
+    // The hpc kernel only emits bf16, so anything else keeps the cutlass path.
+    if (runtime_config_.moe_backend_config.use_hpc_moe && input_type == TYPE_BF16 && output_type == TYPE_BF16) {
+      return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_FP8_E4M3, HPC_MOE_BACKEND);
+    }
+    return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_FP8_E4M3,
+                       DEFAULT_MOE_BACKEND);
   }
   // INT4 MoE layer creation
   if (enable_moe_int4) {

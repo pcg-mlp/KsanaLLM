@@ -1231,4 +1231,337 @@ TEST_F(LayerTest, CutlassMoeSearchStatusTest) {
 #endif
 }
 
+// --- hpc-ops fused MoE through MoeLayer (both FP8 expert formats) ---
+//
+// These drive MoeLayer as a deployment would once setting.moe_backend.moe_impl has resolved to hpc,
+// with the weight/scale layouts the KsanaLLM weight loaders produce.
+//
+// Routing is made irrelevant by construction: every expert dequantizes to the *same* logical
+// weights, so with norm_topk_prob (routing weights sum to 1) the output must equal a single dense
+// feed-forward pass no matter which experts win. The per-tensor case still stores each expert's
+// payload against a different power-of-two scale, so an off-by-one in the per-expert scale
+// indexing — or a swapped gate/up half — still shows up as a large error.
+namespace {
+
+#if defined(ENABLE_CUDA) && defined(ENABLE_FP8)
+constexpr float kFp8E4m3Max = 448.0f;
+
+// MoeLayer::Init parameters, with the knobs these tests care about; everything else keeps the
+// MoeLayerParameters default.
+std::vector<std::any> MakeHpcMoeLayerParams(size_t expert_num, size_t hidden, size_t inter, size_t topk,
+                                            DataType fp8_weight_dtype) {
+  MoeLayerParameters moe_params;
+  moe_params.moe_scale_norm_mode = MoeScaleNormMode::NO_NORM;
+  moe_params.max_token_num = 512;
+  moe_params.layer_idx = 0;
+  moe_params.expert_num_per_node = expert_num;
+  moe_params.expert_hidden_size = hidden;
+  moe_params.expert_inter_size = inter;
+  moe_params.expert_topk = topk;
+  moe_params.tp_size = 1;
+  moe_params.use_vllm_moe = true;  // -> [gate, up] weight layout
+  moe_params.num_expert_group = 1;
+  moe_params.expert_groups_topk = 1;
+  moe_params.scoring_func = "softmax";
+  moe_params.topk_method = "greedy";
+  moe_params.norm_topk_prob = true;  // -> routing weights sum to 1
+  moe_params.routed_scaling_factor = 1.0f;
+  moe_params.use_e_score_correction_bias = false;
+  moe_params.enable_full_shared_expert = false;
+  moe_params.fp8_weight_dtype = fp8_weight_dtype;
+  moe_params.int_weight_dtype = DataType::TYPE_INVALID;
+  moe_params.group_size = 0;
+  moe_params.apply_weight = false;
+  moe_params.swiglu_limit = 0.0f;
+  moe_params.num_hash_layers = 0;
+  moe_params.vocab_size = 0;
+  moe_params.situ_beta = 0.0f;
+  moe_params.situ_linear_beta = 0.0f;
+  return {moe_params};
+}
+
+// fp8 payload with magnitudes kept in [2^-3, 2^3], so that rescaling it by a power of two (up to
+// 8x here) stays inside the normal e4m3 range and remains bit-exact.
+torch::Tensor MakeFp8Payload(const std::vector<int64_t>& shape, const torch::TensorOptions& float_option) {
+  torch::Tensor t = torch::randn(shape, float_option);
+  torch::Tensor mag = torch::clamp(torch::abs(t), 0.125f, 8.0f);
+  return torch::where(t < 0, -mag, mag).to(torch::kFloat8_e4m3fn).to(torch::kFloat32);
+}
+
+// Round-trip [m, n] through per-token 128-group fp8 quantization, mirroring
+// InvokePerTokenGroupQuantFp8E4m3.
+torch::Tensor PerTokenGroupQuantDequant(const torch::Tensor& x, int64_t group_size) {
+  torch::Tensor grouped = x.reshape({x.size(0), x.size(1) / group_size, group_size});
+  torch::Tensor scale =
+      std::get<0>(torch::max(torch::abs(grouped), -1, /*keepdim=*/true)).clamp_min(1e-10f) / kFp8E4m3Max;
+  torch::Tensor q = (grouped / scale).to(torch::kFloat8_e4m3fn).to(torch::kFloat32);
+  return (q * scale).reshape(x.sizes());
+}
+
+// Mean |actual - expected| relative to mean |expected|.
+float RelativeL1Error(const torch::Tensor& actual, const torch::Tensor& expected) {
+  const float expected_l1 = torch::mean(torch::abs(expected)).item<float>();
+  EXPECT_GT(expected_l1, 1e-3f) << "degenerate reference, the comparison would not discriminate";
+  return torch::mean(torch::abs(actual - expected)).item<float>() / expected_l1;
+}
+#endif
+
+}  // namespace
+
+TEST_F(LayerTest, HpcPerTensorFp8MoeLayerTest) {
+#ifdef ENABLE_CUDA
+#  ifdef ENABLE_FP8
+  if (context_->device->ext->GetComputeCapacity() != 90) {
+    GTEST_SKIP() << "hpc-ops MoE kernels are built for sm90a only";
+  }
+  constexpr int kDeviceRank = 0;
+
+  ModelConfig new_model_config = model_config;
+  RuntimeConfig new_runtime_config = runtime_config;
+  new_model_config.weight_data_type = TYPE_BF16;
+  new_runtime_config.inter_data_type = TYPE_BF16;
+  // What setting.moe_backend.moe_impl resolves to for a per-tensor FP8 MoE model on Hopper.
+  new_runtime_config.moe_backend_config.moe_impl_choice = MoeBackendConfig::MoeImplChoice::AUTO;
+  new_runtime_config.moe_backend_config.use_hpc_moe = true;
+
+  torch::manual_seed(1234);
+
+  // hpc-ops needs hidden_size and moe_inter_size to be multiples of 128.
+  const size_t expert_num = 8;
+  const size_t expert_hidden_size = 512;
+  const size_t expert_inter_size = 256;
+  const size_t expert_topk = 2;
+  const int64_t num_tokens = 16;
+  const int64_t hidden = static_cast<int64_t>(expert_hidden_size);
+  const int64_t inter = static_cast<int64_t>(expert_inter_size);
+  const int64_t num_experts = static_cast<int64_t>(expert_num);
+
+  std::vector<std::any> params =
+      MakeHpcMoeLayerParams(expert_num, expert_hidden_size, expert_inter_size, expert_topk, TYPE_FP8_E4M3);
+
+  auto float_option = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, kDeviceRank);
+  auto bf16_option = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA, kDeviceRank);
+  auto fp8_option = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(torch::kCUDA, kDeviceRank);
+
+  torch::Tensor hidden_states = torch::randn({num_tokens, hidden}, bf16_option) * 0.5f;
+  torch::Tensor routing_out = torch::randn({num_tokens, num_experts}, bf16_option);
+
+  // Per-expert scales: powers of two, so that re-expressing the same logical weight against a
+  // different expert's scale is an exact fp8 operation (a pure exponent shift).
+  constexpr int64_t kNumDistinctScales = 4;
+  torch::Tensor expert_scale = torch::empty({num_experts}, float_option);
+  for (int64_t e = 0; e < num_experts; ++e) {
+    expert_scale[e] = std::ldexp(1.0f, static_cast<int>(e % kNumDistinctScales) - 2);  // 0.25 .. 2
+  }
+  const float max_expert_scale = torch::max(expert_scale).item<float>();
+
+  torch::Tensor gate_up_payload = MakeFp8Payload({2 * inter, hidden}, float_option);
+  torch::Tensor down_payload = MakeFp8Payload({hidden, inter}, float_option);
+
+  // The logical (dequantized) weights every expert shares.
+  torch::Tensor gate_up_deq = gate_up_payload * max_expert_scale;
+  torch::Tensor down_deq = down_payload * max_expert_scale;
+
+  torch::Tensor gate_up_weight = torch::empty({num_experts, 2 * inter, hidden}, fp8_option);
+  torch::Tensor down_weight = torch::empty({num_experts, hidden, inter}, fp8_option);
+  for (int64_t e = 0; e < num_experts; ++e) {
+    const float rescale = max_expert_scale / expert_scale[e].item<float>();
+    gate_up_weight[e].copy_((gate_up_payload * rescale).to(torch::kFloat8_e4m3fn));
+    down_weight[e].copy_((down_payload * rescale).to(torch::kFloat8_e4m3fn));
+  }
+  for (int64_t e = 0; e < num_experts; ++e) {
+    ASSERT_TRUE(torch::equal(gate_up_weight[e].to(torch::kFloat32) * expert_scale[e], gate_up_deq))
+        << "expert " << e << " does not dequantize to the shared reference weights";
+    ASSERT_TRUE(torch::equal(down_weight[e].to(torch::kFloat32) * expert_scale[e], down_deq))
+        << "expert " << e << " does not dequantize to the shared reference weights";
+  }
+
+  // Reference forward, replaying the quantization steps hpc performs (fp8 activations, bf16 GEMM
+  // outputs). It also fixes the down projection's static activation scale.
+  const float x_input_scale = torch::max(torch::abs(hidden_states)).item<float>() / kFp8E4m3Max;
+  torch::Tensor x_deq =
+      (hidden_states.to(torch::kFloat32) / x_input_scale).to(torch::kFloat8_e4m3fn).to(torch::kFloat32) *
+      x_input_scale;
+  torch::Tensor gate_up = torch::matmul(x_deq, gate_up_deq.t()).to(torch::kBFloat16).to(torch::kFloat32);
+  torch::Tensor act = torch::silu(gate_up.slice(1, 0, inter)) * gate_up.slice(1, inter, 2 * inter);
+  const float act_input_scale = torch::max(torch::abs(act)).item<float>() / kFp8E4m3Max;
+  torch::Tensor act_deq =
+      (act / act_input_scale).to(torch::kFloat8_e4m3fn).to(torch::kFloat32) * act_input_scale;
+  torch::Tensor expected = torch::matmul(act_deq, down_deq.t());
+
+  // Scale tensors in the layout QuantWeight::BindFp8E4m3ScaleOfMoeWeight produces:
+  //   up_gate.weight_scale[e] = up_gate.input_scale * per-expert weight scale
+  //   up_gate.input_scale     = activation dequant scale
+  //   down.weight_scale[e]    = down.input_scale * per-expert weight scale
+  //   down.input_scale        = 1 / down activation scale (a multiplier, already reciprocated)
+  torch::Tensor gate_up_scale = expert_scale * x_input_scale;
+  torch::Tensor down_scale = expert_scale * act_input_scale;
+  torch::Tensor gate_up_input_scale = torch::full({1}, x_input_scale, float_option);
+  torch::Tensor down_input_scale = torch::full({1}, 1.0f / act_input_scale, float_option);
+
+  torch::Tensor moe_output = torch::zeros({num_tokens, hidden}, bf16_option);
+
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+  MoeLayer moe_layer = MoeLayer();
+  ASSERT_TRUE(moe_layer.Init(params, new_runtime_config, context_, kDeviceRank).OK());
+  moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
+  ASSERT_TRUE(moe_layer.Preprocess(new_model_config, new_runtime_config).OK());
+
+  std::vector<Tensor> inputs(4);
+  inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                     {static_cast<size_t>(num_tokens), static_cast<size_t>(hidden)}, hidden_states.data_ptr());
+  inputs[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                     {static_cast<size_t>(num_tokens), static_cast<size_t>(num_experts)}, routing_out.data_ptr());
+  inputs[2] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
+                     {static_cast<size_t>(num_experts), static_cast<size_t>(2 * inter), static_cast<size_t>(hidden)},
+                     gate_up_weight.data_ptr());
+  inputs[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
+                     {static_cast<size_t>(num_experts), static_cast<size_t>(hidden), static_cast<size_t>(inter)},
+                     down_weight.data_ptr());
+
+  std::vector<Tensor> weight_scales(2);
+  weight_scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {static_cast<size_t>(num_experts)},
+                            gate_up_scale.data_ptr());
+  weight_scales[1] =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {static_cast<size_t>(num_experts)}, down_scale.data_ptr());
+  std::vector<Tensor> input_scales(2);
+  input_scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, gate_up_input_scale.data_ptr());
+  input_scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {1}, down_input_scale.data_ptr());
+  inputs[2].weight_scales = &weight_scales[0];
+  inputs[3].weight_scales = &weight_scales[1];
+  inputs[2].input_scales = &input_scales[0];
+  inputs[3].input_scales = &input_scales[1];
+
+  std::vector<Tensor> outputs(1);
+  outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                      {static_cast<size_t>(num_tokens), static_cast<size_t>(hidden)}, moe_output.data_ptr());
+
+  EXPECT_TRUE(moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
+
+  torch::Tensor actual = moe_output.to(torch::kFloat32);
+  ASSERT_TRUE(torch::all(torch::isfinite(actual)).item<bool>()) << "hpc per-tensor MoE produced non-finite output";
+  const float rel_err = RelativeL1Error(actual, expected);
+  EXPECT_LT(rel_err, 0.02f) << "hpc per-tensor MoE relative L1 error " << rel_err;
+
+#  endif
+#endif
+}
+
+// Companion of the above for the blockwise-128x128 FP8 format, which shares the same MoeLayer
+// dispatch branch. Weight scales are a [E, N/128, K/128] grid and the activation is quantized
+// per-token-group at runtime, so there are no input_scales. down_weight_scale's last dim is
+// inter/128 = 2 here, which exercises the pad-to-4 repacking inside the hpc bridge.
+TEST_F(LayerTest, HpcBlockwiseFp8MoeLayerTest) {
+#ifdef ENABLE_CUDA
+#  ifdef ENABLE_FP8
+  if (context_->device->ext->GetComputeCapacity() != 90) {
+    GTEST_SKIP() << "hpc-ops MoE kernels are built for sm90a only";
+  }
+  constexpr int kDeviceRank = 0;
+  constexpr int64_t kBlock = 128;
+
+  ModelConfig new_model_config = model_config;
+  RuntimeConfig new_runtime_config = runtime_config;
+  new_model_config.weight_data_type = TYPE_BF16;
+  new_runtime_config.inter_data_type = TYPE_BF16;
+  new_runtime_config.moe_backend_config.moe_impl_choice = MoeBackendConfig::MoeImplChoice::AUTO;
+  new_runtime_config.moe_backend_config.use_hpc_moe = true;
+
+  torch::manual_seed(4321);
+
+  const size_t expert_num = 8;
+  const size_t expert_hidden_size = 512;
+  const size_t expert_inter_size = 256;
+  const size_t expert_topk = 2;
+  const int64_t num_tokens = 16;
+  const int64_t hidden = static_cast<int64_t>(expert_hidden_size);
+  const int64_t inter = static_cast<int64_t>(expert_inter_size);
+  const int64_t num_experts = static_cast<int64_t>(expert_num);
+
+  std::vector<std::any> params = MakeHpcMoeLayerParams(expert_num, expert_hidden_size, expert_inter_size, expert_topk,
+                                                       TYPE_BLOCK_FP8_E4M3);
+
+  auto float_option = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, kDeviceRank);
+  auto bf16_option = torch::TensorOptions().dtype(torch::kBFloat16).device(torch::kCUDA, kDeviceRank);
+  auto fp8_option = torch::TensorOptions().dtype(torch::kFloat8_e4m3fn).device(torch::kCUDA, kDeviceRank);
+
+  torch::Tensor hidden_states = torch::randn({num_tokens, hidden}, bf16_option) * 0.5f;
+  torch::Tensor routing_out = torch::randn({num_tokens, num_experts}, bf16_option);
+
+  // One logical expert replicated across all experts, so the output is routing-independent.
+  torch::Tensor gate_up_payload = MakeFp8Payload({2 * inter, hidden}, float_option);
+  torch::Tensor down_payload = MakeFp8Payload({hidden, inter}, float_option);
+  torch::Tensor gate_up_block_scale = torch::rand({2 * inter / kBlock, hidden / kBlock}, float_option) * 0.02f + 0.01f;
+  torch::Tensor down_block_scale = torch::rand({hidden / kBlock, inter / kBlock}, float_option) * 0.02f + 0.01f;
+
+  // Dequantized weights: payload[n, k] * block_scale[n/128, k/128].
+  auto expand_block_scale = [&](const torch::Tensor& s, int64_t n, int64_t k) {
+    return s.unsqueeze(1).unsqueeze(3).expand({s.size(0), kBlock, s.size(1), kBlock}).reshape({n, k});
+  };
+  torch::Tensor gate_up_deq = gate_up_payload * expand_block_scale(gate_up_block_scale, 2 * inter, hidden);
+  torch::Tensor down_deq = down_payload * expand_block_scale(down_block_scale, hidden, inter);
+
+  torch::Tensor gate_up_weight =
+      gate_up_payload.to(torch::kFloat8_e4m3fn).unsqueeze(0).repeat({num_experts, 1, 1}).contiguous();
+  torch::Tensor down_weight =
+      down_payload.to(torch::kFloat8_e4m3fn).unsqueeze(0).repeat({num_experts, 1, 1}).contiguous();
+  torch::Tensor gate_up_weight_scale = gate_up_block_scale.unsqueeze(0).repeat({num_experts, 1, 1}).contiguous();
+  torch::Tensor down_weight_scale = down_block_scale.unsqueeze(0).repeat({num_experts, 1, 1}).contiguous();
+
+  // Reference forward with per-token-group activation quantization at both GEMM inputs.
+  torch::Tensor x_deq = PerTokenGroupQuantDequant(hidden_states.to(torch::kFloat32), kBlock);
+  torch::Tensor gate_up = torch::matmul(x_deq, gate_up_deq.t()).to(torch::kBFloat16).to(torch::kFloat32);
+  torch::Tensor act = torch::silu(gate_up.slice(1, 0, inter)) * gate_up.slice(1, inter, 2 * inter);
+  torch::Tensor act_deq = PerTokenGroupQuantDequant(act, kBlock);
+  torch::Tensor expected = torch::matmul(act_deq, down_deq.t());
+
+  torch::Tensor moe_output = torch::zeros({num_tokens, hidden}, bf16_option);
+
+  std::shared_ptr<LayerWorkspaceManager> workspace_mgr = std::make_shared<LayerWorkspaceManager>(kDeviceRank);
+  MoeLayer moe_layer = MoeLayer();
+  ASSERT_TRUE(moe_layer.Init(params, new_runtime_config, context_, kDeviceRank).OK());
+  moe_layer.SetWorkspaceBuffer(workspace_mgr->GetWorkspace(moe_layer.GetWorkspaceSize()));
+  ASSERT_TRUE(moe_layer.Preprocess(new_model_config, new_runtime_config).OK());
+
+  std::vector<Tensor> inputs(4);
+  inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                     {static_cast<size_t>(num_tokens), static_cast<size_t>(hidden)}, hidden_states.data_ptr());
+  inputs[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                     {static_cast<size_t>(num_tokens), static_cast<size_t>(num_experts)}, routing_out.data_ptr());
+  inputs[2] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
+                     {static_cast<size_t>(num_experts), static_cast<size_t>(2 * inter), static_cast<size_t>(hidden)},
+                     gate_up_weight.data_ptr());
+  inputs[3] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP8_E4M3,
+                     {static_cast<size_t>(num_experts), static_cast<size_t>(hidden), static_cast<size_t>(inter)},
+                     down_weight.data_ptr());
+
+  std::vector<Tensor> weight_scales(2);
+  weight_scales[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32,
+                            {static_cast<size_t>(num_experts), static_cast<size_t>(2 * inter / kBlock),
+                             static_cast<size_t>(hidden / kBlock)},
+                            gate_up_weight_scale.data_ptr());
+  weight_scales[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP32,
+                            {static_cast<size_t>(num_experts), static_cast<size_t>(hidden / kBlock),
+                             static_cast<size_t>(inter / kBlock)},
+                            down_weight_scale.data_ptr());
+  inputs[2].weight_scales = &weight_scales[0];
+  inputs[3].weight_scales = &weight_scales[1];
+
+  std::vector<Tensor> outputs(1);
+  outputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16,
+                      {static_cast<size_t>(num_tokens), static_cast<size_t>(hidden)}, moe_output.data_ptr());
+
+  EXPECT_TRUE(moe_layer.Forward(&inputs[0], &inputs[1], &inputs[2], &inputs[3], nullptr, &outputs[0], nullptr).OK());
+  StreamSynchronize(context_->device->GetPrimaryComputeStream());
+
+  torch::Tensor actual = moe_output.to(torch::kFloat32);
+  ASSERT_TRUE(torch::all(torch::isfinite(actual)).item<bool>()) << "hpc blockwise MoE produced non-finite output";
+  const float rel_err = RelativeL1Error(actual, expected);
+  EXPECT_LT(rel_err, 0.02f) << "hpc blockwise MoE relative L1 error " << rel_err;
+
+#  endif
+#endif
+}
+
 }  // namespace ksana_llm

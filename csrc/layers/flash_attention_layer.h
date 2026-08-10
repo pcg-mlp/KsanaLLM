@@ -77,6 +77,7 @@ class FlashAttentionLayer : public AttentionLayer {
 #endif
   bool enable_blocked_multi_token_forwarding_kv_;
   bool use_flashinfer_for_decode_;
+  bool use_hpc_attention_ = false;
 };
 
 }  // namespace ksana_llm

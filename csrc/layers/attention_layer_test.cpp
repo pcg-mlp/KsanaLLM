@@ -214,6 +214,302 @@ TEST_F(LayerTest, AttentionLayerTest) {
 #endif
 }
 
+// Exercises the hpc-ops attention paths (flash_attn_impl=hpc) so the HPC branches in
+// AttenVarlen (paged prefill) and InvokePagedAttention (paged decode) get covered.
+// hpc-ops kernels are SM90+ (Hopper) only, so the test skips on older GPUs / no-CUDA.
+// This is a coverage + smoke test: it only asserts Forward().OK() and output shape,
+// it does NOT check numerical correctness.
+TEST_F(LayerTest, HpcPagedAttentionLayerTest) {
+#ifndef ENABLE_CUDA
+  GTEST_SKIP();
+#else
+  if (GetCurrentDeviceSmVersion() < 90) {
+    GTEST_SKIP() << "hpc-ops attention requires SM90+ (Hopper).";
+  }
+
+  // ---- HPC-supported shape: bf16, head_size=128, GQA group=4, block_size=32 ----
+  const int head_num = 32;
+  const int kv_head_num = 8;  // GQA group = head_num / kv_head_num = 4
+  const int size_per_head = 128;
+  const int rotary_embedding = 128;
+  const int stride_size = (head_num + kv_head_num * 2) * size_per_head;  // fused QKV row stride = 6144
+  const size_t block_token_num = 32;                                    // block_size in {32, 64}
+  const int max_position_embeddings = 2048;
+  const int max_batch_size = 1;
+  const size_t attn_temperature_tuning = 0;
+  const float attn_scale = 0;
+  const size_t floor_scale = 0;
+  const float k_scale = 1.0f;
+  const float v_scale = 1.0f;
+  const float rope_theta = 10000.0f;
+  const bool is_neox = true;
+  const bool enable_qk_pre_norm_before_rotary_pos = false;
+  const int qkv_cols = stride_size;                        // (num_heads + 2*num_kv_heads) * head_size
+  const int out_cols = head_num * size_per_head;           // attention output width
+  const size_t kv_block_bytes = 1 << 20;                   // 1 MiB per K/V block, >> what the kernels touch
+  QuantMode quant_mode = QUANT_NONE;
+  RoPEScalingFactor rope_scaling_factor;
+
+  Tensor cos_sin_cache_tensor;
+  CreateHalfDataTypeTensor(cos_sin_cache_tensor, {(size_t)rotary_embedding, (size_t)max_position_embeddings},
+                           GetDataType<half>());
+  Tensor empty_mrope_section;
+  Tensor empty_q_norm_weight;
+  Tensor empty_k_norm_weight;
+
+  // ---- Enable hpc-ops attention in the global Environment (save + restore) ----
+  // IsUsingHpcAttention() reads flash_attn_impl_choice from the global Environment singleton,
+  // while the layers read the RuntimeConfig passed to Init(); keep both consistent.
+  const auto& env = Singleton<Environment>::GetInstance();
+  AttnBackendConfig original_attn_cfg;
+  env->GetAttnBackendConfig(original_attn_cfg);
+
+  AttnBackendConfig hpc_cfg = original_attn_cfg;
+  hpc_cfg.flash_attn_impl_choice = AttnBackendConfig::FlashAttnImplChoice::HPC;
+  hpc_cfg.enable_blocked_multi_token_forwarding_kv = true;  // precondition for reaching both HPC branches
+  hpc_cfg.use_flashinfer_for_decode = false;
+  hpc_cfg.kv_cache_dtype = TYPE_BF16;  // non-fp8 KV cache
+  hpc_cfg.block_token_num = block_token_num;
+  hpc_cfg.block_size = kv_block_bytes;
+  env->SetAttnBackendConfig(hpc_cfg);
+
+  runtime_config.inter_data_type = TYPE_BF16;
+  runtime_config.attn_backend_config = hpc_cfg;
+
+  // Common Init parameter list (mirrors PagedAttention creation ordering in
+  // csrc/modules/basic/paged_attention.cpp). All layers use layer_index=0 / layer_num=1
+  // so k_list / layer_kv_cache_ptr indexing stays at offset 0.
+  auto make_init_params = [&](bool is_multi_token_forward) {
+    return std::vector<std::any>{quant_mode,
+                                 static_cast<float>(0),
+                                 static_cast<bool>(false),
+                                 static_cast<int>(0),  // layer_index
+                                 static_cast<int>(1),  // layer_num
+                                 static_cast<int>(max_position_embeddings),
+                                 head_num,
+                                 kv_head_num,
+                                 size_per_head,
+                                 stride_size,
+                                 static_cast<size_t>(1),
+                                 TYPE_BF16,  // kv_cache_dtype (non-fp8)
+                                 k_scale,
+                                 v_scale,
+                                 rotary_embedding,
+                                 rope_theta,
+                                 static_cast<uint32_t>(0),
+                                 static_cast<uint32_t>(0),
+                                 static_cast<uint32_t>(0),
+                                 static_cast<uint32_t>(0),
+                                 static_cast<uint32_t>(0),
+                                 is_neox,
+                                 PositionEncoding::ROPE,
+                                 std::any(cos_sin_cache_tensor.GetPtr<void>()),
+                                 rope_scaling_factor,
+                                 max_batch_size,
+                                 attn_temperature_tuning,
+                                 attn_scale,
+                                 floor_scale,
+                                 is_multi_token_forward,
+                                 empty_mrope_section,
+                                 enable_qk_pre_norm_before_rotary_pos};
+  };
+
+  // ---- Shared paged KV cache: one big K block + one big V block, aliased by both the
+  //      cache-copy write path (via kv_list) and the hpc-ops read path (via layer_kv_cache_ptr). ----
+  const int kv_cache_block_num = 1;
+  void* k_block_ptr = nullptr;
+  void* v_block_ptr = nullptr;
+  Malloc(&k_block_ptr, kv_block_bytes);
+  Malloc(&v_block_ptr, kv_block_bytes);
+  Memset(k_block_ptr, 0, kv_block_bytes);
+  Memset(v_block_ptr, 0, kv_block_bytes);
+
+  // kv_list: [k_block, v_block] (layer_index=0, layer_block_num=1 -> k_list=[0], v_list=[1]).
+  Tensor kv_list;
+  CreateHalfDataTypeTensor(kv_list, {2}, GetDataType<uint64_t>());
+  std::vector<void*> h_kv_list_ptrs = {k_block_ptr, v_block_ptr};
+  Memcpy(kv_list.GetPtr<void>(), h_kv_list_ptrs.data(), h_kv_list_ptrs.size() * sizeof(void*), MEMCPY_HOST_TO_DEVICE);
+
+  // layer_kv_cache_ptr: [0]=block_num, [1]=k_cache(layer0), [2]=v_cache(layer0).
+  Tensor layer_kv_cache_ptr_tensor(MemoryLocation::LOCATION_HOST, TYPE_INT64, {static_cast<uint64_t>(1 + 2)});
+  *layer_kv_cache_ptr_tensor.GetPtr<int64_t>() = static_cast<int64_t>(kv_cache_block_num);
+  void** layer_kv_cache_ptr = layer_kv_cache_ptr_tensor.GetPtr<void*>() + 1;
+  layer_kv_cache_ptr[0] = k_block_ptr;
+  layer_kv_cache_ptr[1] = v_block_ptr;
+
+  // block_table: {batch, max_blocks_per_seq} = {1, 1}, all -> block 0.
+  std::vector<int32_t> block_table_host = {0};
+  Tensor block_table(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {1, 1});
+  Memcpy(block_table.GetPtr<void>(), block_table_host.data(), block_table_host.size() * sizeof(int32_t),
+         MEMCPY_HOST_TO_DEVICE);
+
+  // ============================ Prefill (covers AttenVarlen HPC branch) ============================
+  {
+    const int batch = 1;
+    const int total_tokens = 2;
+    const int max_tokens = total_tokens;
+
+    FlashAttentionLayer flash_attention_layer;
+    EXPECT_TRUE(flash_attention_layer.Init(make_init_params(/*is_multi_token_forward=*/true), runtime_config,
+                                           context_, 0).OK());
+
+    Tensor qkv, output_tensor;
+    CreateHalfDataTypeTensor(qkv, {static_cast<size_t>(total_tokens), static_cast<size_t>(qkv_cols)}, TYPE_BF16);
+    CreateHalfDataTypeTensor(output_tensor, {static_cast<size_t>(total_tokens), static_cast<size_t>(out_cols)},
+                             TYPE_BF16);
+    Memset(qkv.GetPtr<void>(), 0, qkv.GetTotalBytes());
+
+    // seqlen / cumulative offsets (uint64, read as int64): {0, total_tokens}.
+    Tensor input_len, prefix_offsets, pos, mask;
+    CreateHalfDataTypeTensor(input_len, {static_cast<size_t>(batch + 1)}, GetDataType<uint64_t>());
+    CreateHalfDataTypeTensor(prefix_offsets, {static_cast<size_t>(batch + 1)}, GetDataType<int>(), sizeof(int));
+    CreateHalfDataTypeTensor(pos, {static_cast<size_t>(total_tokens)}, GetDataType<uint64_t>());
+    CreateHalfDataTypeTensor(mask, {static_cast<size_t>(total_tokens)}, GetDataType<uint64_t>());
+    std::vector<uint64_t> input_len_cpu = {0, static_cast<uint64_t>(total_tokens)};
+    Memcpy(input_len.GetPtr<void>(), input_len_cpu.data(), input_len_cpu.size() * sizeof(uint64_t),
+           MEMCPY_HOST_TO_DEVICE);
+    Memset(prefix_offsets.GetPtr<void>(), 0, prefix_offsets.GetTotalBytes());
+    std::vector<uint64_t> pos_cpu = {0, 1};
+    Memcpy(pos.GetPtr<void>(), pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+    std::vector<uint64_t> mask_cpu = {1, 1};
+    Memcpy(mask.GetPtr<void>(), mask_cpu.data(), mask_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+
+    // kv_cache_offset (int) per seq: {0, 1}.
+    Tensor kv_cache_offset;
+    std::vector<int> kv_cache_offset_host = {0, 1};
+    CreateHalfDataTypeTensor(kv_cache_offset, {static_cast<size_t>(batch + 1)}, GetDataType<int>(), sizeof(int));
+    Memcpy(kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(), kv_cache_offset_host.size() * sizeof(int),
+           MEMCPY_HOST_TO_DEVICE);
+
+    Tensor empty_flex;
+    CreateHalfDataTypeTensor(empty_flex, {0}, GetDataType<int>(), sizeof(int));
+
+    FlashAttentionLayer::CudaForwardParams flash_params;
+    flash_params.qkv = &qkv;
+    flash_params.token_offset = &input_len;
+    flash_params.kv_list = &kv_list;
+    flash_params.prefix_offset = &prefix_offsets;
+    flash_params.kv_cache_offset = &kv_cache_offset;
+    flash_params.rotary_embedding_pos = &pos;
+    flash_params.rotary_embedding_mask = &mask;
+    flash_params.src_flexible_rotary_embedding_pos = &empty_flex;
+    flash_params.flexible_rotary_embedding_mask = &empty_flex;
+    flash_params.dst_flexible_kv_cache = &empty_flex;
+    flash_params.src_flexible_kv_cache = &empty_flex;
+    flash_params.dst_flexible_token_idx = &empty_flex;
+    flash_params.src_flexible_token_idx = &empty_flex;
+    flash_params.flexible_offset_uint64 = &prefix_offsets;
+    flash_params.layer_block_num = 1;
+    flash_params.single_token_request_num = 0;
+    flash_params.max_forwarding_tokens = total_tokens;
+    flash_params.batch_size = batch;
+    flash_params.max_tokens = max_tokens;
+    flash_params.query_layernorm_weight = &empty_q_norm_weight;
+    flash_params.key_layernorm_weight = &empty_k_norm_weight;
+    flash_params.use_cache = true;
+    flash_params.kv_cache_base_ptr = &layer_kv_cache_ptr_tensor;
+    flash_params.block_table = &block_table;
+    flash_params.input_without_prefix_offset = &input_len;
+
+    std::vector<Tensor> flash_outputs = {output_tensor};
+    EXPECT_TRUE(flash_attention_layer.Forward(flash_params, &flash_outputs[0]).OK());
+    EXPECT_EQ(flash_outputs[0].shape[0], static_cast<size_t>(total_tokens));
+    EXPECT_EQ(flash_outputs[0].shape[1], static_cast<size_t>(out_cols));
+  }
+
+  // ============================ Decode (covers InvokePagedAttention HPC branch) ====================
+  {
+    const int batch = 1;
+    const int q_seq_len = 1;  // hpc-ops decode requires q_seq_len <= 3
+    const int total_tokens = batch * q_seq_len;
+    const int context_len = 2;
+    const int max_tokens = context_len;
+
+    PagedAttentionLayer paged_attention_layer;
+    EXPECT_TRUE(
+        paged_attention_layer.Init(make_init_params(/*is_multi_token_forward=*/false), runtime_config, context_, 0)
+            .OK());
+
+    Tensor query, paged_output;
+    CreateHalfDataTypeTensor(query, {static_cast<size_t>(total_tokens), static_cast<size_t>(qkv_cols)}, TYPE_BF16);
+    CreateHalfDataTypeTensor(paged_output, {static_cast<size_t>(total_tokens), static_cast<size_t>(out_cols)},
+                             TYPE_BF16);
+    Memset(query.GetPtr<void>(), 0, query.GetTotalBytes());
+
+    // context_lens (int32) per seq.
+    Tensor context_lens;
+    std::vector<int32_t> context_lens_host = {context_len};
+    CreateHalfDataTypeTensor(context_lens, {static_cast<size_t>(batch)}, GetDataType<int>(), sizeof(int));
+    Memcpy(context_lens.GetPtr<void>(), context_lens_host.data(), context_lens_host.size() * sizeof(int32_t),
+           MEMCPY_HOST_TO_DEVICE);
+
+    // cache_offset (int) per seq (+1 slack): {0, 1}.
+    Tensor cache_offset;
+    std::vector<int> cache_offset_host = {0, 1};
+    CreateHalfDataTypeTensor(cache_offset, {static_cast<size_t>(batch + 1)}, GetDataType<int>(), sizeof(int));
+    Memcpy(cache_offset.GetPtr<void>(), cache_offset_host.data(), cache_offset_host.size() * sizeof(int),
+           MEMCPY_HOST_TO_DEVICE);
+
+    // rotary pos / mask (uint64, read as int64) for the single decode token.
+    Tensor pos, mask;
+    CreateHalfDataTypeTensor(pos, {static_cast<size_t>(total_tokens)}, GetDataType<uint64_t>());
+    CreateHalfDataTypeTensor(mask, {static_cast<size_t>(total_tokens)}, GetDataType<uint64_t>());
+    std::vector<uint64_t> pos_cpu = {static_cast<uint64_t>(context_len)};
+    Memcpy(pos.GetPtr<void>(), pos_cpu.data(), pos_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+    std::vector<uint64_t> mask_cpu = {1};
+    Memcpy(mask.GetPtr<void>(), mask_cpu.data(), mask_cpu.size() * sizeof(uint64_t), MEMCPY_HOST_TO_DEVICE);
+
+    // workspace / qkv_workspace: unused by the HPC decode branch, but the wrapper still receives them.
+    Tensor workspace, qkv_workspace;
+    CreateHalfDataTypeTensor(workspace, {static_cast<size_t>(1 << 20)}, TYPE_UINT8, sizeof(uint8_t));
+    CreateHalfDataTypeTensor(qkv_workspace, {static_cast<size_t>(1 << 20)}, TYPE_UINT8, sizeof(uint8_t));
+
+    // forward_shape carries scalars in its .shape vector (see forwarding_context.cpp):
+    // [3]=batch, [4]=max_tokens, [5]=layer_block_num, [12]=total_decode_tokens.
+    Tensor forward_shape(MemoryLocation::LOCATION_HOST, TYPE_INT32, {1});
+    forward_shape.shape = {0,
+                           0,
+                           0,
+                           static_cast<size_t>(batch),
+                           static_cast<size_t>(max_tokens),
+                           static_cast<size_t>(1),
+                           0,
+                           0,
+                           0,
+                           0,
+                           0,
+                           0,
+                           static_cast<size_t>(total_tokens)};
+
+    PagedAttentionInputs inputs;
+    inputs.query = &query;
+    inputs.context_lens = &context_lens;
+    inputs.kv_list = &kv_list;
+    inputs.cache_offset = &cache_offset;
+    inputs.rotary_embedding_pos = &pos;
+    inputs.rotary_embedding_mask = &mask;
+    inputs.workspace = &workspace;
+    inputs.forward_shape = &forward_shape;
+    inputs.qkv_workspace = &qkv_workspace;
+    inputs.query_layernorm_weight = &empty_q_norm_weight;
+    inputs.key_layernorm_weight = &empty_k_norm_weight;
+    inputs.layer_kv_cache_ptr = &layer_kv_cache_ptr_tensor;
+    inputs.block_table = &block_table;
+
+    std::vector<Tensor> paged_outputs = {paged_output};
+    EXPECT_TRUE(paged_attention_layer.Forward(inputs, paged_outputs).OK());
+    EXPECT_EQ(paged_outputs[0].shape[0], static_cast<size_t>(total_tokens));
+    EXPECT_EQ(paged_outputs[0].shape[1], static_cast<size_t>(out_cols));
+  }
+
+  // ---- restore Environment config so sibling tests are not affected ----
+  env->SetAttnBackendConfig(original_attn_cfg);
+
+  Free(k_block_ptr);
+  Free(v_block_ptr);
+#endif
+}
+
 TEST_F(LayerTest, FlashInferResourceManagerTest) {
 #ifdef ENABLE_CUDA
   constexpr int kDeviceRank0 = 0;

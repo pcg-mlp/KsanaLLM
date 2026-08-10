@@ -131,6 +131,8 @@ setting:
     #   vllm_v26      - VLLM Flash Attention 2.6+：兼容性好，支持更多特性
     #   flashattn_v26 - 官方Flash Attention 2.6+：标准实现
     #   flashattn_v25 - 官方Flash Attention 2.5+：较老版本，兼容性最好
+    #   hpc           - hpc-ops 自研Attention实现：需编译时启用hpc-ops，仅在确认配置受支持时手动开启，
+    #                   auto不会自动选择该实现
     # 重要编译说明：
     #   - 如果选择 flashattn_v25，需要在编译时禁用 WITH_FLASH_ATTN_CACHE 选项：
     #     cmake -DWITH_FLASH_ATTN_CACHE=OFF ...
@@ -149,6 +151,25 @@ setting:
     # 使用建议：
     #    - 对于 Qwen 非 moe 模型，建议在关闭 enable_blocked_multi_token_forwarding_kv 时启用 FlashInfer_Backend 以获取更优的性能
     use_flashinfer_for_decode: false
+
+  # 选择MoE计算中的backend
+  moe_backend:
+    # MoE 实现选择配置
+    # 可选值说明：
+    #   auto    - 自动选择（默认值，未配置该项时等同于 auto）：根据模型与量化参数判断，
+    #             全部满足以下条件时命中 hpc-ops MoE，否则使用默认内置MoE实现：
+    #               1) GPU 为 Hopper（sm90，hpc-ops kernel 仅编译 sm90a）；
+    #               2) MoE 模型，激活为 bf16（hpc-ops MoE 输出 bf16），且专家权重为 FP8：
+    #                  blockwise（quant block 为 128x128）或 per-tensor（static activation scale，
+    #                  即 checkpoint 带 input_scale）；
+    #               3) hidden_size 与 moe_inter_size/moe_tensor_para_size 均为128的倍数
+    #                  （hpc group-GEMM tile 与 blockwise scale 网格的要求，例如 Qwen3-30B
+    #                   在 TP=1/2 下满足，TP=4 时 moe_inter/tp=192 不满足）；
+    #               4) 模型不是 deepseek / kimi / glm 系列（这些模型走各自专用的 MoE 路径）；
+    #               5) 未启用 DeepEP all-to-all（deepep 会把 MoE 输入改成按专家分批的布局）。
+    #   hpc     - 强制使用 hpc-ops 自研MoE实现：跳过上述自动判断，由部署方自行确认配置受支持
+    #   default - 强制使用默认内置MoE实现
+    moe_impl: auto
 
   # 量化相关配置
   quantization_config:

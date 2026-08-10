@@ -22,6 +22,7 @@
 #include "csrc/kernels/nvidia/all_reduce/custom_all_reduce.h"
 #include "csrc/kernels/nvidia/assemble_tokens_hidden/assemble_tokens_hidden.h"
 #include "csrc/kernels/nvidia/attention/flashinfer_attention/flashinfer_prefill.h"
+#include "csrc/kernels/nvidia/attention/hpc_attention/hpc_attention.h"
 #include "csrc/kernels/nvidia/blockwise_gemm/blockwise_gemm.h"
 #include "csrc/kernels/nvidia/cast/cast.h"
 #include "csrc/kernels/nvidia/concat/concat.h"
@@ -153,7 +154,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
                  size_t* without_prefix_offsets, int max_forwarding_tokens, bool enable_qk_pre_norm_before_rotary_pos,
                  bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
-                 bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode) {
+                 bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode,
+                 bool use_hpc_attention) {
   // qk norm before rotary position embedding
   bool use_fused_qknorm_rope = false;
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
@@ -305,6 +307,22 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
   // TODO(qiannanzhou): 需要考虑FA函数是否需要支持 blocked multi-token forwarding，比如FA3，FA2
   if (enable_blocked_multi_token_forwarding_kv) {
     torch::Tensor seqlen_q_tensor = torch::from_blob(without_prefix_offsets, {batch + 1}, int_options);
+
+    // hpc-ops paged prefill. Reads K/V from the paged cache via block_table. Gated solely by the
+    // flash_attn_impl=hpc switch: only enable it for configs hpc actually supports — bf16 activations,
+    // non-fp8 KV cache, head_size=128, GQA group 4 or 8, block_size 32 or 64. Prefix cache not yet supported.
+    if (use_hpc_attention) {
+      torch::Tensor cu_q_i32 = seqlen_q_tensor.to(torch::kInt32);  // cumulative query offsets {batch+1}
+      torch::Tensor kv_lens_i32 =
+          (seqlen_tensor.narrow(0, 1, batch) - seqlen_tensor.narrow(0, 0, batch)).to(torch::kInt32);  // per-seq KV len
+      llm_kernels::nvidia::HpcPagedPrefillAttention(
+          out, q_tmp_tensor.data_ptr(), k_cache_ptr, v_cache_ptr, block_table_ptr, kv_lens_i32.data_ptr<int32_t>(),
+          cu_q_i32.data_ptr<int32_t>(), batch, total_tokens, max_forwarding_tokens, num_heads, num_kv_heads, head_size,
+          block_size, static_cast<int>(kv_cache_block_num), max_blocks_per_seq,
+          /*ldq=*/(num_heads + num_kv_heads * 2) * head_size, stream);
+      return;
+    }
+
     auto cache_options = options;
     if constexpr (KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E5M2 ||
                   KV_DTYPE == llm_kernels::utils::KVCacheType::kFp8E4M3) {
@@ -464,7 +482,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
       void* k_cache_ptr, void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num,                     \
       int max_blocks_per_seq, size_t* without_prefix_offsets, int max_forwarding_tokens,                              \
       bool enable_qk_pre_norm_before_rotary_pos, bool no_rope, bool attn_temperature_tuning, float attn_scale,        \
-      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode);
+      size_t floor_scale, bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode,             \
+      bool use_hpc_attention);
 ATTEN_VARLEN(float, float, llm_kernels::utils::KVCacheType::kAuto);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 ATTEN_VARLEN(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);
@@ -548,7 +567,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
                           int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos, bool no_rope,
                           bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
                           bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer_on_node,
-                          bool use_flashinfer_for_decode, void* flashinfer_prefill_helper) {
+                          bool use_flashinfer_for_decode, bool use_hpc_attention, void* flashinfer_prefill_helper) {
   // qk norm before rotary position embedding for paged attention
   bool use_fused_qknorm_rope_paged = false;
   if (enable_qk_pre_norm_before_rotary_pos && q_norm_weight != nullptr && k_norm_weight != nullptr) {
@@ -629,6 +648,19 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
         reinterpret_cast<SCALAR_T*>(k_tensor_ptr), reinterpret_cast<SCALAR_T*>(v_tensor_ptr), key_cache_ptrs,
         value_cache_ptrs, reinterpret_cast<int*>(context_lens_ptr), reinterpret_cast<int*>(cache_offsets_ptr),
         block_size, batch, total_tokens, num_kv_heads, head_size, stride_size, k_scale, v_scale, stream));
+  }
+
+  // hpc-ops paged decode. Selected solely by the flash_attn_impl=hpc switch. Only enable it for configs hpc
+  // supports — bf16, non-fp8 KV cache, head_size=128, GQA group 4 or 8, block_size 32/64, decode q_seq_len<=3.
+  // Assumes the flashattn KV layout, i.e. enable_blocked_multi_token_forwarding_kv or use_flashinfer_for_decode.
+  if (use_hpc_attention) {
+    const int q_seq_len = (batch > 0) ? total_tokens / batch : 1;
+    llm_kernels::nvidia::HpcPagedDecodeAttention(
+        output_ptr, q_tensor_ptr, k_cache_ptr, v_cache_ptr, block_table_ptr,
+        reinterpret_cast<const int*>(context_lens_ptr), batch, q_seq_len, num_heads, num_kv_heads, head_size,
+        block_size, max_blocks_per_seq, static_cast<int>(kv_cache_block_num),
+        (num_heads + num_kv_heads * 2) * head_size, stream);
+    return;
   }
 
   if (use_flashinfer_for_decode) {
@@ -726,7 +758,7 @@ void InvokePagedAttention(void* output_ptr, void* query_ptr, void** key_cache_pt
       int64_t kv_cache_block_num, int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos, bool no_rope,   \
       bool attn_temperature_tuning, float attn_scale, size_t floor_scale,                                            \
       bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer_on_node, bool use_flashinfer_for_decode,    \
-      void* flashinfer_prefill_helper);
+      bool use_hpc_attention, void* flashinfer_prefill_helper);
 RUN_PAGED_ATTENTION(float, float, llm_kernels::utils::KVCacheType::kAuto);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E4M3);
 RUN_PAGED_ATTENTION(float, uint8_t, llm_kernels::utils::KVCacheType::kFp8E5M2);

@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "layers/paged_attention_layer.h"
+#include "kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 #include "layers/flashinfer_resource_manager.h"
 
@@ -17,6 +18,7 @@ Status PagedAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
   use_flashinfer_for_decode_ = runtime_config.attn_backend_config.use_flashinfer_for_decode;
+  use_hpc_attention_ = IsUsingHpcAttention();
 
   // Initialize shared workspace pointers and helper to nullptr.
   shared_pinned_host_workspace_ = nullptr;
@@ -131,7 +133,7 @@ Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::ve
       shared_pinned_host_workspace_, k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
       this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, this->layer_index_ == 0,
-      use_flashinfer_for_decode_, flashinfer_prefill_helper_.get());
+      use_flashinfer_for_decode_, use_hpc_attention_, flashinfer_prefill_helper_.get());
 
   return Status();
 }

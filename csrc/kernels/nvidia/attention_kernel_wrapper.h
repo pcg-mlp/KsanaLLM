@@ -43,7 +43,8 @@ void AttenVarlen(void* qkv_ptr, void* rotary_embedding_pos, void* rotary_embeddi
                  void* v_cache_ptr, int32_t* block_table_ptr, int64_t kv_cache_block_num, int max_blocks_per_seq,
                  size_t* without_prefix_offsets, int max_forwarding_tokens, bool enable_qk_pre_norm_before_rotary_pos,
                  bool no_rope, bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
-                 bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode);
+                 bool enable_blocked_multi_token_forwarding_kv, bool use_flashinfer_for_decode,
+                 bool use_hpc_attention);
 
 template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
 void PagedAttentionOp(int num_heads, int head_size, int num_kv_heads, int stride_size, int block_size, float k_scale,
@@ -79,6 +80,7 @@ void InvokePagedAttention(void* out,                // [num_seqs, num_heads, hea
                           int max_blocks_per_seq, bool enable_qk_pre_norm_before_rotary_pos, bool no_rope,
                           bool attn_temperature_tuning, float attn_scale, size_t floor_scale,
                           bool enable_blocked_multi_token_forwarding_kv, bool is_first_layer,
-                          bool use_flashinfer_for_decode, void* flashinfer_prefill_helper = nullptr);
+                          bool use_flashinfer_for_decode, bool use_hpc_attention,
+                          void* flashinfer_prefill_helper = nullptr);
 
 }  // namespace ksana_llm

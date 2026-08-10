@@ -382,4 +382,7 @@ void InvokeMhaFwdKvcCache(MhaFwdKVCacheParams& params);
 // Helper function to check if FA3 is actually being used
 bool IsUsingFA3();
 
+// Helper function to check if hpc-ops attention is selected by the user.
+bool IsUsingHpcAttention();
+
 }  // namespace ksana_llm

@@ -149,4 +149,35 @@ TEST_F(MoeLayerWorkspaceTest, NormalModeWorkspaceSize_FP8) {
   EXPECT_EQ(layer.expert_num_tokens_size, size_t(0));
 }
 
+// per-tensor FP8（hpc-ops 路径）只需要 a1_q，不需要 per-token 的 a1_scale 平面：
+// 激活的量化尺度是一个标量权重（w1->input_scales），中间量化在 fused kernel 自己的 scratch 里完成。
+TEST_F(MoeLayerWorkspaceTest, NormalModeWorkspaceSize_PerTensorFP8) {
+  MoeLayer layer;
+  SetupLayerMembers(layer, /*low_latency_mode=*/false, DataType::TYPE_FP8_E4M3);
+
+  size_t ws = layer.GetWorkspaceSize();
+
+  EXPECT_GT(layer.topk_weights_ptr_size, size_t(0));
+  EXPECT_GT(layer.topk_ids_ptr_size, size_t(0));
+  // a1_q 覆盖 [max_token_num, hidden] 个 fp8 元素
+  EXPECT_GE(layer.a1_q_size, kMaxTokenNum * kExpertHiddenSize * sizeof(char));
+  EXPECT_EQ(layer.a1_and_a2_q_size, layer.a1_q_size);
+
+  // 不分配 blockwise 才需要的 scale / a2 buffer
+  EXPECT_EQ(layer.a1_scale_size, size_t(0));
+  EXPECT_EQ(layer.a2_q_size, size_t(0));
+  EXPECT_EQ(layer.a1_and_a2_scale_size, size_t(0));
+  EXPECT_EQ(layer.dequant_workspace_size, size_t(0));
+
+  // LL 专用 buffer 应为 0
+  EXPECT_EQ(layer.ll_output_size, size_t(0));
+  EXPECT_EQ(layer.expert_num_tokens_size, size_t(0));
+
+  // workspace 应该等于所有 buffer 之和
+  size_t expected_total = layer.topk_weights_ptr_size + layer.topk_ids_ptr_size + layer.max_fused_id_buffer_size +
+                          layer.intermediate_cache1_and_cache3_size + layer.intermediate_cache2_size +
+                          layer.a1_and_a2_q_size;
+  EXPECT_EQ(ws, expected_total);
+}
+
 }  // namespace ksana_llm

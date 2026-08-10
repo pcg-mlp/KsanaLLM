@@ -4,6 +4,7 @@
 
 #include "layers/flash_attention_layer.h"
 #include "executor/layer_progress_tracker.h"
+#include "kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "kernels/nvidia/kernel_wrapper.h"
 #include "pd_v2/prefill/pd_v2_layer_event_tracker.h"
 #include "utils/singleton.h"
@@ -16,6 +17,7 @@ Status FlashAttentionLayer::Init(const std::vector<std::any>& parameters, const 
   enable_blocked_multi_token_forwarding_kv_ =
       runtime_config.attn_backend_config.enable_blocked_multi_token_forwarding_kv;
   use_flashinfer_for_decode_ = runtime_config.attn_backend_config.use_flashinfer_for_decode;
+  use_hpc_attention_ = IsUsingHpcAttention();
   return AttentionLayer::Init(parameters, runtime_config, context, rank);
 }
 
@@ -63,7 +65,8 @@ Status FlashAttentionLayer::ForwardT(const CudaForwardParams& p, Tensor* output)
       this->context_->device->GetPrimaryComputeStream().Get(), k_cache_ptr, v_cache_ptr, block_table_ptr,
       kv_cache_block_num, max_blocks_per_seq, input_without_prefix_offset_ptr, max_forwarding_tokens,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
-      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, use_flashinfer_for_decode_);
+      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, use_flashinfer_for_decode_,
+      use_hpc_attention_);
 
   Singleton<LayerProgressTracker>::GetInstance()->RecordLayerProgress(
       this->rank_, this->layer_index_, this->context_->device->GetPrimaryComputeStream());

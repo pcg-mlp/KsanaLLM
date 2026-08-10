@@ -1199,6 +1199,10 @@ Tensor QuantWeight<T>::CommonDequantTensor(const std::string& weight_name, bool 
 template <typename T>
 Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
   SetDevice(rank_);
+  // up_gate_proj packs the two projections along N. The MoE weight layout is
+  // [gate, up] for the vLLM fused-MoE / hpc-ops kernels and [up, gate] for the cutlass one,
+  // so the rescale below must follow the same order.
+  const bool gate_first = model_config_.moe_config.use_vllm_moe;
   std::vector<std::string> names = {".self_attn.q_proj.", ".mlp.shared_expert.gate_proj.",
                                     ".mlp.shared_expert.up_proj.", ".mlp.shared_expert.down_proj."};
   size_t num_experts = model_config_.moe_config.num_experts;
@@ -1214,7 +1218,7 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
   for (auto name : names) {
     BindFp8E4m3ScaleOfProjWeight(name);
   }
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "down_proj.";
     std::string weight_name = name + "weight";
@@ -1242,7 +1246,7 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
       weights_map_[weight_name].input_scales = &(weights_map_[input_scale_name]);
     }
   }
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "down_proj.";
     std::string weight_name = name + "weight";
@@ -1275,7 +1279,7 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
       Reciprocal(down_input_scale, down_input_scale, 1, rank_);
     }
   }
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "up_gate_proj.";
     std::string weight_name = name + "weight";
@@ -1305,7 +1309,7 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
       weights_map_[weight_name].input_scales = &(weights_map_[input_scale_name]);
     }
   }
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "up_gate_proj.";
     std::string weight_name = name + "weight";
@@ -1326,7 +1330,7 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
     }
   }
   // rescale up_gate_weight with up_gate_proj.weight_scale
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "up_gate_proj.";
     std::string weight_name = name + "weight";
@@ -1342,18 +1346,17 @@ Status QuantWeight<T>::BindFp8E4m3ScaleOfMoeWeight() {
       float* up_idx_weight_scale = static_cast<float*>(weights_map_[up_idx_weight_scale_name].GetPtr<void>());
       float* gate_idx_weight_scale = static_cast<float*>(weights_map_[gate_idx_weight_scale_name].GetPtr<void>());
       int n = up_gate_weight_shape[1] / 2 * up_gate_weight_shape[2];
-      // up
-      void* up_idx_weight = up_gate_weight + idx * up_gate_weight_shape[1] * up_gate_weight_shape[2];
-      RescaleFp8E4m3(up_idx_weight, up_idx_weight, n, up_idx_weight_scale, up_gate_weight_scale + idx,
-                     context_->device->GetMemoryManageStream().Get());
-      // gate
-      void* gate_idx_weight = up_gate_weight + idx * up_gate_weight_shape[1] * up_gate_weight_shape[2] + n;
+      void* expert_weight = up_gate_weight + idx * up_gate_weight_shape[1] * up_gate_weight_shape[2];
+      void* gate_idx_weight = expert_weight + (gate_first ? 0 : n);
+      void* up_idx_weight = expert_weight + (gate_first ? n : 0);
       RescaleFp8E4m3(gate_idx_weight, gate_idx_weight, n, gate_idx_weight_scale, up_gate_weight_scale + idx,
+                     context_->device->GetMemoryManageStream().Get());
+      RescaleFp8E4m3(up_idx_weight, up_idx_weight, n, up_idx_weight_scale, up_gate_weight_scale + idx,
                      context_->device->GetMemoryManageStream().Get());
     }
   }
   // up_gate_proj.weight_scale = [(up_gate_proj.input_scale * up_gate_proj.idx.weight_scale)
-  for (const auto layer_idx : required_layer_idx_.all) {
+  for (const auto layer_idx : required_layer_idx_.moe) {
     std::string prefix = "model.layers." + std::to_string(layer_idx) + ".mlp.experts.";
     std::string name = prefix + "up_gate_proj.";
     std::string weight_name = name + "weight";
