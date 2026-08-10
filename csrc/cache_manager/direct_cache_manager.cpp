@@ -16,7 +16,8 @@ namespace ksana_llm {
 
 DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_config,
                                        std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group,
-                                       std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group)
+                                       std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group,
+                                       std::shared_ptr<BlockAllocatorGroupInterface> mamba_block_allocator_group)
     : BaseCacheManager<DirectCachedBlock, DirectCachedRequest>(cache_manager_config, block_allocator_group) {
   cache_manager_config_ = cache_manager_config;
 
@@ -27,9 +28,11 @@ DirectCacheManager::DirectCacheManager(const CacheManagerConfig& cache_manager_c
         std::make_unique<SWACacheManager>(swa_block_allocator_group, cache_manager_config_.sliding_window_size,
                                           cache_manager_config_.block_token_num, is_contiguous_swa_mode);
   }
-}
 
-DirectCacheManager::~DirectCacheManager() { KLLM_LOG_DEBUG << "DirectCacheManager destroyed."; }
+  if (mamba_block_allocator_group != nullptr) {
+    mamba_cache_manager_ = std::make_unique<MambaCacheManager>(mamba_block_allocator_group);
+  }
+}
 
 void DirectCacheManager::InitializeCachedBlocks() {
   size_t total_device_block_num = block_allocator_group_->GetDeviceBlockAllocator()->GetFreeBlockNumber();
@@ -138,7 +141,8 @@ DirectCachedBlock* DirectCacheManager::CreateCachedBlock(size_t block_id) {
 
 Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
                                                  std::vector<int>& swa_req_block_ids,
-                                                 std::vector<size_t>& swa_block_idx_offsets) {
+                                                 std::vector<size_t>& swa_block_idx_offsets,
+                                                 int& mamba_kv_cache_block_id) {
   if (block_num > free_cached_blocks_.size()) {
     return Status(RET_OUT_OF_DEVICE_MEMORY,
                   FormatStr("Allocate %d blocks for req %d error, no more free blocks.", block_num, req_id));
@@ -172,6 +176,16 @@ Status DirectCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
                                                    cached_request->swa_window_fa_block_ids) < 0) {
       return Status(RET_OUT_OF_DEVICE_MEMORY,
                     FormatStr("GetAllocatableSWACache for req %d failed, no enough SWA blocks.", req_id));
+    }
+  }
+
+  mamba_kv_cache_block_id = -1;
+  if (mamba_cache_manager_ != nullptr) {
+    Status status = mamba_cache_manager_->AllocateRequestMambaBlock(req_id, mamba_kv_cache_block_id);
+    if (!status.OK()) {
+      return Status(status.GetCode(),
+                    FormatStr("Allocate mamba working block for req %d failed: %s", req_id,
+                              status.GetMessage().c_str()));
     }
   }
 
@@ -244,6 +258,10 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
   // 注意: AllocateSWABlock 时会把 req_id 加入 block->active_req_ids; 直接调
   // FreeSWABlock 会因检测到非空 active_req_ids 而报 lifecycle warn。先调
   // SetReclaimable 把当前 req 从 active_req_ids erase, FreeSWABlock 即走 silent path。
+  if (mamba_cache_manager_ != nullptr) {
+    mamba_cache_manager_->FreeRequestMambaBlock(req_id);
+  }
+
   if (swa_cache_manager_ != nullptr) {
     for (size_t fa_block_id : cached_request->swa_window_fa_block_ids) {
       swa_cache_manager_->SetReclaimable(req_id, fa_block_id);

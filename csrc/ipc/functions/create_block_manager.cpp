@@ -44,6 +44,7 @@ Status CreateBlockManagerRequest::Serialize(void* ptr, size_t* bytes) const {
   SerializeInit(*bytes);
   SerializeBlockAllocatorManagerConfig(block_allocator_manager_config, ptr, *bytes);
   SerializeBlockAllocatorManagerConfig(swa_block_allocator_manager_config, ptr, *bytes);
+  SerializeBlockAllocatorManagerConfig(mamba_block_allocator_manager_config, ptr, *bytes);
   return Status();
 }
 
@@ -51,6 +52,7 @@ Status CreateBlockManagerRequest::Deserialize(const void* ptr) {
   size_t offset = 0;
   DeserializeBlockAllocatorManagerConfig(block_allocator_manager_config, ptr, offset);
   DeserializeBlockAllocatorManagerConfig(swa_block_allocator_manager_config, ptr, offset);
+  DeserializeBlockAllocatorManagerConfig(mamba_block_allocator_manager_config, ptr, offset);
   return Status();
 }
 
@@ -76,6 +78,11 @@ void CreateBlockManagerCallable::SetSwaBlockAllocatorManager(
   swa_block_allocator_manager_ = swa_block_allocator_manager;
 }
 
+void CreateBlockManagerCallable::SetMambaBlockAllocatorManager(
+    std::shared_ptr<BlockAllocatorManagerInterface> mamba_block_allocator_manager) {
+  mamba_block_allocator_manager_ = mamba_block_allocator_manager;
+}
+
 void CreateBlockManagerCallable::SetPdV2Connector(std::shared_ptr<pd_v2::PdV2ConnectorInterface> connector,
                                                   std::shared_ptr<Environment> env, int dp_group_id,
                                                   int device_idx_in_dp_group) {
@@ -91,6 +98,10 @@ Status CreateBlockManagerCallable::Call(const IpcRequest* request, IpcResponse* 
   // Initialize SWA block allocator manager when SWA is enabled and the manager has been registered.
   if (swa_block_allocator_manager_ && !real_req->swa_block_allocator_manager_config.empty()) {
     swa_block_allocator_manager_->Initialize(real_req->swa_block_allocator_manager_config);
+  }
+  // Initialize the Mamba state pool allocator manager (after FA/SWA, aligned with their order).
+  if (mamba_block_allocator_manager_ && !real_req->mamba_block_allocator_manager_config.empty()) {
+    mamba_block_allocator_manager_->Initialize(real_req->mamba_block_allocator_manager_config);
   }
 
   // pd_v2 hook: after the contiguous KV pool is allocated, register it

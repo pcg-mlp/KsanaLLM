@@ -176,7 +176,8 @@ class PrefixCacheManager : public CacheManagerInterface,
   // Allocate new blocks for request, called only when req is running.
   Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
                                std::vector<int>& swa_req_block_ids,
-                               std::vector<size_t>& swa_block_idx_offsets) override;
+                               std::vector<size_t>& swa_block_idx_offsets,
+                               int& mamba_kv_cache_block_id) override;
 
   // Allocate blocks for remote cache loading (only valid in kRemoteLoading state).
   Status AllocateBlocksForRemoteCache(int64_t req_id, std::vector<int>& req_block_ids, size_t fa_block_num,

@@ -6,8 +6,10 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
+#include "cache_manager/cache_manager_factory.h"
 #include "test.h"
 #include "utils/logger.h"
 #include "utils/memory_allocator.h"
@@ -23,7 +25,7 @@ using namespace ksana_llm;
 class DirectCacheManagerTest : public testing::Test {
  protected:
   // Build a DirectCacheManager without SWA (sliding_window_size == 0).
-  void SetUpNoSwa(size_t device_block_num = 64, size_t block_token_num = 16) {
+  void SetUpNoSwa(size_t device_block_num = 64, size_t block_token_num = 16, size_t mamba_block_num = 0) {
     device_block_num_ = device_block_num;
     block_token_num_ = block_token_num;
 
@@ -40,12 +42,30 @@ class DirectCacheManagerTest : public testing::Test {
     block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(group_config, memory_allocator_, context_,
                                                                         block_allocator_creation_fn_);
 
+    if (mamba_block_num > 0) {
+      BlockAllocatorGroupConfig mamba_group_config;
+      mamba_group_config.devices = {0};
+      mamba_group_config.device_block_num = mamba_block_num;
+      mamba_group_config.host_block_num = 0;
+      mamba_group_config.block_size = sizeof(float);
+
+      auto mamba_creation_fn = [](MemoryLocation location, size_t block_num, size_t block_size, int rank,
+                                  std::shared_ptr<MemoryAllocatorInterface> memory_allocator,
+                                  std::shared_ptr<Context> context) -> std::shared_ptr<BlockAllocatorInterface> {
+        return std::make_shared<FakedBlockAllocator>(location, block_num, block_size, rank,
+                                                     memory_allocator, context);
+      };
+      mamba_block_allocator_group_ = std::make_shared<FakedBlockAllocatorGroup>(mamba_group_config, memory_allocator_,
+                                                                                context_, mamba_creation_fn);
+    }
+
     CacheManagerConfig cfg;
     cfg.block_token_num = block_token_num_;
     cfg.tensor_para_size = 1;
     cfg.sliding_window_size = 0;  // SWA disabled
 
-    cache_manager_ = std::make_unique<DirectCacheManager>(cfg, block_allocator_group_, nullptr);
+    cache_manager_ =
+        std::make_unique<DirectCacheManager>(cfg, block_allocator_group_, nullptr, mamba_block_allocator_group_);
     cache_manager_->InitializeCachedBlocks();
   }
 
@@ -116,6 +136,7 @@ class DirectCacheManagerTest : public testing::Test {
   BlockAllocatorCreationFunc block_allocator_creation_fn_;
   std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group_;
   std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group_;
+  std::shared_ptr<BlockAllocatorGroupInterface> mamba_block_allocator_group_;
 
   std::unique_ptr<DirectCacheManager> cache_manager_;
 };
@@ -136,8 +157,9 @@ TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_Basic) {
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;  // sentinel: stays empty when SWA disabled
 
+  int mamba_kv_cache_block_id = -1;
   Status s = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/3, req_block_ids, swa_req_block_ids,
-                                                   swa_block_idx_offsets);
+                                                   swa_block_idx_offsets, mamba_kv_cache_block_id);
   ASSERT_TRUE(s.OK()) << s.GetMessage();
 
   // Three KV blocks allocated.
@@ -151,6 +173,171 @@ TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_Basic) {
   EXPECT_EQ(cache_manager_->GetUsableBlockNumber(), 16u - 3u);
 }
 
+TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_AllocatesMambaBlock) {
+  SetUpNoSwa(/*device_block_num=*/16, /*block_token_num=*/16, /*mamba_block_num=*/2);
+
+  const int64_t req_id = RegisterRequest(/*req_id=*/1);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+
+  int mamba_block_id = -1;
+  Status status = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/1, req_block_ids, swa_req_block_ids,
+                                                        swa_block_idx_offsets, mamba_block_id);
+
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+  ASSERT_EQ(req_block_ids.size(), 1u);
+  EXPECT_GT(mamba_block_id, 0);
+  EXPECT_EQ(mamba_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 1u);
+}
+
+TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_ReturnsExistingMambaBlock) {
+  SetUpNoSwa(/*device_block_num=*/16, /*block_token_num=*/16, /*mamba_block_num=*/2);
+
+  const int64_t req_id = RegisterRequest(/*req_id=*/1);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  int mamba_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/1, req_block_ids, swa_req_block_ids,
+                                                    swa_block_idx_offsets, mamba_block_id)
+                  .OK());
+  const int first_mamba_kv_cache_block_id = mamba_block_id;
+
+  int second_mamba_block_id = -1;
+  Status status = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/0, req_block_ids, swa_req_block_ids,
+                                                        swa_block_idx_offsets, second_mamba_block_id);
+
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+  EXPECT_EQ(second_mamba_block_id, first_mamba_kv_cache_block_id);
+  EXPECT_EQ(mamba_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 1u);
+}
+
+TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_FaPrecheckFailureDoesNotConsumeMambaBlock) {
+  SetUpNoSwa(/*device_block_num=*/1, /*block_token_num=*/16, /*mamba_block_num=*/1);
+
+  const int64_t req_id = RegisterRequest(/*req_id=*/1);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+
+  int mamba_block_id = -1;
+  Status status = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/2, req_block_ids, swa_req_block_ids,
+                                                        swa_block_idx_offsets, mamba_block_id);
+
+  EXPECT_FALSE(status.OK());
+  EXPECT_TRUE(req_block_ids.empty());
+  EXPECT_EQ(mamba_block_id, -1);
+  EXPECT_EQ(mamba_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 1u);
+}
+
+TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_MambaFailureDoesNotConsumeFaBlock) {
+  SetUpNoSwa(/*device_block_num=*/2, /*block_token_num=*/16, /*mamba_block_num=*/1);
+
+  const int64_t first_req_id = RegisterRequest(/*req_id=*/1);
+  std::vector<int> first_req_block_ids;
+  std::vector<int> first_swa_req_block_ids;
+  std::vector<size_t> first_swa_block_idx_offsets;
+  int first_mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(first_req_id, /*block_num=*/1, first_req_block_ids, first_swa_req_block_ids,
+                                          first_swa_block_idx_offsets, first_mamba_kv_cache_block_id)
+                  .OK());
+
+  const int64_t second_req_id = RegisterRequest(/*req_id=*/2);
+  std::vector<int> second_req_block_ids;
+  std::vector<int> second_swa_req_block_ids;
+  std::vector<size_t> second_swa_block_idx_offsets;
+  const size_t usable_fa_blocks_before = cache_manager_->GetUsableBlockNumber();
+
+  int second_mamba_block_id = -1;
+  Status status = cache_manager_->AllocateRequestBlocks(second_req_id, /*block_num=*/1, second_req_block_ids,
+                                                        second_swa_req_block_ids, second_swa_block_idx_offsets,
+                                                        second_mamba_block_id);
+
+  EXPECT_FALSE(status.OK());
+  EXPECT_TRUE(second_req_block_ids.empty());
+  EXPECT_EQ(second_mamba_block_id, -1);
+  EXPECT_EQ(cache_manager_->GetUsableBlockNumber(), usable_fa_blocks_before);
+}
+
+TEST_F(DirectCacheManagerTest, NoSwa_DestroyFinishedRequest_FreesMambaBlock) {
+  SetUpNoSwa(/*device_block_num=*/2, /*block_token_num=*/16, /*mamba_block_num=*/1);
+
+  const int64_t req_id = RegisterRequest(/*req_id=*/1);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/1, req_block_ids, swa_req_block_ids,
+                                                    swa_block_idx_offsets, mamba_kv_cache_block_id)
+                  .OK());
+  ASSERT_EQ(mamba_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 0u);
+
+  cache_manager_->DestroyFinishedRequest(req_id);
+
+  EXPECT_EQ(mamba_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 1u);
+}
+
+TEST_F(DirectCacheManagerTest, Factory_InjectsMambaAllocatorIntoDirectCacheManager) {
+  SetUpNoSwa();
+
+  BlockAllocatorGroupConfig fa_group_config;
+  fa_group_config.devices = {0};
+  fa_group_config.device_block_num = 2;
+  fa_group_config.host_block_num = 0;
+  fa_group_config.block_size = 16 * sizeof(float);
+  auto fa_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(fa_group_config, memory_allocator_, context_,
+                                                                       block_allocator_creation_fn_);
+
+  BlockAllocatorGroupConfig mamba_group_config;
+  mamba_group_config.devices = {0};
+  mamba_group_config.device_block_num = 1;
+  mamba_group_config.host_block_num = 0;
+  mamba_group_config.block_size = sizeof(float);
+  auto mamba_allocator_group = std::make_shared<FakedBlockAllocatorGroup>(mamba_group_config, memory_allocator_,
+                                                                          context_, block_allocator_creation_fn_);
+
+  CacheManagerConfig config;
+  config.block_token_num = 16;
+  config.tensor_para_size = 1;
+  config.enable_prefix_caching = false;
+  auto cache_manager =
+      CacheManagerFactory::CreateCacheManager(config, fa_allocator_group, nullptr, mamba_allocator_group);
+  cache_manager->InitializeCachedBlocks();
+
+  size_t shared_block_num = 0;
+  size_t unique_block_num = 0;
+  size_t shared_token_num = 0;
+  ASSERT_TRUE(cache_manager
+                  ->GetRequestPrefixBlockNumber(/*req_id=*/1, /*input_token_ids=*/{}, /*check_token_num=*/16,
+                                                shared_block_num, unique_block_num, shared_token_num)
+                  .OK());
+
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  int mamba_block_id = -1;
+  Status status = cache_manager->AllocateRequestBlocks(/*req_id=*/1, /*block_num=*/1, req_block_ids, swa_req_block_ids,
+                                                       swa_block_idx_offsets, mamba_block_id);
+
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+  EXPECT_EQ(mamba_block_id, 1);
+}
+
+TEST_F(DirectCacheManagerTest, Factory_RejectsMambaAllocatorWithPrefixCaching) {
+  SetUpNoSwa(/*device_block_num=*/2, /*block_token_num=*/16, /*mamba_block_num=*/1);
+
+  CacheManagerConfig config;
+  config.block_token_num = 16;
+  config.tensor_para_size = 1;
+  config.enable_prefix_caching = true;
+
+  EXPECT_THROW(
+      CacheManagerFactory::CreateCacheManager(config, block_allocator_group_, nullptr, mamba_block_allocator_group_),
+      std::runtime_error);
+}
+
 // AllocateRequestBlocks: requesting more blocks than available returns an error.
 TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_InsufficientBlocks) {
   SetUpNoSwa(/*device_block_num=*/4, /*block_token_num=*/16);
@@ -162,8 +349,9 @@ TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_InsufficientBlocks) {
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
 
+  int mamba_kv_cache_block_id = -1;
   Status s = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/5, req_block_ids, swa_req_block_ids,
-                                                   swa_block_idx_offsets);
+                                                   swa_block_idx_offsets, mamba_kv_cache_block_id);
   EXPECT_FALSE(s.OK());
 }
 
@@ -179,8 +367,9 @@ TEST_F(DirectCacheManagerTest, NoSwa_UpdateRequestTokens_NoSideEffects) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
 
   // Simulate 32 tokens cached (fills both blocks).
   std::vector<int> kvcached_token_ids(32);
@@ -208,8 +397,9 @@ TEST_F(DirectCacheManagerTest, NoSwa_DestroyFinishedRequest_FreesBlocks) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 4, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 4, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
   EXPECT_EQ(cache_manager_->GetUsableBlockNumber(), 4u);
 
   cache_manager_->DestroyFinishedRequest(req_id);
@@ -234,8 +424,9 @@ TEST_F(DirectCacheManagerTest, Swa_AllocateRequestBlocks_SwaBlocksAllocated) {
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
 
+  int mamba_kv_cache_block_id = -1;
   Status s = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/2, req_block_ids, swa_req_block_ids,
-                                                   swa_block_idx_offsets);
+                                                   swa_block_idx_offsets, mamba_kv_cache_block_id);
   ASSERT_TRUE(s.OK()) << s.GetMessage();
 
   // Two KV blocks allocated.
@@ -262,8 +453,9 @@ TEST_F(DirectCacheManagerTest, Swa_AllocateRequestBlocks_SwaIdsDistinctFromKv) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
 
   // KV and SWA block ids come from separate allocators; they should not overlap
   // because FakedBlockAllocator assigns ids starting from 0 independently.
@@ -285,8 +477,9 @@ TEST_F(DirectCacheManagerTest, Swa_UpdateRequestTokens_NoSlideYet) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 2, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
 
   // 32 tokens cached — exactly fills the window; left boundary = token 1,
   // block 0 is still inside the window.
@@ -325,8 +518,9 @@ TEST_F(DirectCacheManagerTest, Swa_UpdateRequestTokens_SlideReleasesOldestBlock)
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 3, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 3, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
   EXPECT_EQ(swa_req_block_ids.size(), 3u);
 
   // 47 tokens cached: exactly fills 3 blocks.
@@ -377,8 +571,9 @@ TEST_F(DirectCacheManagerTest, Swa_UpdateRequestTokens_MultipleSlides) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 4, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 4, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
   EXPECT_EQ(swa_req_block_ids.size(), 4u);
 
   // 64 tokens cached: exactly fills 4 blocks.
@@ -411,9 +606,10 @@ TEST_F(DirectCacheManagerTest, Swa_UpdateRequestTokens_MultipleSlides) {
   std::vector<int> req_block_ids2;
   std::vector<int> swa_req_block_ids2;
   std::vector<size_t> swa_block_idx_offsets2;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 1, req_block_ids2, swa_req_block_ids2, swa_block_idx_offsets2)
-          .OK());
+  int mamba_kv_cache_block_id_2 = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 1, req_block_ids2, swa_req_block_ids2,
+                                                    swa_block_idx_offsets2, mamba_kv_cache_block_id_2)
+                  .OK());
   // After this allocation: SWA blocks are [3, 4], offsets={3, 4}.
   EXPECT_EQ(swa_block_idx_offsets2[0], 3u);
   EXPECT_EQ(swa_req_block_ids2.size(), 2u);
@@ -453,8 +649,9 @@ TEST_F(DirectCacheManagerTest, Swa_DestroyFinishedRequest_FreesAllSwaBlocks) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offsets;
-  ASSERT_TRUE(
-      cache_manager_->AllocateRequestBlocks(req_id, 3, req_block_ids, swa_req_block_ids, swa_block_idx_offsets).OK());
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_id, 3, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                                    mamba_kv_cache_block_id).OK());
 
   // 3 SWA blocks consumed.
   EXPECT_EQ(swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 13u);
@@ -478,11 +675,13 @@ TEST_F(DirectCacheManagerTest, Swa_TwoRequests_IndependentSwaBlocks) {
 
   std::vector<int> kv_a, swa_a;
   std::vector<size_t> off_a;
-  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_a, 2, kv_a, swa_a, off_a).OK());
+  int mamba_kv_cache_block_id_a = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_a, 2, kv_a, swa_a, off_a, mamba_kv_cache_block_id_a).OK());
 
   std::vector<int> kv_b, swa_b;
   std::vector<size_t> off_b;
-  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_b, 2, kv_b, swa_b, off_b).OK());
+  int mamba_kv_cache_block_id_b = -1;
+  ASSERT_TRUE(cache_manager_->AllocateRequestBlocks(req_b, 2, kv_b, swa_b, off_b, mamba_kv_cache_block_id_b).OK());
 
   // Each request got 2 SWA blocks; 4 total consumed.
   EXPECT_EQ(swa_a.size(), 2u);
@@ -507,7 +706,10 @@ TEST_F(DirectCacheManagerTest, NoSwa_AllocateRequestBlocks_UnknownReqId) {
   std::vector<size_t> swa_block_idx_offsets;
 
   // req_id 999 was never registered via GetRequestPrefixBlockNumber.
-  Status s = cache_manager_->AllocateRequestBlocks(999, 1, req_block_ids, swa_req_block_ids, swa_block_idx_offsets);
+  int mamba_kv_cache_block_id = -1;
+  Status s =
+      cache_manager_->AllocateRequestBlocks(999, 1, req_block_ids, swa_req_block_ids, swa_block_idx_offsets,
+                                            mamba_kv_cache_block_id);
   EXPECT_FALSE(s.OK());
 }
 

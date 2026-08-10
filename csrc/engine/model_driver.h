@@ -68,7 +68,8 @@ class ModelDriver {
   // Create block manager on executor process.
   // swa_block_allocator_manager_config is optional; empty map means SWA is disabled.
   Status CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
-                            const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {});
+                            const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {},
+                            const BlockAllocatorManagerConfig& mamba_block_allocator_manager_config = {});
 
   // Create executor runtime on executor process.
   Status CreateExecutorRuntime(const VocabInfo& vocab_info);

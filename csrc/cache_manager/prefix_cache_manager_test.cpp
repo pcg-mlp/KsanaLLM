@@ -136,8 +136,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                       swa_block_idx_offset);
+                                                       swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   // Check memory number.
@@ -195,8 +196,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   std::vector<int> req_block_ids_2;
   std::vector<int> swa_req_block_ids_2;
   std::vector<size_t> swa_block_idx_offset_2;
+  int mamba_kv_cache_block_id_2 = -1;
   status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num_2, req_block_ids_2, swa_req_block_ids_2,
-                                                swa_block_idx_offset_2);
+                                                swa_block_idx_offset_2, mamba_kv_cache_block_id_2);
   EXPECT_TRUE(status.OK());
 
   // Create request 3.
@@ -234,8 +236,9 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
   std::vector<int> req_block_ids_3;
   std::vector<int> swa_req_block_ids_3;
   std::vector<size_t> swa_block_idx_offset_3;
+  int mamba_kv_cache_block_id_3 = -1;
   status = cache_manager->AllocateRequestBlocks(req_id_3, unique_block_num_3, req_block_ids_3, swa_req_block_ids_3,
-                                                swa_block_idx_offset_3);
+                                                swa_block_idx_offset_3, mamba_kv_cache_block_id_3);
   EXPECT_TRUE(status.OK());
 
   // Now the matched block should have 2 active requests.
@@ -309,8 +312,10 @@ TEST_F(PrefixCacheManagerTest, SingleRequestTest) {
 
   std::vector<int> swa_req_block_ids_6;
   std::vector<size_t> swa_block_idx_offset_6;
+  int mamba_kv_cache_block_id_6 = -1;
   status =
-      cache_manager->AllocateRequestBlocks(req_id_6, 2, req_block_ids_6, swa_req_block_ids_6, swa_block_idx_offset_6);
+      cache_manager->AllocateRequestBlocks(req_id_6, 2, req_block_ids_6, swa_req_block_ids_6, swa_block_idx_offset_6,
+                                           mamba_kv_cache_block_id_6);
   EXPECT_EQ(req_block_ids_6.size(), 7);
 }
 
@@ -343,8 +348,9 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                       swa_block_idx_offset);
+                                                       swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   // Generate new token and update request.
@@ -360,8 +366,9 @@ TEST_F(PrefixCacheManagerTest, FlexibleCacheTest) {
   }
   cache_manager->GetRequestPrefixBlockNumber(req_id_2, dst_prefix16_tokens, dst_prefix16_tokens.size(),
                                              shared_block_num, unique_block_num, shared_token_num);
+  int mamba_kv_cache_block_id_2 = -1;
   status = cache_manager->AllocateRequestBlocks(req_id_2, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                swa_block_idx_offset);
+                                                swa_block_idx_offset, mamba_kv_cache_block_id_2);
   // req 1 |prefix cache tokens|prefix_last_token|delete_token|flexible_cache_token|
   // req 2 |prefix cache tokens|prefix_last_token|flexible_cache_token|
   for (int last_token_num = 1; last_token_num < block_token_num; last_token_num++) {
@@ -410,8 +417,9 @@ TEST_F(PrefixCacheManagerTest, InvalidRequestTest) {
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
   size_t unique_block_num;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager->AllocateRequestBlocks(invalid_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                       swa_block_idx_offset);
+                                                       swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_EQ(status.GetCode(), RET_RUNTIME_FAILED);
 
   std::vector<int> output_token_ids;
@@ -492,8 +500,9 @@ class PrefixCacheManagerSWATest : public testing::Test {
     std::vector<int> req_block_ids;
     std::vector<int> swa_req_block_ids;
     std::vector<size_t> swa_block_idx_offset;
+    int mamba_kv_cache_block_id = -1;
     Status status = cache_manager_->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                          swa_block_idx_offset);
+                                                          swa_block_idx_offset, mamba_kv_cache_block_id);
     EXPECT_TRUE(status.OK());
 
     // Simulate filling all blocks by calling UpdateRequestTokens with all tokens.
@@ -518,8 +527,9 @@ class PrefixCacheManagerSWATest : public testing::Test {
                                                 shared_token_num);
 
     swa_block_idx_offset.clear();
+    int mamba_kv_cache_block_id = -1;
     Status status = cache_manager_->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                          swa_block_idx_offset);
+                                                          swa_block_idx_offset, mamba_kv_cache_block_id);
     EXPECT_TRUE(status.OK());
 
     bool block_merged = false;
@@ -574,8 +584,9 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockAllocatedWithFABlock) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager_->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                        swa_block_idx_offset);
+                                                        swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   // FA blocks allocated.
@@ -703,8 +714,9 @@ TEST_F(PrefixCacheManagerSWATest, SWAWindowSlides) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager_->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                        swa_block_idx_offset);
+                                                        swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   // All 6 SWA blocks allocated.
@@ -762,8 +774,9 @@ TEST_F(PrefixCacheManagerSWATest, DestroyFinishedRequestReleasesSWAWindow) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
   Status status = cache_manager_->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
-                                                        swa_block_idx_offset);
+                                                        swa_block_idx_offset, mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   bool block_merged = false;
@@ -827,8 +840,9 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
     std::vector<int> req_block_ids_b;
     std::vector<int> swa_req_block_ids_b;
     std::vector<size_t> swa_block_idx_offset_b;
+    int mamba_kv_cache_block_id_b = -1;
     Status status = cache_manager_->AllocateRequestBlocks(req_id_b, ub, req_block_ids_b, swa_req_block_ids_b,
-                                                          swa_block_idx_offset_b);
+                                                          swa_block_idx_offset_b, mamba_kv_cache_block_id_b);
     EXPECT_TRUE(status.OK());
 
     // 需为最后 1 个 block 新分配 1 个 SWA block。
@@ -882,16 +896,18 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockFreedOnFABlockMerge) {
     // Both requests allocate their own unique FA and SWA blocks.
     std::vector<int> req_block_ids_c, swa_req_block_ids_c;
     std::vector<size_t> swa_block_idx_offset_c;
+    int mamba_kv_cache_block_id_c = -1;
     Status status = cache_manager_->AllocateRequestBlocks(req_id_c, ub_c, req_block_ids_c, swa_req_block_ids_c,
-                                                          swa_block_idx_offset_c);
+                                                          swa_block_idx_offset_c, mamba_kv_cache_block_id_c);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(req_block_ids_c.size(), 4u);
     EXPECT_EQ(swa_req_block_ids_c.size(), 4u);
 
     std::vector<int> req_block_ids_d, swa_req_block_ids_d;
     std::vector<size_t> swa_block_idx_offset_d;
+    int mamba_kv_cache_block_id_d = -1;
     status = cache_manager_->AllocateRequestBlocks(req_id_d, ub_d, req_block_ids_d, swa_req_block_ids_d,
-                                                   swa_block_idx_offset_d);
+                                                   swa_block_idx_offset_d, mamba_kv_cache_block_id_d);
     EXPECT_TRUE(status.OK());
     EXPECT_EQ(req_block_ids_d.size(), 4u);
     EXPECT_EQ(swa_req_block_ids_d.size(), 4u);
@@ -972,14 +988,18 @@ TEST_F(PrefixCacheManagerSWATest, SWAMergePartialWindowHit) {
 
   std::vector<int> req_block_ids_c, swa_req_block_ids_c;
   std::vector<size_t> swa_block_idx_offset_c;
+  int mamba_kv_cache_block_id_c = -1;
   EXPECT_TRUE(cache_manager_
-                  ->AllocateRequestBlocks(req_id_c, ub_c, req_block_ids_c, swa_req_block_ids_c, swa_block_idx_offset_c)
+                  ->AllocateRequestBlocks(req_id_c, ub_c, req_block_ids_c, swa_req_block_ids_c, swa_block_idx_offset_c,
+                                          mamba_kv_cache_block_id_c)
                   .OK());
 
   std::vector<int> req_block_ids_d, swa_req_block_ids_d;
   std::vector<size_t> swa_block_idx_offset_d;
+  int mamba_kv_cache_block_id_d = -1;
   EXPECT_TRUE(cache_manager_
-                  ->AllocateRequestBlocks(req_id_d, ub_d, req_block_ids_d, swa_req_block_ids_d, swa_block_idx_offset_d)
+                  ->AllocateRequestBlocks(req_id_d, ub_d, req_block_ids_d, swa_req_block_ids_d, swa_block_idx_offset_d,
+                                          mamba_kv_cache_block_id_d)
                   .OK());
   EXPECT_EQ(req_block_ids_d.size(), 6u);
   EXPECT_EQ(swa_req_block_ids_d.size(), 6u);
@@ -1073,7 +1093,10 @@ TEST_F(PrefixCacheManagerSWATest, SWADisabledWhenNoAllocatorGroup) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
-  Status status = no_swa_mgr->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset);
+  int mamba_kv_cache_block_id = -1;
+  Status status =
+      no_swa_mgr->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                        mamba_kv_cache_block_id);
   EXPECT_TRUE(status.OK());
 
   // No SWA blocks should be allocated.
@@ -1108,7 +1131,9 @@ TEST_F(PrefixCacheManagerSWATest, GetAvailableBlockCountReflectsReclaimable) {
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
-  cache_manager_->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset);
+  int mamba_kv_cache_block_id = -1;
+  cache_manager_->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                        mamba_kv_cache_block_id);
 
   // After allocation, 4 SWA blocks are in use (non-reclaimable).
   size_t after_alloc = cache_manager_->swa_cache_manager_->GetAvailableBlockCount();
@@ -1253,7 +1278,8 @@ class PrefixCacheManagerRemoteCacheTest : public testing::Test {
       cache_manager_->GetRequestPrefixBlockNumber(seed_req_id, seed_tokens, seed_tokens.size(), sb, ub, st);
       std::vector<int> rbi, srbi;
       std::vector<size_t> sbo;
-      EXPECT_TRUE(cache_manager_->AllocateRequestBlocks(seed_req_id, ub, rbi, srbi, sbo).OK());
+      int mamba_kv_cache_block_id = -1;
+      EXPECT_TRUE(cache_manager_->AllocateRequestBlocks(seed_req_id, ub, rbi, srbi, sbo, mamba_kv_cache_block_id).OK());
       bool bm = false;
       EXPECT_TRUE(
           cache_manager_->UpdateRequestTokens(seed_req_id, seed_tokens, seed_tokens.size(), rbi, bm, srbi, sbo).OK());
@@ -1422,7 +1448,10 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, AllocateRequestBlocks_BehaviorUnchange
   std::vector<int> req_block_ids;
   std::vector<int> swa_req_block_ids;
   std::vector<size_t> swa_block_idx_offset;
-  Status s = cache_manager_->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset);
+  int mamba_kv_cache_block_id = -1;
+  Status s =
+      cache_manager_->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                            mamba_kv_cache_block_id);
   ASSERT_TRUE(s.OK());
 
   // 5 FA blocks allocated.
@@ -1522,7 +1551,8 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_PreCheck_NoSWA_TooS
     no_swa_mgr->GetRequestPrefixBlockNumber(1, seed_tokens, seed_tokens.size(), sb, ub, st);
     std::vector<int> rbi, srbi;
     std::vector<size_t> sbo;
-    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo).OK());
+    int mamba_kv_cache_block_id = -1;
+    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo, mamba_kv_cache_block_id).OK());
     bool bm = false;
     EXPECT_TRUE(no_swa_mgr->UpdateRequestTokens(1, seed_tokens, seed_tokens.size(), rbi, bm, srbi, sbo).OK());
     no_swa_mgr->DestroyFinishedRequest(1);
@@ -1593,7 +1623,8 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_NoSWA_TruncationAnd
     no_swa_mgr->GetRequestPrefixBlockNumber(1, seed_tokens, seed_tokens.size(), sb, ub, st);
     std::vector<int> rbi, srbi;
     std::vector<size_t> sbo;
-    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo).OK());
+    int mamba_kv_cache_block_id = -1;
+    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo, mamba_kv_cache_block_id).OK());
     bool bm = false;
     EXPECT_TRUE(no_swa_mgr->UpdateRequestTokens(1, seed_tokens, seed_tokens.size(), rbi, bm, srbi, sbo).OK());
     no_swa_mgr->DestroyFinishedRequest(1);
@@ -2077,7 +2108,8 @@ TEST_F(PrefixCacheManagerRemoteCacheTest, ConfirmRemoteCache_NoSWA_NoBlockAlloca
     no_swa_mgr->GetRequestPrefixBlockNumber(1, seed_tokens, seed_tokens.size(), sb, ub, st);
     std::vector<int> rbi, srbi;
     std::vector<size_t> sbo;
-    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo).OK());
+    int mamba_kv_cache_block_id = -1;
+    EXPECT_TRUE(no_swa_mgr->AllocateRequestBlocks(1, ub, rbi, srbi, sbo, mamba_kv_cache_block_id).OK());
     bool bm = false;
     EXPECT_TRUE(no_swa_mgr->UpdateRequestTokens(1, seed_tokens, seed_tokens.size(), rbi, bm, srbi, sbo).OK());
     no_swa_mgr->DestroyFinishedRequest(1);

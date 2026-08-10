@@ -43,7 +43,7 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(Status, ConfirmRemoteCacheLoadingResult,
               (int64_t, const std::vector<int>&, size_t, const std::vector<size_t>&), (override));
   MOCK_METHOD(Status, AllocateRequestBlocks,
-              (int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&), (override));
+              (int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&, int&), (override));
   MOCK_METHOD(void, UpdateFlexibleCache,
               (int64_t, const std::vector<int>&, int, std::vector<FlexibleCachedCopyTask>&, size_t&), (override));
   MOCK_METHOD(Status, UpdateRequestTokens,

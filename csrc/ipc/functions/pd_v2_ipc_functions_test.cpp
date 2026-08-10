@@ -10,6 +10,8 @@
 
 #include <cstring>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "cache_manager/block_allocator/block_allocator_interface.h"
@@ -58,10 +60,25 @@ class FakeBlockAllocatorGroup : public BlockAllocatorGroupInterface {
 
 class FakeBlockAllocatorManager : public BlockAllocatorManagerInterface {
  public:
-  void Initialize(const BlockAllocatorManagerConfig&) override { ++init_calls; }
+  FakeBlockAllocatorManager() = default;
+  FakeBlockAllocatorManager(std::string name, std::vector<std::string>* init_order)
+      : name_(std::move(name)), init_order_(init_order) {}
+
+  void Initialize(const BlockAllocatorManagerConfig& config) override {
+    ++init_calls;
+    last_config = config;
+    if (init_order_ != nullptr) {
+      init_order_->push_back(name_);
+    }
+  }
   std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup(int) override { return group_; }
   int init_calls = 0;
+  BlockAllocatorManagerConfig last_config;
   std::shared_ptr<BlockAllocatorGroupInterface> group_;
+
+ private:
+  std::string name_;
+  std::vector<std::string>* init_order_ = nullptr;
 };
 
 class FakePdV2Connector : public pd_v2::PdV2ConnectorInterface {
@@ -117,6 +134,7 @@ TEST_F(CreateBlockManagerSerdeTest, RequestRoundTrip) {
   g.block_size = 4096;
   req.block_allocator_manager_config[0] = g;
   req.swa_block_allocator_manager_config[1] = g;
+  req.mamba_block_allocator_manager_config[2] = g;
 
   size_t bytes = 0;
   ASSERT_TRUE(req.Serialize(buf_, &bytes).OK());
@@ -128,6 +146,7 @@ TEST_F(CreateBlockManagerSerdeTest, RequestRoundTrip) {
   EXPECT_EQ(restored.block_allocator_manager_config[0].block_size, 4096u);
   EXPECT_EQ(restored.block_allocator_manager_config[0].devices, std::vector<int>({0, 1}));
   EXPECT_EQ(restored.swa_block_allocator_manager_config.count(1), 1u);
+  EXPECT_EQ(restored.mamba_block_allocator_manager_config.count(2), 1u);
 }
 
 TEST_F(CreateBlockManagerSerdeTest, ResponseRoundTrip) {
@@ -152,15 +171,50 @@ class CreateBlockManagerCallableTest : public ::testing::Test {
 TEST_F(CreateBlockManagerCallableTest, NoConnectorInitializesManagers) {
   auto mgr = std::make_shared<FakeBlockAllocatorManager>();
   auto swa = std::make_shared<FakeBlockAllocatorManager>();
+  auto mamba = std::make_shared<FakeBlockAllocatorManager>();
   callable_.SetBlockAllocatorManager(mgr);
   callable_.SetSwaBlockAllocatorManager(swa);
+  callable_.SetMambaBlockAllocatorManager(mamba);
   // SWA config non-empty so the swa Initialize branch runs.
   req_.swa_block_allocator_manager_config[0] = BlockAllocatorGroupConfig{};
+  req_.mamba_block_allocator_manager_config[0] = BlockAllocatorGroupConfig{};
 
   CreateBlockManagerResponse rsp;
   EXPECT_TRUE(callable_.Call(&req_, &rsp, nullptr).OK());
   EXPECT_EQ(mgr->init_calls, 1);
   EXPECT_EQ(swa->init_calls, 1);
+  EXPECT_EQ(mamba->init_calls, 1);
+}
+
+TEST_F(CreateBlockManagerCallableTest, InitializesMambaPoolAfterKvAndSwaPools) {
+  std::vector<std::string> init_order;
+  auto kv = std::make_shared<FakeBlockAllocatorManager>("kv", &init_order);
+  auto swa = std::make_shared<FakeBlockAllocatorManager>("swa", &init_order);
+  auto mamba = std::make_shared<FakeBlockAllocatorManager>("mamba", &init_order);
+  callable_.SetBlockAllocatorManager(kv);
+  callable_.SetSwaBlockAllocatorManager(swa);
+  callable_.SetMambaBlockAllocatorManager(mamba);
+  req_.swa_block_allocator_manager_config[0] = BlockAllocatorGroupConfig{};
+  req_.mamba_block_allocator_manager_config[0] = BlockAllocatorGroupConfig{};
+
+  CreateBlockManagerResponse rsp;
+  ASSERT_TRUE(callable_.Call(&req_, &rsp, nullptr).OK());
+  EXPECT_EQ(init_order, std::vector<std::string>({"kv", "swa", "mamba"}));
+}
+
+TEST_F(CreateBlockManagerCallableTest, MambaExecutorConfigKeepsUsableBlockCount) {
+  auto kv = std::make_shared<FakeBlockAllocatorManager>();
+  auto mamba = std::make_shared<FakeBlockAllocatorManager>();
+  callable_.SetBlockAllocatorManager(kv);
+  callable_.SetMambaBlockAllocatorManager(mamba);
+  BlockAllocatorGroupConfig config{};
+  config.device_block_num = 4;
+  req_.mamba_block_allocator_manager_config[0] = config;
+
+  CreateBlockManagerResponse rsp;
+  ASSERT_TRUE(callable_.Call(&req_, &rsp, nullptr).OK());
+  ASSERT_EQ(mamba->last_config.count(0), 1u);
+  EXPECT_EQ(mamba->last_config.at(0).device_block_num, 4u);
 }
 
 TEST_F(CreateBlockManagerCallableTest, ConnectorGroupNullSkips) {

@@ -371,6 +371,24 @@ struct ModelConfig {
   // Determines if the model is a visual llm model.
   bool is_visual = false;
 
+  // GDN+full-attn hybrid. GDN uses per-request slot pool; not prefix-cache-compatible (SplitFuse OK).
+  bool use_linear_attn = false;
+
+  // 统计 [lower_layer_idx, upper_layer_idx] 区间内 layer_types 为 'L' 的层数
+  // （长度一致性由各模型 attributes 归一化保证，num_layer 被 override 截尾时
+  // 旧表更长，截尾计数即真实值）。layer_types 存在性由调用方校验，缺失时
+  // .at() 抛 out_of_range，不静默猜测。
+  size_t CountLinearAttnLayers(int lower_layer_idx, int upper_layer_idx) const {
+    const std::string& layer_types = model_attributes.at("layer_types");
+    size_t count = 0;
+    for (int layer_idx = lower_layer_idx; layer_idx <= upper_layer_idx; ++layer_idx) {
+      if (layer_idx >= 0 && layer_idx < static_cast<int>(layer_types.size()) && layer_types[layer_idx] == 'L') {
+        ++count;
+      }
+    }
+    return count;
+  }
+
   // Determines if the model is an embedding model.
   bool is_embedding_model = false;
 

@@ -137,9 +137,12 @@ class CacheManagerInterface {
 
   // Allocate new blocks for request, called only when req is running.
   // swa_req_block_ids and swa_block_idx_offsets are filled only when swa_block_allocator_group is configured.
+  // mamba_kv_cache_block_id（出参，同 SWA out 参数契约）：mamba working block 物理 ID，
+  // 未配置 mamba 或分配失败为 -1；随 FA/SWA 分配原子写回，调用方无需二次查询。
   virtual Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
                                        std::vector<int>& swa_req_block_ids,
-                                       std::vector<size_t>& swa_block_idx_offsets) = 0;
+                                       std::vector<size_t>& swa_block_idx_offsets,
+                                       int& mamba_kv_cache_block_id) = 0;
 
   virtual void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                                    std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,

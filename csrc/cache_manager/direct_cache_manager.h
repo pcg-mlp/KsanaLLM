@@ -5,6 +5,7 @@
 
 #include "cache_manager/base_cache_manager.h"
 #include "cache_manager/cache_manager_interface.h"
+#include "cache_manager/mamba_cache_manager.h"
 #include "cache_manager/swa_cache_manager.h"
 
 #include "configure/environment.h"
@@ -59,8 +60,8 @@ class DirectCacheManager : public CacheManagerInterface,
  public:
   explicit DirectCacheManager(const CacheManagerConfig& cache_manager_config,
                               std::shared_ptr<BlockAllocatorGroupInterface> block_allocator_group = nullptr,
-                              std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group = nullptr);
-  ~DirectCacheManager();
+                              std::shared_ptr<BlockAllocatorGroupInterface> swa_block_allocator_group = nullptr,
+                              std::shared_ptr<BlockAllocatorGroupInterface> mamba_block_allocator_group = nullptr);
 
   // Initialize all the memory blocks.
   void InitializeCachedBlocks() override;
@@ -116,9 +117,11 @@ class DirectCacheManager : public CacheManagerInterface,
   }
 
   // Allocate new blocks for request, called only when req is running.
+  // mamba_kv_cache_block_id 出参：Direct 在分配内完成 working block 分配后写回。
   Status AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
                                std::vector<int>& swa_req_block_ids,
-                               std::vector<size_t>& swa_block_idx_offsets) override;
+                               std::vector<size_t>& swa_block_idx_offsets,
+                               int& mamba_kv_cache_block_id) override;
 
   // Update the token ids of this request.
   Status UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
@@ -137,6 +140,9 @@ class DirectCacheManager : public CacheManagerInterface,
  private:
   // SWA cache manager; null when SWA is not configured.
   std::unique_ptr<SWACacheManager> swa_cache_manager_;
+
+  // Mamba state manager; null for models without Mamba state.
+  std::unique_ptr<MambaCacheManager> mamba_cache_manager_;
 
   // Create a new cached block.
   DirectCachedBlock* CreateCachedBlock(size_t block_id);

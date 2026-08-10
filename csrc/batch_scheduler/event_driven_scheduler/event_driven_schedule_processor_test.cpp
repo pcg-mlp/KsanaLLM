@@ -66,7 +66,8 @@ class NoopCacheManager : public CacheManagerInterface {
                                          const std::vector<size_t>&) override {
     return Status();
   }
-  Status AllocateRequestBlocks(int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&) override {
+  Status AllocateRequestBlocks(int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&,
+                               int&) override {
     return Status();
   }
   void UpdateFlexibleCache(int64_t, const std::vector<int>&, int, std::vector<FlexibleCachedCopyTask>&,

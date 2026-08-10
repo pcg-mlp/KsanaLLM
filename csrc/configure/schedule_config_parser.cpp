@@ -18,6 +18,7 @@
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "cache_manager/cache_layout/cache_layout_factory.h"
+#include "cache_manager/cache_layout/mamba_cache_layout.h"
 #include "device/device_utils.h"
 #include "models/common/common_config.h"
 #include "models/common_moe/moe_config.h"
@@ -424,6 +425,8 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   if (batch_scheduler_config_.swa_block_num_ratio <= 0.0f) {
     batch_scheduler_config_.swa_block_num_ratio = 0.1f;
   }
+  batch_scheduler_config_.mamba_block_num_ratio =
+      yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.cache_manager.mamba_block_num_ratio", 0.1f);
   cache_manager_config_.min_flexible_cache_num =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.min_flexible_cache_num", 0);
   cache_manager_config_.block_token_num = block_manager_config_.device_allocator_config.block_token_num;
@@ -448,6 +451,13 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       KLLM_LOG_WARNING << "SplitFuse not support Visual Model, will change split_fuse_token_num as 0";
       batch_scheduler_config_.split_fuse_token_num = 0;
     }
+  }
+
+  // TODO(lioshen): support GDN prefix cache
+  if (model_config.use_linear_attn && cache_manager_config_.enable_prefix_caching) {
+    KLLM_LOG_WARNING << "PrefixCaching not support hybrid linear-attn (GDN) model, will change "
+                        "enable_prefix_caching as false";
+    cache_manager_config_.enable_prefix_caching = false;
   }
 
   // DSv4 模型要求 split_fuse_token_num 必须是 block_token_num 的整数倍, 原因:
@@ -1089,6 +1099,15 @@ void ScheduleConfigParser::InitializeKVCacheConfigs(const ModelConfig &model_con
         block_cache_layout->GetBlockCacheLayout("SWA-cache")->GetBlockCacheSize();
     block_manager_config_.swa_device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
   }
+
+  // Store Mamba state block size and backend capacity if the "mamba-state" layout is registered.
+  if (block_cache_layout->IsBlockCacheTypeExist("mamba-state")) {
+    auto mamba_layout =
+        std::dynamic_pointer_cast<MambaBlockCacheLayout>(block_cache_layout->GetBlockCacheLayout("mamba-state"));
+    KLLM_CHECK_WITH_INFO(mamba_layout != nullptr, "mamba-state must use MambaBlockCacheLayout");
+    block_manager_config_.mamba_device_allocator_config.block_size = mamba_layout->GetBlockCacheSize();
+    block_manager_config_.mamba_device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
+  }
 }
 
 Status ScheduleConfigParser::InitializeBlockManagerConfig(const ModelConfig &model_config,
@@ -1200,13 +1219,23 @@ Status ScheduleConfigParser::CalculateBlockNumber(size_t device_free, size_t dev
   // The effective memory cost per KV block is:
   //   kv_block_size + swa_block_num_ratio * swa_block_size
   // so that device_blocks_num = device_block_memory_size / effective_block_size.
+  // The Mamba pool follows the same derivation: each KV block carries
+  // mamba_block_num_ratio Mamba blocks of memory cost.
   const float swa_block_num_ratio = batch_scheduler_config_.swa_block_num_ratio;
   const size_t swa_block_size = block_manager_config_.swa_device_allocator_config.block_size;
+  const float mamba_block_num_ratio = batch_scheduler_config_.mamba_block_num_ratio;
+  const size_t mamba_block_size = block_manager_config_.mamba_device_allocator_config.block_size;
   size_t effective_block_size = block_manager_config_.device_allocator_config.block_size;
   if (swa_block_num_ratio > 0.0f && swa_block_size > 0) {
     effective_block_size += static_cast<size_t>(swa_block_num_ratio * static_cast<float>(swa_block_size));
     KLLM_LOG_INFO << "SWA enabled: swa_block_num_ratio=" << swa_block_num_ratio << ", swa_block_size=" << swa_block_size
                   << ", effective_block_size=" << effective_block_size;
+  }
+  if (mamba_block_num_ratio > 0.0f && mamba_block_size > 0) {
+    KLLM_CHECK_WITH_INFO(mamba_block_num_ratio < 1.0f, "mamba_block_num_ratio must be between 0 and 1");
+    effective_block_size += static_cast<size_t>(mamba_block_num_ratio * static_cast<float>(mamba_block_size));
+    KLLM_LOG_INFO << "Mamba enabled: mamba_block_num_ratio=" << mamba_block_num_ratio
+                  << ", mamba_block_size=" << mamba_block_size << ", effective_block_size=" << effective_block_size;
   }
 
   size_t device_blocks_num = device_block_memory_size / effective_block_size;
@@ -1257,6 +1286,15 @@ Status ScheduleConfigParser::CalculateBlockNumber(size_t device_free, size_t dev
     KLLM_LOG_INFO << "SWA device block num: " << block_manager_config_.swa_device_allocator_config.blocks_num;
   }
 
+  // Compute and store the Mamba device block count (same derivation as SWA).
+  if (mamba_block_num_ratio > 0.0f && mamba_block_size > 0) {
+    block_manager_config_.mamba_device_allocator_config.blocks_num =
+        static_cast<size_t>(static_cast<float>(device_blocks_num) * mamba_block_num_ratio);
+    KLLM_LOG_INFO << "Mamba device block num: " << block_manager_config_.mamba_device_allocator_config.blocks_num;
+  } else {
+    block_manager_config_.mamba_device_allocator_config.blocks_num = 0;
+  }
+
   return Status();
 }
 
@@ -1275,12 +1313,23 @@ Status ScheduleConfigParser::ResetPipelineBlockNumber() {
 
   // PP sync only updates main KV block count; SWA pool size must be re-derived from the synced
   // main block count so engine cache manager and executor SWA allocators stay consistent.
+  // Mamba pool follows the same derivation.
   const float swa_block_num_ratio = batch_scheduler_config_.swa_block_num_ratio;
   const size_t swa_block_size = block_manager_config_.swa_device_allocator_config.block_size;
   if (swa_block_num_ratio > 0.0f && swa_block_size > 0) {
     block_manager_config_.swa_device_allocator_config.blocks_num =
         static_cast<size_t>(static_cast<float>(device_blocks_num) * swa_block_num_ratio);
     KLLM_LOG_INFO << "Reset SWA device block num: " << block_manager_config_.swa_device_allocator_config.blocks_num;
+  }
+
+  const float mamba_block_num_ratio = batch_scheduler_config_.mamba_block_num_ratio;
+  const size_t mamba_block_size = block_manager_config_.mamba_device_allocator_config.block_size;
+  if (mamba_block_num_ratio > 0.0f && mamba_block_size > 0) {
+    block_manager_config_.mamba_device_allocator_config.blocks_num =
+        static_cast<size_t>(static_cast<float>(device_blocks_num) * mamba_block_num_ratio);
+    KLLM_LOG_INFO << "Reset Mamba device block num: " << block_manager_config_.mamba_device_allocator_config.blocks_num;
+  } else {
+    block_manager_config_.mamba_device_allocator_config.blocks_num = 0;
   }
 
   return Status();

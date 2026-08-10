@@ -22,6 +22,8 @@ class CreateBlockManagerRequest : public IpcRequest {
   BlockAllocatorManagerConfig block_allocator_manager_config;
   // Optional SWA block allocator config; empty map means SWA is disabled.
   BlockAllocatorManagerConfig swa_block_allocator_manager_config;
+  // Optional Mamba block allocator config; empty map means Mamba is disabled.
+  BlockAllocatorManagerConfig mamba_block_allocator_manager_config;
 };
 
 class CreateBlockManagerResponse : public IpcResponse {
@@ -41,6 +43,7 @@ class CreateBlockManagerCallable : public IpcCallable {
 
   void SetBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager);
   void SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager);
+  void SetMambaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> mamba_block_allocator_manager);
 
   // Bound by ksana_executor bootstrap when pd_v2 is enabled. After
   // block_allocator_manager_->Initialize allocates the contiguous KV
@@ -64,6 +67,7 @@ class CreateBlockManagerCallable : public IpcCallable {
   std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager_ = nullptr;
   // Optional SWA block allocator manager; nullptr means SWA is disabled.
   std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager_ = nullptr;
+  std::shared_ptr<BlockAllocatorManagerInterface> mamba_block_allocator_manager_ = nullptr;
   std::shared_ptr<pd_v2::PdV2ConnectorInterface> pd_v2_connector_ = nullptr;
   std::shared_ptr<Environment> env_for_pd_v2_ = nullptr;
   int dp_group_id_ = 0;

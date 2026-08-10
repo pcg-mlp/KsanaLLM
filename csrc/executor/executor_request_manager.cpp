@@ -39,6 +39,7 @@ void ExecutorRequestManager::UpdateInferRequest(int64_t req_id, std::shared_ptr<
   // Transfer full swa_kv_cache_blocks (SWA blocks are always sent in full).
   executor_request.infer_request->swa_kv_cache_blocks = infer_req_patch->swa_kv_cache_blocks;
   executor_request.infer_request->swa_kv_cache_block_idx_offsets = infer_req_patch->swa_kv_cache_block_idx_offsets;
+  executor_request.infer_request->mamba_kv_cache_block_id = infer_req_patch->mamba_kv_cache_block_id;
 
   KLLM_LOG_DEBUG << "req " << req_id << " updated." << std::endl;
 }

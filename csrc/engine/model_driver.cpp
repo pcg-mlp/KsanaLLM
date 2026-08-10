@@ -129,9 +129,11 @@ Status ModelDriver::InitializeResultReporter(
 }
 
 Status ModelDriver::CreateBlockManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
-                                       const BlockAllocatorManagerConfig& swa_block_allocator_manager_config) {
+                                       const BlockAllocatorManagerConfig& swa_block_allocator_manager_config,
+                                       const BlockAllocatorManagerConfig& mamba_block_allocator_manager_config) {
   return ipc_func_wrapper_->CreateBlockAllocatorManager(block_allocator_manager_config,
-                                                        swa_block_allocator_manager_config);
+                                                        swa_block_allocator_manager_config,
+                                                        mamba_block_allocator_manager_config);
 }
 
 Status ModelDriver::CreateExecutorRuntime(const VocabInfo& vocab_info) {

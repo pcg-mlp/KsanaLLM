@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 
+#include "cache_manager/cache_layout/mamba_cache_layout.h"
 #include "configure/yaml_reader.h"
 #include "gtest/gtest.h"
 #include "loguru.hpp"
@@ -92,7 +93,8 @@ class ScheduleConfigParserTest : public ::testing::Test {
   // Pass swa_block_num_ratio < 0 to omit the key entirely.
   std::string CreateTempYamlConfigWithSwa(float swa_block_num_ratio = -1.0f,
                                           bool enable_non_contiguous_swa_mode = false,
-                                          bool has_enable_non_contiguous_swa_mode = false) {
+                                          bool has_enable_non_contiguous_swa_mode = false,
+                                          float mamba_block_num_ratio = -1.0f) {
     std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
     std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
     std::filesystem::path temp_file_path = temp_dir / filename;
@@ -120,13 +122,16 @@ class ScheduleConfigParserTest : public ::testing::Test {
     file << "  block_manager:\n";
     file << "    block_token_num: 16\n";
     file << "    reserved_device_memory_ratio: 0.01\n";
-    if (swa_block_num_ratio >= 0.0f || has_enable_non_contiguous_swa_mode) {
+    if (swa_block_num_ratio >= 0.0f || has_enable_non_contiguous_swa_mode || mamba_block_num_ratio >= 0.0f) {
       file << "  cache_manager:\n";
       if (swa_block_num_ratio >= 0.0f) {
         file << "    swa_block_num_ratio: " << swa_block_num_ratio << "\n";
       }
       if (has_enable_non_contiguous_swa_mode) {
         file << "    enable_non_contiguous_swa_mode: " << (enable_non_contiguous_swa_mode ? "true" : "false") << "\n";
+      }
+      if (mamba_block_num_ratio >= 0.0f) {
+        file << "    mamba_block_num_ratio: " << mamba_block_num_ratio << "\n";
       }
     }
     file << "model_spec:\n";
@@ -1364,6 +1369,88 @@ TEST_F(ScheduleConfigParserTest, SwaBlockNumRatioExplicitZeroCorrectedToDefault)
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_FLOAT_EQ(batch_config.swa_block_num_ratio, 0.1f)
       << "swa_block_num_ratio=0 in YAML should be corrected to the default 0.1";
+}
+
+TEST_F(ScheduleConfigParserTest, MambaBlockNumDerivedFromDeviceBlocks) {
+  // Same derivation as SWA: mamba_block_num = device_blocks_num * ratio,
+  // with the mamba pool memory cost folded into each KV block.
+  BlockManagerConfig block_config;
+  block_config.block_device_memory_ratio = 1.0f;
+  block_config.reserved_device_memory_ratio = 0.01f;
+  block_config.block_host_memory_factor = 0.0f;
+  block_config.device_allocator_config.block_size = 10;
+  block_config.device_allocator_config.block_token_num = 1;
+  block_config.host_allocator_config.block_size = 10;
+  block_config.mamba_device_allocator_config.block_size = 100;
+  parser_->SetBlockManagerConfig(block_config);
+
+  BatchSchedulerConfig batch_config;
+  batch_config.launch_block_threshold = 0;
+  batch_config.mamba_block_num_ratio = 0.5f;
+  parser_->SetBatchSchedulerConfig(batch_config);
+
+  ASSERT_TRUE(parser_->CalculateBlockNumber(/*device_free=*/1000, /*device_total=*/1000).OK());
+  ASSERT_TRUE(parser_->GetBlockManagerConfig(block_config).OK());
+  // effective_block_size = 10 + 0.5 * 100 = 60 -> device_blocks = 1000 / 60 = 16.
+  EXPECT_EQ(block_config.device_allocator_config.blocks_num, 16u);
+  EXPECT_EQ(block_config.mamba_device_allocator_config.blocks_num, 8u);
+}
+
+TEST_F(ScheduleConfigParserTest, MambaLayoutPropagatesBlockSize) {
+  class TestModelCacheLayout : public BaseModelCacheLayout {
+   public:
+    TestModelCacheLayout() {
+      RegisterBlockCacheLayout("kv-cache", std::make_shared<MambaBlockCacheLayout>(64));
+      RegisterBlockCacheLayout("mamba-state", std::make_shared<MambaBlockCacheLayout>(200));
+    }
+  };
+
+  ModelConfig model_config;
+  model_config.num_layer = 2;
+  ASSERT_TRUE(parser_->InitializeBlockManagerConfig(model_config, std::make_shared<TestModelCacheLayout>()).OK());
+
+  BlockManagerConfig block_config;
+  ASSERT_TRUE(parser_->GetBlockManagerConfig(block_config).OK());
+  EXPECT_EQ(block_config.mamba_device_allocator_config.block_size, 200u);
+}
+
+TEST_F(ScheduleConfigParserTest, MambaBlockNumRatioReadFromYaml) {
+  std::string yaml_path = CreateTempYamlConfigWithSwa(/*swa_block_num_ratio=*/-1.0f,
+                                                      /*enable_non_contiguous_swa_mode=*/false,
+                                                      /*has_enable_non_contiguous_swa_mode=*/false,
+                                                      /*mamba_block_num_ratio=*/0.25f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  BatchSchedulerConfig batch_config;
+  ASSERT_TRUE(parser_->GetBatchSchedulerConfig(batch_config).OK());
+  EXPECT_FLOAT_EQ(batch_config.mamba_block_num_ratio, 0.25f);
+}
+
+TEST_F(ScheduleConfigParserTest, NonMambaModelAllowsDisabledMambaBlockNumRatio) {
+  std::string yaml_path = CreateTempYamlConfigWithSwa(/*swa_block_num_ratio=*/-1.0f,
+                                                      /*enable_non_contiguous_swa_mode=*/false,
+                                                      /*has_enable_non_contiguous_swa_mode=*/false,
+                                                      /*mamba_block_num_ratio=*/0.0f);
+  ASSERT_FALSE(yaml_path.empty());
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(yaml_path).OK());
+  ModelConfig model_config;
+  model_config.num_key_value_heads = 1;
+
+  Status status;
+  EXPECT_NO_THROW(status = parser_->ParseScheduleConfig(yaml_reader, model_config));
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  BatchSchedulerConfig batch_config;
+  ASSERT_TRUE(parser_->GetBatchSchedulerConfig(batch_config).OK());
+  EXPECT_FLOAT_EQ(batch_config.mamba_block_num_ratio, 0.0f);
 }
 
 // max_chunked_kv_tokens 设置逻辑: 默认→max_step_token_num, 显式设置→保留, 小于 max_token_len→clamp.

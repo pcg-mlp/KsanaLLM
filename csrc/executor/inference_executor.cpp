@@ -198,6 +198,11 @@ Status InferenceExecutor::Initialize() {
     ipc_func_wrapper_->SetSwaBlockAllocatorManager(swa_block_allocator_manager_);
   }
 
+  if (model_config.use_linear_attn) {
+    mamba_block_allocator_manager_ = std::make_shared<BlockAllocatorManager>(false, memory_allocator, context_);
+    ipc_func_wrapper_->SetMambaBlockAllocatorManager(mamba_block_allocator_manager_);
+  }
+
 #ifdef ENABLE_CUDA
   // Set BlockAllocatorManager to NcclExecutorHandler for pointer resolution
   if (nccl_executor_handler_) {

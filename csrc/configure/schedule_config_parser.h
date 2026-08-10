@@ -139,6 +139,11 @@ struct BatchSchedulerConfig {
   // swa_block_num = device_block_num * swa_block_num_ratio.
   // 0.0 means SWA block allocator is disabled.
   float swa_block_num_ratio = 0.0f;
+
+  // Ratio of Mamba blocks relative to the total device block count.
+  // mamba_block_num = device_block_num * mamba_block_num_ratio (same derivation as SWA).
+  // 0.0 means Mamba block allocator is disabled.
+  float mamba_block_num_ratio = 0.1f;
 };
 
 struct AllocatorConfig {
@@ -163,6 +168,11 @@ struct BlockManagerConfig {
   // block_size is set from the "SWA-cache" layout; blocks_num is derived from
   // device_block_num * swa_block_num_ratio in CalculateBlockNumber.
   AllocatorConfig swa_device_allocator_config;
+
+  // The config of the unified Mamba state block allocator. blocks_num counts
+  // usable IDs 1..N; the executor allocation adds NULL slot 0 separately.
+  // mamba_block_num_ratio lives in BatchSchedulerConfig next to swa_block_num_ratio.
+  AllocatorConfig mamba_device_allocator_config;
 
   // The ratio of reserved device memory.
   float reserved_device_memory_ratio = 0.05;

@@ -132,8 +132,10 @@ class IpcFuncWrapper {
                                   int dp_group_id);
   // Register the executor-side SWA block allocator manager so the callable can initialize it.
   Status SetSwaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager);
+  Status SetMambaBlockAllocatorManager(std::shared_ptr<BlockAllocatorManagerInterface> mamba_block_allocator_manager);
   Status CreateBlockAllocatorManager(const BlockAllocatorManagerConfig& block_allocator_manager_config,
-                                     const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {});
+                                     const BlockAllocatorManagerConfig& swa_block_allocator_manager_config = {},
+                                     const BlockAllocatorManagerConfig& mamba_block_allocator_manager_config = {});
 
   // Engine to executor, blocking.
   Status SetExecutorRuntime(std::shared_ptr<ExecutorRuntime> executor_runtime);

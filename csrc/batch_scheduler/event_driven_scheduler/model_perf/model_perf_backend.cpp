@@ -519,7 +519,8 @@ bool ModelPerfBackend::AllocateKvBlocksForReq(const std::shared_ptr<InferRequest
     const size_t prefix_block_num = cache_manager.GetRequestStepBlockNumber(req->req_id, prefix_len);
     if (prefix_block_num > 0) {
       Status st = cache_manager.AllocateRequestBlocks(req->req_id, prefix_block_num, req->kv_cache_blocks,
-                                                      req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
+                                                      req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
+                                                      req->mamba_kv_cache_block_id);
       if (!st.OK()) {
         KLLM_LOG_ERROR << "ModelPerfBackend: failed to alloc prefix blocks for req_id=" << req->req_id
                        << ", prefix_len=" << prefix_len << ": " << st.GetMessage();
@@ -533,7 +534,8 @@ bool ModelPerfBackend::AllocateKvBlocksForReq(const std::shared_ptr<InferRequest
   const size_t total_block_num = cache_manager.GetRequestStepBlockNumber(req->req_id, total_token_len);
   if (total_block_num > 0) {
     Status st = cache_manager.AllocateRequestBlocks(req->req_id, total_block_num, req->kv_cache_blocks,
-                                                    req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
+                                                    req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
+                                                    req->mamba_kv_cache_block_id);
     if (!st.OK()) {
       KLLM_LOG_ERROR << "ModelPerfBackend: failed to alloc query blocks for req_id=" << req->req_id
                      << ", total_token_len=" << total_token_len << ": " << st.GetMessage();

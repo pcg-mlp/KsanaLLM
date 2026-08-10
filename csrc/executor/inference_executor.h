@@ -91,6 +91,7 @@ class InferenceExecutor {
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager_ = nullptr;
   // The SWA block allocator manager; nullptr when SWA is disabled.
   std::shared_ptr<BlockAllocatorManager> swa_block_allocator_manager_ = nullptr;
+  std::shared_ptr<BlockAllocatorManager> mamba_block_allocator_manager_ = nullptr;
 
   // The executor runtime object.
   std::shared_ptr<ExecutorRuntime> executor_runtime_ = nullptr;

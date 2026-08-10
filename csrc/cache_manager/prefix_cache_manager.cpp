@@ -854,7 +854,8 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
 
 Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_num, std::vector<int>& req_block_ids,
                                                  std::vector<int>& swa_req_block_ids,
-                                                 std::vector<size_t>& swa_block_idx_offsets) {
+                                                 std::vector<size_t>& swa_block_idx_offsets,
+                                                 int& mamba_kv_cache_block_id) {
   auto it = cached_requests_.find(req_id);
   if (it == cached_requests_.end()) {
     return Status(RET_RUNTIME_FAILED, FormatStr("Allocate block for req %d error, req not exist.", req_id));
@@ -925,6 +926,7 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
                      << ", req_block_num=" << cached_request->cached_blocks.size()
                      << ", swa_block_idx_offsets.size=" << swa_block_idx_offsets.size() << ", "
                      << Vector2Str(swa_block_idx_offsets);
+  mamba_kv_cache_block_id = -1;  // Prefix has no mamba support.
   return Status();
 }
 

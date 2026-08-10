@@ -208,6 +208,8 @@ class ExecutorInferRequest {
   // Mirrors InferRequest::swa_kv_cache_block_idx_offsets.
   std::vector<size_t> swa_kv_cache_block_idx_offsets;
 
+  int mamba_kv_cache_block_id = -1;
+
   // The max token number of one block.
   size_t block_token_num;
 
@@ -265,6 +267,8 @@ class InferRequestPatch {
   // global index corresponding to swa_kv_cache_blocks[i].
   // Mirrors InferRequest::swa_kv_cache_block_idx_offsets.
   std::vector<size_t> swa_kv_cache_block_idx_offsets;
+
+  int mamba_kv_cache_block_id = -1;
 
   // context decode or decode stage.
   InferStage infer_stage = InferStage::kContext;

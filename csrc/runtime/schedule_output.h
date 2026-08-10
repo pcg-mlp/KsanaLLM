@@ -31,6 +31,7 @@ struct InferRequestSerializationSnapshot {
   std::vector<int> kv_cache_blocks;
   std::vector<int> swa_kv_cache_blocks;
   std::vector<size_t> swa_kv_cache_block_idx_offsets;
+  int mamba_kv_cache_block_id = -1;
   int prefix_cache_len = 0;
   int step = 0;
   // patch_transfer 由 ModelDriver::SetInferRequestTransferMode 决策; 相邻 schedule_id 会覆写 req->patch_transfer,
@@ -90,6 +91,7 @@ struct ScheduleOutput {
       snap.kv_cache_blocks = req->kv_cache_blocks;
       snap.swa_kv_cache_blocks = req->swa_kv_cache_blocks;
       snap.swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+      snap.mamba_kv_cache_block_id = req->mamba_kv_cache_block_id;
       snap.prefix_cache_len = req->prefix_cache_len;
       snap.step = req->step;
     }

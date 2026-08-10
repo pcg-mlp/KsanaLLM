@@ -47,7 +47,7 @@ class MockCacheManager : public CacheManagerInterface {
   MOCK_METHOD(Status, ConfirmRemoteCacheLoadingResult,
               (int64_t, const std::vector<int>&, size_t, const std::vector<size_t>&), (override));
   MOCK_METHOD(Status, AllocateRequestBlocks,
-              (int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&), (override));
+              (int64_t, size_t, std::vector<int>&, std::vector<int>&, std::vector<size_t>&, int&), (override));
   MOCK_METHOD(void, UpdateFlexibleCache,
               (int64_t, const std::vector<int>&, int, std::vector<FlexibleCachedCopyTask>&, size_t&), (override));
   MOCK_METHOD(Status, UpdateRequestTokens,
@@ -88,7 +88,7 @@ class QueryHookTest : public ::testing::Test {
             GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
     ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
-    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
 
     // 同步模式的 fetcher（无 IPC）
@@ -124,7 +124,7 @@ TEST_F(QueryHookTest, SyncModeProcessReturnsContinue) {
 }
 
 TEST_F(QueryHookTest, BlockAllocFailReturnsContinue) {
-  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "out of blocks")));
 
   auto req = MakeHookTestRequest(200);
@@ -239,7 +239,7 @@ class QueryHookPdDisaggPrefillTest : public ::testing::Test {
             GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
     ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
-    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
 
     fetcher_ = std::make_shared<GlobalCacheFetcher>(1, nullptr, /*role=*/"pd_v2_prefill");
@@ -323,7 +323,7 @@ class QueryHookDeferTest : public ::testing::Test {
             GetRequestPrefixBlockNumber(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
     ON_CALL(*mock_cm_, GetRequestStepBlockNumber(testing::_, testing::_, testing::_)).WillByDefault(testing::Return(2));
-    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+    ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
         .WillByDefault(testing::Return(Status()));
     // Plenty of usable blocks by default; individual tests lower this to force a defer.
     ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(1000));
@@ -448,7 +448,7 @@ TEST_F(QueryHookDeferTest, UpdateAsyncResultRetryStillFailsRequeues) {
 
 TEST_F(QueryHookDeferTest, AllocFailureDefersInDeferMode) {
   // Block-usable check passes, but AllocateRequestBlocks fails -> deferred (not fallback).
-  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "oom")));
   auto result = hook_->Process({MakeHookTestRequest(6000)}, context_);
   EXPECT_EQ(result[6000].action, NextStepAction::kWaitAsyncResult);

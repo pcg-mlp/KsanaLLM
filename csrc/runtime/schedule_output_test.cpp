@@ -98,6 +98,7 @@ std::shared_ptr<InferRequest> BuildInferRequest(std::shared_ptr<Request>& reques
   infer_req->step = 5;
   infer_req->kv_cached_token_num = 2;
   infer_req->kv_cache_blocks = {11, 13, 21};
+  infer_req->mamba_kv_cache_block_id = 17;
   infer_req->block_token_num = 16;
   infer_req->logits_offset = 7;
   infer_req->prefix_cache_len = 9;
@@ -210,6 +211,7 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->forwarding_tokens, full_req->forwarding_tokens);
   EXPECT_EQ(exec_req->sampling_result_tokens, full_req->sampling_result_tokens);
   EXPECT_EQ(exec_req->kv_cache_blocks, full_req->kv_cache_blocks);
+  EXPECT_EQ(exec_req->mamba_kv_cache_block_id, full_req->mamba_kv_cache_block_id);
   EXPECT_EQ(exec_req->block_token_num, full_req->block_token_num);
   EXPECT_EQ(exec_req->logits_offset, full_req->logits_offset);
   EXPECT_EQ(exec_req->prefix_cache_len, full_req->prefix_cache_len);
@@ -234,6 +236,7 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(patch->kv_cached_token_num, patch_req->kv_cached_token_num);
   EXPECT_EQ(patch->prefix_cache_len, patch_req->prefix_cache_len);
   EXPECT_EQ(patch->delta_kv_cache_blocks, patch_req->kv_cache_blocks);
+  EXPECT_EQ(patch->mamba_kv_cache_block_id, patch_req->mamba_kv_cache_block_id);
   EXPECT_EQ(patch->kv_cache_blocks_offset, 0u);
   EXPECT_EQ(patch->infer_stage, patch_req->infer_stage);
   EXPECT_EQ(patch->step, patch_req->step);
@@ -335,6 +338,21 @@ TEST(ScheduleOutputTest, LaunchScheduleOutputUsesPlaceholderWhenInflight) {
   EXPECT_EQ(req->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
   EXPECT_EQ(output.req_serialization_snapshots[req->req_id].forwarding_tokens.back(),
             InferRequest::kFastPathPlaceholderTokenId);
+}
+
+TEST(ScheduleOutputTest, LaunchSnapshotsMambaKvCacheBlockId) {
+  auto fixture = BuildDecodeReadyInferRequest(/*req_id=*/2012);
+  auto& req = fixture.infer_req;
+  req->mamba_kv_cache_block_id = 9;
+  ScheduleOutput output;
+  output.running_reqs = {req};
+
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+
+  const auto& snapshot = output.req_serialization_snapshots.at(req->req_id);
+  EXPECT_EQ(snapshot.mamba_kv_cache_block_id, 9);
 }
 
 // 多 req 各自独立 snapshot：后续 launch 只覆盖对应 req_id 的条目。

@@ -95,6 +95,7 @@ void ModelBuilder::BuildForwardRequestFromInferRequest(ForwardRequest& forward_r
   forward_req.attn_dp_group_id = req_ptr->attn_dp_group_id;
   forward_req.block_allocator_manager = block_allocator_manager_;
   forward_req.swa_kv_cache_block_idx_offsets = req_ptr->swa_kv_cache_block_idx_offsets;
+  forward_req.mamba_kv_cache_block_id = req_ptr->mamba_kv_cache_block_id;
 
   // Skip all kv blocks that not belong to current db group.
   if (attn_dp_group_id == req_ptr->attn_dp_group_id) {

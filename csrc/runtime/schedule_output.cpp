@@ -380,6 +380,8 @@ static Status SerializeInferRequests(
       SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
     }
 
+    SerializePod<int>(snap ? snap->mamba_kv_cache_block_id : req->mamba_kv_cache_block_id, ptr, offset);
+
     // block_token_num
     SerializePod<size_t>(req->block_token_num, ptr, offset);
 
@@ -536,6 +538,8 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // swa_kv_cache_block_idx_offsets
     DeserializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
 
+    req->mamba_kv_cache_block_id = DeserializePod<int>(ptr, offset);
+
     // block_token_num
     req->block_token_num = DeserializePod<size_t>(ptr, offset);
 
@@ -627,6 +631,8 @@ static Status SerializeInferRequestPatches(const std::vector<std::shared_ptr<Inf
     // swa_kv_cache_block_idx_offsets
     SerializeVector<size_t>(req->swa_kv_cache_block_idx_offsets, ptr, offset);
 
+    SerializePod<int>(req->mamba_kv_cache_block_id, ptr, offset);
+
     // infer_stage
     SerializeEnum<InferStage>(req->infer_stage, ptr, offset);
 
@@ -680,6 +686,8 @@ static Status DeserializeInferRequestPatches(std::vector<std::shared_ptr<InferRe
 
     // swa_kv_cache_block_idx_offsets
     DeserializeVector<size_t>(req_patch->swa_kv_cache_block_idx_offsets, ptr, offset);
+
+    req_patch->mamba_kv_cache_block_id = DeserializePod<int>(ptr, offset);
 
     // infer_stage
     req_patch->infer_stage = DeserializeEnum<InferStage>(ptr, offset);
@@ -754,6 +762,7 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
         patch_req->delta_kv_cache_blocks = snap.kv_cache_blocks;
         patch_req->swa_kv_cache_blocks = snap.swa_kv_cache_blocks;
         patch_req->swa_kv_cache_block_idx_offsets = snap.swa_kv_cache_block_idx_offsets;
+        patch_req->mamba_kv_cache_block_id = snap.mamba_kv_cache_block_id;
         patch_req->prefix_cache_len = snap.prefix_cache_len;
         patch_req->step = snap.step;
       } else {
@@ -765,6 +774,7 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
         patch_req->delta_kv_cache_blocks = req->kv_cache_blocks;
         patch_req->swa_kv_cache_blocks = req->swa_kv_cache_blocks;
         patch_req->swa_kv_cache_block_idx_offsets = req->swa_kv_cache_block_idx_offsets;
+        patch_req->mamba_kv_cache_block_id = req->mamba_kv_cache_block_id;
       }
 
       patch_running_reqs.push_back(patch_req);

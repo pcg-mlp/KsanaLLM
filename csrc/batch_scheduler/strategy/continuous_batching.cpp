@@ -599,7 +599,8 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
 
     Status status =
         cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
-                                              req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
+                                              req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
+                                              req->mamba_kv_cache_block_id);
     if (status.OK()) {
       DetermineDraftNum(req);
       batch_state_->schedule_output->running_reqs.push_back(req);
@@ -854,7 +855,8 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
 
       Status status =
           cache_manager_->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
-                                                req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
+                                                req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
+                                                req->mamba_kv_cache_block_id);
       if (status.OK()) {
         step_not_kv_cached_token_num += seq_token_num - shared_token_num;
 

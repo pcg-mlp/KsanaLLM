@@ -102,6 +102,8 @@ struct ForwardRequest {
   // 0 indicates SWA pool is not enabled.
   int64_t swa_pool_block_num = 0;
 
+  int mamba_kv_cache_block_id = -1;
+
   // The length of the flexible cache, indicating the number of elements stored in the flexible cache for potential
   // reuse in subsequent computations.
   int flexible_cache_len = 0;

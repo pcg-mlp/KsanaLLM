@@ -279,6 +279,23 @@ Status InferenceEngine::Initialize() {
     }
   }
 
+  const size_t mamba_block_num = block_manager_config.mamba_device_allocator_config.blocks_num;
+  const size_t mamba_block_size = block_manager_config.mamba_device_allocator_config.block_size;
+  BlockAllocatorManagerConfig mamba_block_allocator_manager_config;
+  if (mamba_block_num > 0 && mamba_block_size > 0) {
+    KLLM_LOG_INFO << "InferenceEngine create Mamba block allocator group, mamba_block_num=" << mamba_block_num
+                  << ", mamba_block_size=" << mamba_block_size << ", main_block_num=" << main_block_num
+                  << ", main_block_size=" << main_block_size;
+    for (size_t dp_id = 0; dp_id < context_->global->GetAttentionDataParallelSize(); ++dp_id) {
+      BlockAllocatorGroupConfig mamba_dp_group_config;
+      mamba_dp_group_config.devices = env_->GetDataParaGroupDevices(dp_id);
+      mamba_dp_group_config.device_block_num = mamba_block_num;
+      mamba_dp_group_config.host_block_num = 0;
+      mamba_dp_group_config.block_size = mamba_block_size;
+      mamba_block_allocator_manager_config[dp_id] = mamba_dp_group_config;
+    }
+  }
+
   // Create cache manager.
   if (!context_->global->IsDistributedWorker()) {
     std::shared_ptr<MemoryAllocatorInterface> memory_allocator_ = std::make_shared<MemoryAllocator>();
@@ -289,6 +306,12 @@ Status InferenceEngine::Initialize() {
     if (!swa_block_allocator_manager_config.empty()) {
       swa_block_allocator_manager = std::make_unique<BlockAllocatorManager>(true, swa_block_allocator_manager_config,
                                                                             memory_allocator_, context_);
+    }
+
+    std::unique_ptr<BlockAllocatorManager> mamba_block_allocator_manager;
+    if (!mamba_block_allocator_manager_config.empty()) {
+      mamba_block_allocator_manager = std::make_unique<BlockAllocatorManager>(
+          true, mamba_block_allocator_manager_config, memory_allocator_, context_);
     }
 
     CacheManagerConfig cache_manager_config;
@@ -302,14 +325,20 @@ Status InferenceEngine::Initialize() {
       if (swa_block_allocator_manager) {
         swa_block_allocator_group = swa_block_allocator_manager->GetBlockAllocatorGroup(dp_id);
       }
+      std::shared_ptr<BlockAllocatorGroupInterface> mamba_block_allocator_group;
+      if (mamba_block_allocator_manager) {
+        mamba_block_allocator_group = mamba_block_allocator_manager->GetBlockAllocatorGroup(dp_id);
+      }
       cache_managers_.emplace_back(CacheManagerFactory::CreateCacheManager(cache_manager_config, block_allocator_group,
-                                                                           swa_block_allocator_group));
+                                                                           swa_block_allocator_group,
+                                                                           mamba_block_allocator_group));
     }
   }
 
-  // Create block manager on executors (KV + optional SWA).
+  // Create block manager on executors (KV + optional SWA + mamba).
   STATUS_CHECK_RETURN(
-      model_driver_->CreateBlockManager(block_allocator_manager_config, swa_block_allocator_manager_config));
+      model_driver_->CreateBlockManager(block_allocator_manager_config, swa_block_allocator_manager_config,
+                                        mamba_block_allocator_manager_config));
 
   if (!context_->global->IsStandalone()) {
     distributed_control_coordinator_->Barrier();

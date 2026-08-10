@@ -177,7 +177,8 @@ bool GlobalCacheQueryHook::PrepareRequest(InferRequestPtr& req, std::shared_ptr<
   }
 
   Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
-                                                       req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets);
+                                                       req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
+                                                       req->mamba_kv_cache_block_id);
   if (!status.OK()) {
     KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: AllocateRequestBlocks failed for req_id=" << req->req_id
                        << ", msg=" << status.GetMessage();

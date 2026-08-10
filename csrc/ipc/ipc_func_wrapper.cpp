@@ -620,9 +620,18 @@ Status IpcFuncWrapper::SetSwaBlockAllocatorManager(
   return Status();
 }
 
+Status IpcFuncWrapper::SetMambaBlockAllocatorManager(
+    std::shared_ptr<BlockAllocatorManagerInterface> mamba_block_allocator_manager) {
+  auto block_mgr_callable =
+      ipc_func_proxy_->GetSharedIpcFuncCallable<CreateBlockManagerCallable>(IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
+  block_mgr_callable->SetMambaBlockAllocatorManager(mamba_block_allocator_manager);
+  return Status();
+}
+
 Status IpcFuncWrapper::CreateBlockAllocatorManager(
     const BlockAllocatorManagerConfig& block_allocator_manager_config,
-    const BlockAllocatorManagerConfig& swa_block_allocator_manager_config) {
+    const BlockAllocatorManagerConfig& swa_block_allocator_manager_config,
+    const BlockAllocatorManagerConfig& mamba_block_allocator_manager_config) {
   auto callback =
       ipc_func_proxy_->GetSharedIpcFuncCallback<CreateBlockManagerCallback>(IPC_FUNC_CREATE_BLOCK_ALLOCATOR);
   callback->Reset(executor_num_);
@@ -632,6 +641,7 @@ Status IpcFuncWrapper::CreateBlockAllocatorManager(
   std::shared_ptr<CreateBlockManagerRequest> request = std::make_shared<CreateBlockManagerRequest>();
   request->block_allocator_manager_config = block_allocator_manager_config;
   request->swa_block_allocator_manager_config = swa_block_allocator_manager_config;
+  request->mamba_block_allocator_manager_config = mamba_block_allocator_manager_config;
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
 
   callback->Wait();
