@@ -19,6 +19,7 @@
 #include "models/deepseek_v3/deepseek_v3_model.h"
 #include "models/deepseek_v4/deepseek_v4_model.h"
 #include "models/glm4_moe/glm4_moe_model.h"
+#include "models/gpt_moe/gpt_moe_model.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "models/internlm2/internlm2_model.h"
 #include "models/internlmxcomposer2/internlmxcomposer2_model.h"
@@ -80,6 +81,9 @@ void ModelInstance::Load() {
     type = "chatglm";
     CreateModelInstance<ChatglmModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                       block_cache_layout_);
+  } else if (unified_model_type.find("gpt_moe") != std::string::npos) {
+    CreateModelInstance<GptMoeModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
+                                     block_cache_layout_);
   } else if (unified_model_type.find("internlm2") != std::string::npos ||
              unified_model_type.find("internvl_chat") != std::string::npos) {
     type = "internlm2";

@@ -137,7 +137,7 @@ TEST_F(LayernormTest, ForwardWithBias) {
     fake_weight->CreateWeight(bias_name, {cfg.hidden_size}, cfg.dtype, MemoryLocation::LOCATION_DEVICE);
 
     auto ctx = CreateCtx(fake_weight, cfg.dtype);
-    Layernorm layernorm(weight_name, model_config.layernorm_eps, ctx, bias_name);
+    Layernorm layernorm(weight_name, model_config.layernorm_eps, ctx, "layernorm", bias_name);
 
     Tensor input(MemoryLocation::LOCATION_DEVICE, cfg.dtype, {cfg.token_num, cfg.hidden_size});
     FillInputData(input);

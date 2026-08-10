@@ -15,6 +15,7 @@
 #include "models/deepseek_v3/deepseek_v3_weight_loader.h"
 #include "models/deepseek_v4/deepseek_v4_weight_loader.h"
 #include "models/glm4_moe/glm4_moe_weight_loader.h"
+#include "models/gpt_moe/gpt_moe_weight_loader.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_weight_loader.h"
 #include "models/internlm2/new_internlm2_weight_loader.h"
 #include "models/internlmxcomposer2/new_internlmxcomposer2_weight_loader.h"
@@ -90,6 +91,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_KIMI_K3: {
       model_weight_loader = std::make_shared<DeepSeekV3WeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_GPT_MOE: {
+      model_weight_loader = std::make_shared<GptMoeWeightLoader>(model_config, env, context);
       break;
     }
     default: {

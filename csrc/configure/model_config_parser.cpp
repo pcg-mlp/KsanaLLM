@@ -24,6 +24,7 @@
 #include "models/common_moe/moe_config.h"
 #include "models/deepseek_v3/deepseek_v3_config.h"
 #include "models/deepseek_v4/deepseek_v4_config.h"
+#include "models/gpt_moe/gpt_moe_config.h"
 #include "models/kimi_k3/kimi_k3_config.h"
 #include "utils/gguf_file_utils.h"
 #include "utils/logger.h"
@@ -502,6 +503,10 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
 
     if (model_config.type == "chatglm") {
       PrepareChatglmAttributes(config_json, model_config);
+    } else if (model_config.type == "openai-gpt") {
+      // For gpt_moe, we use the same config as huggingface openai-gpt,
+      model_config.type = "gpt_moe";
+      PrepareGPTMoEAttributes(config_json, model_config);
     } else if (model_config.type == "qwen2_moe" || model_config.type == "qwen3_moe") {
       PrepareQwenMoeAttributes(config_json, model_config);
       if (model_config.type == "qwen3_moe") {

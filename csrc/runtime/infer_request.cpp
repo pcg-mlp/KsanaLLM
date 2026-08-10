@@ -456,7 +456,8 @@ void InferRequest::LaunchPlanningTask(bool use_placeholder_for_last_token) {
       const size_t draft_token_num = all_draft_tokens.size();
       forwarding_tokens.insert(forwarding_tokens.end(), all_draft_tokens.begin(), all_draft_tokens.end());
       new_inflight.workload.draft_token_num = draft_token_num;
-      new_inflight.workload.sampling_token_num = kStepGenerateTokenNum + draft_token_num;
+      new_inflight.workload.sampling_token_num =
+          std::max(kStepGenerateTokenNum + draft_token_num, logits_custom_length);
     }
   } else {
     auto merged_draft_tokens = draft_tokens.GetDraftTokens();

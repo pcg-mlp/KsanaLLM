@@ -62,6 +62,8 @@ struct MoeLayerParameters : public BaseLayerParameters {
   // SiTU activation params (Kimi K3): when situ_beta > 0, SiTU replaces SwiGLU.
   float situ_beta{0.0f};
   float situ_linear_beta{0.0f};
+  // Activation function for MoE experts: "swiglu" (default) or "gelu".
+  std::string activation_function{"swiglu"};
 
   std::string ToString() const {
     return fmt::format(
@@ -73,12 +75,13 @@ struct MoeLayerParameters : public BaseLayerParameters {
         "use_e_score_correction_bias:{}, enable_full_shared_expert:{}, "
         "fp8_weight_dtype:{}, int_weight_dtype:{}, group_size:{}, "
         "apply_weight:{}, swiglu_limit:{}, num_hash_layers:{}, "
-        "vocab_size:{}, situ_beta:{}, situ_linear_beta:{}",
+        "vocab_size:{}, situ_beta:{}, situ_linear_beta:{}, "
+        "activation_function:{}",
         static_cast<int>(moe_scale_norm_mode), max_token_num, layer_idx, expert_num_per_node, expert_hidden_size,
         expert_inter_size, expert_topk, tp_size, use_vllm_moe, num_expert_group, expert_groups_topk, scoring_func,
         topk_method, norm_topk_prob, routed_scaling_factor, use_e_score_correction_bias, enable_full_shared_expert,
         static_cast<int>(fp8_weight_dtype), static_cast<int>(int_weight_dtype), group_size, apply_weight, swiglu_limit,
-        num_hash_layers, vocab_size, situ_beta, situ_linear_beta);
+        num_hash_layers, vocab_size, situ_beta, situ_linear_beta, activation_function);
   }
 };
 

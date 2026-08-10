@@ -72,7 +72,6 @@ struct AttentionCreationConfig {
 
 struct LayernormCreationConfig {
   float layernorm_eps;
-  std::string activation_function;
 };
 
 // Temp, remove later

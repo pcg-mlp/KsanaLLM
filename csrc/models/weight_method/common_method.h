@@ -52,6 +52,9 @@ class CommonMethod {
   Status process_attn_qkv_bias(std::unordered_map<std::string, Tensor>& device_model_weights,
                                const std::string& weight_prefix_name, int dev_rank);
 
+  Status process_attn_fused_qkv_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                     const std::string& weight_prefix_name, int dev_rank);
+
   Status process_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                   const std::string& weight_prefix_name, int dev_rank);
 

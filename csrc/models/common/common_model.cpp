@@ -125,7 +125,6 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
 
   ModelCreationConfig model_creation_config;
   model_creation_config.layernorm_config.layernorm_eps = model_config_.layernorm_eps;
-  model_creation_config.layernorm_config.activation_function = model_config_.activation_function;
 
   // Flash Attention requires the input shape to match the actual token length.
   // When dealing with prefix_cache or speculative decoding, it is necessary to
@@ -155,7 +154,8 @@ void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::sha
                                         model_creation_config.attn_config.model_config.quant_config.backend);
     if (model_run_config_.layernorm_position == LayerNormPosition::PRE_NORM) {
       lm_head_prenorm_ =
-          std::make_shared<Layernorm>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_);
+          std::make_shared<Layernorm>("model.norm.weight", model_config_.layernorm_eps, layer_creation_context_,
+                                      model_run_config_.norm_type == NormType::RMSNORM ? "rmsnorm" : "layernorm");
     }
   }
 

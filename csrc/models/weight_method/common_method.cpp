@@ -133,6 +133,13 @@ Status CommonMethod::process_attn_qkv_bias(std::unordered_map<std::string, Tenso
   return Status();
 }
 
+Status CommonMethod::process_attn_fused_qkv_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                                 const std::string& weight_prefix_name, int dev_rank) {
+  const std::string weight_name = weight_prefix_name + "weight";
+  common_weight_loader_->Permute2D(device_model_weights.at(weight_name), dev_rank);
+  return Status();
+}
+
 Status CommonMethod::process_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                               const std::string& weight_prefix_name, int dev_rank) {
   const std::string gate_proj_name = weight_prefix_name;

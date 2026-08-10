@@ -13,7 +13,7 @@ class Layernorm {
  public:
   // Disable a default constructor
   Layernorm(const std::string& weight_name, float layernorm_eps, const LayerCreationContext& creation_context,
-            const std::string& weight_bias_name = "");
+            const std::string& norm_type_str = "rmsnorm", const std::string& weight_bias_name = "");
 
   // Constructor with two weights for parallel norm.
   Layernorm(const std::string& weight_name, const std::string& weight2_name, float layernorm_eps,

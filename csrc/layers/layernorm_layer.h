@@ -47,6 +47,9 @@ class LayernormLayer : public BaseLayer {
   int workspace_block_id_{-1};
   size_t workspace_size_{0ul};
 
+ private:
+  NormType norm_type_ = NormType::RMSNORM;
+
 #ifdef ENABLE_ACL
   llm_kernels::utils::ATBOperationExecutor atb_op_executor_;
 #endif  // ENABLE_ACL

@@ -255,7 +255,7 @@ __global__ void InvokeAddBiasResLayerNormOpt2Kernel(T* normed_output, T* output,
   }
 }
 
-template <typename T, bool IS_OUTPUT, bool IS_BIAS, int32_t UNROLL_FACTOR, int32_t RESIDUAL_NUM>
+template <typename T, bool IS_OUTPUT, bool IS_BIAS, int32_t UNROLL_FACTOR, int32_t RESIDUAL_NUM, bool IS_BETA>
 void DispatchAddBiasResidualLayerNormOptWithOptVersion(T* norm_output, T* output, const T* input, const T* bias,
                                                        const T* residual1, const T* residual2, const T* gamma,
                                                        const T* beta, float layernorm_eps, int32_t m, int32_t half_n,
@@ -267,25 +267,43 @@ void DispatchAddBiasResidualLayerNormOptWithOptVersion(T* norm_output, T* output
   if (opt_version == 1) {
     if (maxbytes >= (48 << 10)) {
       CHECK_NVIDIA_CUDA_ERROR(cudaFuncSetAttribute(
-          InvokeAddBiasResLayerNormOptKernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>,
+          InvokeAddBiasResLayerNormOptKernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, IS_BETA, UNROLL_FACTOR>,
           cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes));
     }
-    InvokeAddBiasResLayerNormOptKernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>
+    InvokeAddBiasResLayerNormOptKernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, IS_BETA, UNROLL_FACTOR>
         <<<grid, block, maxbytes, stream>>>(norm_output, output, input, bias, residual1, residual2, gamma, beta,
                                             layernorm_eps, m, half_n, scale_inter, scale_out, scale, dynamic_scale,
                                             int8_mode);
   } else if (opt_version == 2) {
     if (maxbytes >= (48 << 10)) {
       CHECK_NVIDIA_CUDA_ERROR(cudaFuncSetAttribute(
-          InvokeAddBiasResLayerNormOpt2Kernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>,
+          InvokeAddBiasResLayerNormOpt2Kernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, IS_BETA, UNROLL_FACTOR>,
           cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes));
     }
-    InvokeAddBiasResLayerNormOpt2Kernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>
+    InvokeAddBiasResLayerNormOpt2Kernel<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, IS_BETA, UNROLL_FACTOR>
         <<<grid, block, maxbytes, stream>>>(norm_output, output, input, bias, residual1, residual2, gamma, beta,
                                             layernorm_eps, m, half_n, scale_inter, scale_out, scale, dynamic_scale,
                                             int8_mode);
   } else {
     throw std::runtime_error("opt_num must be 1 or 2");
+  }
+}
+
+template <typename T, bool IS_OUTPUT, bool IS_BIAS, int32_t UNROLL_FACTOR, int32_t RESIDUAL_NUM>
+void DispatchAddBiasResidualLayerNormOptWithBeta(T* norm_output, T* output, const T* input, const T* bias,
+                                                 const T* residual1, const T* residual2, const T* gamma, const T* beta,
+                                                 float layernorm_eps, int32_t m, int32_t half_n,
+                                                 const float* scale_inter, const float* scale_out, const float* scale,
+                                                 float* dynamic_scale, int32_t int8_mode, dim3 grid, dim3 block,
+                                                 cudaStream_t stream, int32_t opt_version) {
+  if (beta != nullptr) {
+    DispatchAddBiasResidualLayerNormOptWithOptVersion<T, IS_OUTPUT, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM, true>(
+        norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
+        scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version);
+  } else {
+    DispatchAddBiasResidualLayerNormOptWithOptVersion<T, IS_OUTPUT, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM, false>(
+        norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
+        scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version);
   }
 }
 
@@ -298,18 +316,18 @@ void DispatchAddBiasResidualLayerNormOptWithOutputFlag(T* norm_output, T* output
                                                        dim3 grid, dim3 block, cudaStream_t stream, int32_t opt_version,
                                                        bool is_output) {
   if (is_output) {
-    DispatchAddBiasResidualLayerNormOptWithOptVersion<T, true, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
+    DispatchAddBiasResidualLayerNormOptWithBeta<T, true, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
         norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
         scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version);
   } else {
-    DispatchAddBiasResidualLayerNormOptWithOptVersion<T, false, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
+    DispatchAddBiasResidualLayerNormOptWithBeta<T, false, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
         norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
         scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version);
   }
 }
 
 template <typename T, int32_t UNROLL_FACTOR, int32_t RESIDUAL_NUM>
-void dispatchAddBiasResidualLayerNormOptWithBias(T* norm_output, T* output, const T* input, const T* bias,
+void DispatchAddBiasResidualLayerNormOptWithBias(T* norm_output, T* output, const T* input, const T* bias,
                                                  const T* residual1, const T* residual2, const T* gamma, const T* beta,
                                                  float layernorm_eps, int32_t m, int32_t half_n,
                                                  const float* scale_inter, const float* scale_out, const float* scale,
@@ -335,11 +353,11 @@ void DispatchAddBiasResidualLayerNormOptWithResNum(T* norm_output, T* output, co
                                                    cudaStream_t stream, int32_t opt_version, bool is_output,
                                                    int32_t residual_num) {
   if (residual_num == 1) {
-    dispatchAddBiasResidualLayerNormOptWithBias<T, UNROLL_FACTOR, 1>(
+    DispatchAddBiasResidualLayerNormOptWithBias<T, UNROLL_FACTOR, 1>(
         norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
         scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version, is_output);
   } else if (residual_num == 2) {
-    dispatchAddBiasResidualLayerNormOptWithBias<T, UNROLL_FACTOR, 2>(
+    DispatchAddBiasResidualLayerNormOptWithBias<T, UNROLL_FACTOR, 2>(
         norm_output, output, input, bias, residual1, residual2, gamma, beta, layernorm_eps, m, half_n, scale_inter,
         scale_out, scale, dynamic_scale, int8_mode, grid, block, stream, opt_version, is_output);
   } else {

@@ -332,6 +332,10 @@ class LLMService:
         """
         try:
             req_ctx = self.get_trace_context(request)
+            # forward 一次可携带多个子推理请求 (batch)，而 HTTP `request-id` header 是单值。
+            # 若透传/自动生成后原样交给 C++，Request ctor 会让 batch 内所有 sub 共享同一 req_id。
+            # 此处 pop 掉 request-id，让 C++ IdGenerator 为每个 sub 独立分配。
+            req_ctx.pop("request-id", None)
             request_bytes = await request.body()
             status, response_bytes = await self.model.forward(request_bytes, req_ctx)
             if not status.OK() or response_bytes is None:

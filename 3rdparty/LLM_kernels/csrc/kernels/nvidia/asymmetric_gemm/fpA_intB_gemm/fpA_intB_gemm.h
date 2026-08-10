@@ -19,14 +19,15 @@
 
 #include <cuda_runtime_api.h>
 #include <vector>
+
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #include "csrc/kernels/nvidia/cutlass_extensions/weight_only_quant_op.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/common.h"
 
 namespace llm_kernels {
 namespace nvidia {
 
-// TRT Activation Type does not have Gelu or Silu
-enum class ActivationType { Gelu, Relu, Silu, Identity, InvalidType };
+using llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels::ActivationType;
 
 /*
   This runner only supports:

@@ -17,8 +17,8 @@
 #include "kernels/nvidia/flash_attn_cpp_wrapper.h"
 #include "utils/singleton.h"
 
-#include "kernels/nvidia/triton_wrapper.h"
 #include "kernels/nvidia/fused_moe_tuned_config.h"
+#include "kernels/nvidia/triton_wrapper.h"
 
 #include "csrc/kernels/nvidia/activation/activation.h"
 #include "csrc/kernels/nvidia/add/add.h"
@@ -208,15 +208,17 @@ INVOKE_MOE_WNA16_GEMM(__nv_bfloat16);
 template <typename T, typename WT, typename OT>
 void GetMoeGemmWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
                              size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes,
-                             std::vector<size_t>& workspace_sizes) {
+                             std::vector<size_t>& workspace_sizes,
+                             llm_kernels::nvidia::ActivationType activation_type) {
   auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T, WT, OT>();
   moe_gemm.GetWorkspaceSize(token_num, expert_num, expert_hidden_size, expert_inter_size, expert_topk, tp_size, rank,
-                            use_lora, ws_bytes, workspace_sizes);
+                            use_lora, ws_bytes, workspace_sizes, activation_type);
 }
 #define GET_MOE_GEMM_WORKSPACE_SIZE(T, WT, OT)                                                                      \
   template void GetMoeGemmWorkspaceSize<T, WT, OT>(                                                                 \
       size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size, size_t expert_topk, \
-      int tp_size, int rank, bool use_lora, size_t& ws_bytes, std::vector<size_t>& workspace_sizes)
+      int tp_size, int rank, bool use_lora, size_t& ws_bytes, std::vector<size_t>& workspace_sizes,                 \
+      llm_kernels::nvidia::ActivationType activation_type)
 GET_MOE_GEMM_WORKSPACE_SIZE(float, float, float);
 GET_MOE_GEMM_WORKSPACE_SIZE(half, half, half);
 #ifdef ENABLE_FP8
@@ -255,7 +257,8 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
                           bool use_vllm_moe_, uint32_t num_expert_group_, uint32_t expert_groups_topk_,
                           const std::string& scoring_func_, const std::string& topk_method_, bool norm_topk_prob_,
                           float routed_scaling_factor_, bool use_e_score_correction_bias_, cudaStream_t stream,
-                          bool is_fp8, void const* scale1, void const* scale2, void const* scale3, bool apply_weight) {
+                          bool is_fp8, void const* scale1, void const* scale2, void const* scale3, bool apply_weight,
+                          llm_kernels::nvidia::ActivationType activation_type) {
   auto origin_options = torch::TensorOptions().device(torch::kCUDA, rank).dtype(GetTorchDataType<OT>());
   torch::Tensor gating_tensor = torch::from_blob(
       gating_output, {static_cast<int64_t>(num_rows), static_cast<int64_t>(num_experts)}, origin_options);
@@ -275,7 +278,7 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
                 hidden_size, inter_size, num_experts, topk, workspace_sizes, workspace_ptr, final_output,
                 token_topk_final_scales, expanded_source_row_to_expanded_dest_row, expert_for_source_row, tp_size, rank,
                 use_lora, best_config_index, tactics, NT, stream, is_fp8, scale1, scale2, scale3,
-                custom_routing_function, apply_weight);
+                custom_routing_function, apply_weight, activation_type);
 }
 
 #define INVOKE_MOE_CUTLASS_GEMM(T, WT, OT, NT)                                                                         \
@@ -289,8 +292,7 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
       bool use_vllm_moe_, uint32_t num_expert_group_, uint32_t expert_groups_topk_, const std::string& scoring_func_,  \
       const std::string& topk_method_, bool norm_topk_prob_, float routed_scaling_factor_,                             \
       bool use_e_score_correction_bias_, cudaStream_t stream, bool is_fp8, void const* scale1, void const* scale2,     \
-      void const* scale3, bool apply_weight)
-
+      void const* scale3, bool apply_weight, llm_kernels::nvidia::ActivationType activation_type)
 INVOKE_MOE_CUTLASS_GEMM(float, float, float, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
 INVOKE_MOE_CUTLASS_GEMM(float, float, float, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
 INVOKE_MOE_CUTLASS_GEMM(half, half, half, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
@@ -300,7 +302,6 @@ INVOKE_MOE_CUTLASS_GEMM(__nv_fp8_e4m3, __nv_fp8_e4m3, half, llm_kernels::nvidia:
 INVOKE_MOE_CUTLASS_GEMM(__nv_fp8_e4m3, __nv_fp8_e4m3, half,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE);
 #endif
-
 INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16,
                         llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE);
 INVOKE_MOE_CUTLASS_GEMM(__nv_bfloat16, __nv_bfloat16, __nv_bfloat16,
@@ -332,8 +333,7 @@ void InvokeGroupedTopk(void* gating_output, void* topk_weights_ptr, void* topk_i
 
   // Special case for basic softmax + topk without grouping
   auto is_power_of_2 = [](int x) { return x > 0 && (x & (x - 1)) == 0; };
-  bool is_enable_basic_softmax_topk =
-      (scoring_func == "softmax" && e_bias == nullptr && num_expert_group == 1);
+  bool is_enable_basic_softmax_topk = (scoring_func == "softmax" && e_bias == nullptr && num_expert_group == 1);
   if (is_enable_basic_softmax_topk) {
     if (renormalize && is_power_of_2(num_experts) && num_experts <= 256) {
       llm_kernels::nvidia::InvokeTopkGatingSoftmax<T>(gating_output, topk_weights_ptr, topk_ids_ptr, num_rows,
@@ -817,7 +817,7 @@ void InvokeFusedMoe(void* hidden_states, void* w1, void* w2, int topk, DataType 
     // scale=1.0f: routed_scaling_factor already applied in topk_weights via InvokeTopkGatingSoftmax;
     // pass non-1.0 to activate InvokeMoeSumVec with fused scaling (e.g. for Qwen3 MOE).
     InvokeMoeSumDispatch<T, UseExpertParallel>(intermediate_cache3, curr_out_hidden_states, curr_topk_ids,
-                                              tokens_in_chunk, topk, hidden_size, 1.0f, stream);
+                                               tokens_in_chunk, topk, hidden_size, 1.0f, stream);
   }
 }
 
@@ -832,8 +832,8 @@ void InvokeMoeSumDispatch(void* input, void* output, void* topk_ids, int num_tok
   }
 }
 
-#define INVOKE_MOE_SUM_DISPATCH(T)                                                                          \
-  template void InvokeMoeSumDispatch<T, true>(void*, void*, void*, int, int, int, float, cudaStream_t);     \
+#define INVOKE_MOE_SUM_DISPATCH(T)                                                                      \
+  template void InvokeMoeSumDispatch<T, true>(void*, void*, void*, int, int, int, float, cudaStream_t); \
   template void InvokeMoeSumDispatch<T, false>(void*, void*, void*, int, int, int, float, cudaStream_t)
 INVOKE_MOE_SUM_DISPATCH(float);
 INVOKE_MOE_SUM_DISPATCH(half);

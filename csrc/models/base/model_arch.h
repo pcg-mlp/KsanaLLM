@@ -23,6 +23,8 @@ enum class ModelArchitecture {
   ARCH_QWEN,
   // chatglm
   ARCH_CHATGLM,
+  // gpt_moe
+  ARCH_GPT_MOE,
   // bge reranker
   ARCH_MINICPM,
   // mixtral

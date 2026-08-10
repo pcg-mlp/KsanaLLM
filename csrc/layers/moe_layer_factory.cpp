@@ -243,6 +243,7 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   moe_params.vocab_size = static_cast<uint32_t>(model_config_.vocab_size);
   moe_params.situ_beta = model_config_.situ_beta;
   moe_params.situ_linear_beta = model_config_.situ_linear_beta;
+  moe_params.activation_function = model_config_.activation_function;
 
   std::vector<std::any> moe_matmul_param = {moe_params};
 

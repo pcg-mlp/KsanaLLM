@@ -367,6 +367,23 @@ TEST_F(InferRequestTest, FastPath_LaunchPlaceholderThenReplaceOnRetire) {
   EXPECT_EQ(req->GetInflightCount(), 1u);
 }
 
+// logits_custom_length > 1（slice_pos 覆盖多个 token）时，LaunchPlanningTask 必须把
+// inflight workload 与 InferRequest::sampling_token_num 抬到 logits_custom_length，
+// 否则下游 ModelInput 只按 1 分配 logits_idx_list，AssembleTokensHidden 输出 shape[0]=1。
+TEST_F(InferRequestTest, LaunchPlanningTaskPreservesLogitsCustomLength_Prefill) {
+  auto req = CreateInferRequest({1, 2, 3, 4, 5});
+  req->output_tokens = {1, 2, 3, 4, 5};
+  req->logits_custom_length = 3;  // 例如 slice_pos = {{0,2}}
+  req->ResetPrefillingTokens();
+  ASSERT_EQ(req->sampling_token_num, 3u);
+
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/5, /*prefill_start_offset=*/0);
+  ASSERT_FALSE(req->IsSplitPrefillStep());
+
+  EXPECT_EQ(req->sampling_token_num, 3u);
+  EXPECT_EQ(req->GetInflightTask().workload.sampling_token_num, 3u);
+}
+
 // build-ahead 下 step N 产出 EOS 后，N+1 占位步必须丢弃，不写 output_tokens、不回填 placeholder。
 TEST_F(InferRequestTest, FastPath_EosDropsExtraStep) {
   const int eos = 999;

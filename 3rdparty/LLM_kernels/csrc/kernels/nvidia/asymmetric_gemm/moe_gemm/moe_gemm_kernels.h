@@ -21,6 +21,8 @@
 #include "csrc/utils/nvidia/cuda_fp8_utils.h"
 #include "csrc/utils/nvidia/workspace.h"
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/common.h"
+
 #include <array>
 #include <cuda_runtime_api.h>
 #include <optional>
@@ -147,17 +149,7 @@ struct HopperGroupedGemmInput
     std::string toString() const;
 };
 
-// Note update moe.py to match
-enum class ActivationType
-{
-    Gelu = 0,
-    Relu,
-    Silu,
-    Swiglu,
-    Geglu,
-    Identity,
-    InvalidType
-};
+using llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels::ActivationType;
 
 constexpr bool isGatedActivation(ActivationType activation_type)
 {

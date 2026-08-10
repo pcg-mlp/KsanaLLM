@@ -10,6 +10,7 @@
 #include "models/deepseek_v3/deepseek_v3_config_parser.h"
 #include "models/deepseek_v4/deepseek_v4_config_parser.h"
 #include "models/glm4_moe/glm4_moe_config_parser.h"
+#include "models/gpt_moe/gpt_moe_config_parser.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_config_parser.h"
 #include "models/internlm2/new_internlm2_config_parser.h"
 #include "models/internlmxcomposer2/new_internlmxcomposer2_config_parser.h"
@@ -84,6 +85,10 @@ Status ModelConfigParserFactory::CreateModelConfigParser(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_CHATGLM: {
       model_config_parser = std::make_shared<ChatglmConfigParser>();
+      break;
+    }
+    case ModelArchitecture::ARCH_GPT_MOE: {
+      model_config_parser = std::make_shared<GptMoeConfigParser>();
       break;
     }
     default: {

@@ -49,6 +49,9 @@ struct ModelRunConfig {
   // The model position embedding.
   PositionEncoding position_encoding = PositionEncoding::ROPE;
 
+  // The norm type, rmsnorm or layernorm.
+  NormType norm_type = NormType::RMSNORM;
+
   // Use pre-norm or post-norm.
   LayerNormPosition layernorm_position = LayerNormPosition::PRE_NORM;
 
@@ -164,7 +167,7 @@ class CommonModel : public BaseModel, public ModelDelegate {
   std::shared_ptr<InputRefitLayer> input_refit_layer_;
 
   std::shared_ptr<Linear> lm_head_;
-  std::shared_ptr<Layernorm> lm_head_prenorm_{nullptr};
+  std::shared_ptr<Layernorm> lm_head_prenorm_;
 
   // TODO(robertyuan): layer_creation_context_ should be deleted after layer creation.
   // However, matmul_layer_factory will delete the buffer during destroying.

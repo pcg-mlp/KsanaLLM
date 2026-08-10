@@ -13,14 +13,17 @@ namespace ksana_llm {
 Status LayernormLayer::Init(const std::vector<std::any>& parameters, const RuntimeConfig& runtime_config,
                             std::shared_ptr<Context> context, int rank) {
   BaseLayer::Init(parameters, runtime_config, context, rank);
-  int parameter_index = 0;
+  size_t parameter_index = 0;
   rms_norm_eps_ = std::any_cast<const float>(parameters[parameter_index++]);
   KLLM_LOG_DEBUG << fmt::format("rms_norm_eps {}", rms_norm_eps_);
 
-  // Optional: num_heads and head_dim for per-head no-weight RMSNorm
-  if (parameter_index < static_cast<int>(parameters.size())) {
+  if (parameter_index + 2 == parameters.size()) {
+    // Optional: num_heads and head_dim for per-head no-weight RMSNorm
     num_heads_ = std::any_cast<const uint32_t>(parameters[parameter_index++]);
     head_dim_ = std::any_cast<const uint32_t>(parameters[parameter_index++]);
+  } else if (parameter_index + 1 == parameters.size()) {
+    // Optional: norm_type
+    norm_type_ = std::any_cast<const NormType>(parameters[parameter_index++]);
   }
 
   return Status();
@@ -51,9 +54,10 @@ Status LayernormLayer::ForwardNoWeightT(const Tensor& input, Tensor& output) {
 
 template <typename T>
 Status LayernormLayer::ForwardWeightT(const Tensor& input, const Tensor& weight, Tensor& output, const Tensor* bias) {
-  if (bias != nullptr) {
-    InvokeLayerNorm<T>(input.GetPtr<void>(), weight.GetPtr<void>(), bias->GetPtr<void>(), rms_norm_eps_, input.shape[0],
-                       input.shape[1], output.GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());
+  if (norm_type_ == NormType::LAYERNORM) {
+    InvokeLayerNorm<T>(input.GetPtr<void>(), weight.GetPtr<void>(), bias == nullptr ? nullptr : bias->GetPtr<void>(),
+                       rms_norm_eps_, input.shape[0], input.shape[1], output.GetPtr<void>(),
+                       context_->device->GetPrimaryComputeStream().Get());
   } else {
     InvokeRMSNorm<T>(input.GetPtr<void>(), weight.GetPtr<void>(), rms_norm_eps_, input.shape[0], input.shape[1],
                      output.GetPtr<void>(), context_->device->GetPrimaryComputeStream().Get());

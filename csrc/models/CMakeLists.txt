@@ -13,6 +13,7 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/models/qwen/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/bge_reranker_minicpm/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/chatglm/*.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/models/gpt_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/common_moe/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/mixtral/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/qwen2_moe/*.cpp
@@ -71,6 +72,7 @@ if(WITH_STANDALONE_TEST)
       cpp_test(qwen_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen/qwen_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(qwen3_moe_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen3_moe/qwen3_moe_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(bge_reranker_minicpm_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/bge_reranker_minicpm/bge_reranker_minicpm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+      cpp_test(gpt_moe_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/gpt_moe/gpt_moe_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(internlm2_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/internlm2/internlm2_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(internlmxcomposer2_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/internlmxcomposer2/internlmxcomposer2_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 

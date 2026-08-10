@@ -30,6 +30,9 @@ Status PytorchConfigParser::GetJsonConfig(const std::string& model_dir, nlohmann
 
   // Get model arch
   std::string model_type = config_json.at("model_type");
+  if (model_type == "openai-gpt") {
+    model_type = "gpt_moe";
+  }
 
   // Get architectures if available for resolving ambiguous model types
   std::vector<std::string> architectures;

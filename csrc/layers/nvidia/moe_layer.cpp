@@ -144,9 +144,6 @@ inline size_t AlignAddress(size_t size) { return (size + 255) & (~255); }
 
 template <typename T>
 size_t MoeLayer::GetWorkspaceSizeT() {
-  GetMoeGemmWorkspaceSize<T, T, T>(params_.max_token_num, params_.expert_num_per_node, params_.expert_hidden_size,
-                                   params_.expert_inter_size, params_.expert_topk, params_.tp_size, rank_, use_lora_,
-                                   max_ws_bytes_, workspace_info_.workspace_sizes);
   if (params_.use_vllm_moe) {
     size_t m = std::min(VLLM_FUSED_MOE_CHUNK_SIZE, params_.max_token_num);
     topk_weights_ptr_size = AlignAddress(params_.max_token_num * params_.expert_topk * sizeof(float));
@@ -241,6 +238,13 @@ size_t MoeLayer::GetWorkspaceSizeT() {
     }
     const size_t softplus_sqrt_ws_aligned = use_topk_softplus_sqrt_ ? AlignAddress(softplus_sqrt_workspace_size_) : 0;
     max_ws_bytes_ += softplus_sqrt_ws_aligned;
+  } else {
+    llm_kernels::nvidia::ActivationType activation_type = (params_.activation_function == "gelu")
+                                                              ? llm_kernels::nvidia::ActivationType::Gelu
+                                                              : llm_kernels::nvidia::ActivationType::Swiglu;
+    GetMoeGemmWorkspaceSize<T, T, T>(params_.max_token_num, params_.expert_num_per_node, params_.expert_hidden_size,
+                                     params_.expert_inter_size, params_.expert_topk, params_.tp_size, rank_, use_lora_,
+                                     max_ws_bytes_, workspace_info_.workspace_sizes, activation_type);
   }
   KLLM_LOG_DEBUG << fmt::format("Rank[{}] Request {} for MoeLayer", rank_, max_ws_bytes_);
   return max_ws_bytes_;
@@ -508,28 +512,38 @@ Status MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_outp
   } else {
     KLLM_CHECK_WITH_INFO(!use_topk_softplus_sqrt_,
                          "MoeLayer: sqrt+softplus gate is only supported on the use_vllm_moe path");
+    KLLM_CHECK_WITH_INFO(params_.activation_function == "swiglu" || params_.activation_function == "gelu",
+                         fmt::format("Unsupported activation function: {}", params_.activation_function));
+
+#define INVOKE_MOE_CUTLASS_GEMM(NT, activation_type)                                                                  \
+  InvokeMoeCutlassGemm<T, T, T, NT>(                                                                                  \
+      hidden_states->GetPtr<void>(), gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),           \
+      e_score_correction_bias_weight_void, num_tokens, params_.expert_hidden_size, params_.expert_inter_size,         \
+      params_.expert_num_per_node, params_.expert_topk, workspace_info_.workspace_sizes,                              \
+      static_cast<char*>(workspace_info_.workspace), output->GetPtr<void>(), workspace_info_.scale_probs,             \
+      static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),        \
+      params_.tp_size, rank_, use_lora_, best_config_index, tactics_, params_.use_vllm_moe, params_.num_expert_group, \
+      params_.expert_groups_topk, params_.scoring_func, params_.topk_method, params_.norm_topk_prob,                  \
+      params_.routed_scaling_factor, params_.use_e_score_correction_bias,                                             \
+      context_->device->GetPrimaryComputeStream().Get(), false, nullptr, nullptr, nullptr, params_.apply_weight,      \
+      activation_type);
     if (params_.moe_scale_norm_mode == MoeScaleNormMode::RE_NORM) {
-      InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(
-          hidden_states->GetPtr<void>(), gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
-          e_score_correction_bias_weight_void, num_tokens, params_.expert_hidden_size, params_.expert_inter_size,
-          params_.expert_num_per_node, params_.expert_topk, workspace_info_.workspace_sizes,
-          static_cast<char*>(workspace_info_.workspace), output->GetPtr<void>(), workspace_info_.scale_probs,
-          static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
-          params_.tp_size, rank_, use_lora_, best_config_index, tactics_, params_.use_vllm_moe,
-          params_.num_expert_group, params_.expert_groups_topk, params_.scoring_func, params_.topk_method,
-          params_.norm_topk_prob, params_.routed_scaling_factor, params_.use_e_score_correction_bias,
-          context_->device->GetPrimaryComputeStream().Get(), false, nullptr, nullptr, nullptr, params_.apply_weight);
+      if (params_.activation_function == "swiglu") {
+        INVOKE_MOE_CUTLASS_GEMM(llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE,
+                                llm_kernels::nvidia::ActivationType::Swiglu);
+      } else {
+        INVOKE_MOE_CUTLASS_GEMM(llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE,
+                                llm_kernels::nvidia::ActivationType::Gelu);
+      }
     } else if (params_.moe_scale_norm_mode == MoeScaleNormMode::NO_NORM) {
-      InvokeMoeCutlassGemm<T, T, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE>(
-          hidden_states->GetPtr<void>(), gating_output->GetPtr<void>(), w1->GetPtr<void>(), w2->GetPtr<void>(),
-          e_score_correction_bias_weight_void, num_tokens, params_.expert_hidden_size, params_.expert_inter_size,
-          params_.expert_num_per_node, params_.expert_topk, workspace_info_.workspace_sizes,
-          static_cast<char*>(workspace_info_.workspace), output->GetPtr<void>(), workspace_info_.scale_probs,
-          static_cast<int*>(workspace_info_.src_to_dest_map), static_cast<int*>(workspace_info_.selected_experts),
-          params_.tp_size, rank_, use_lora_, best_config_index, tactics_, params_.use_vllm_moe,
-          params_.num_expert_group, params_.expert_groups_topk, params_.scoring_func, params_.topk_method,
-          params_.norm_topk_prob, params_.routed_scaling_factor, params_.use_e_score_correction_bias,
-          context_->device->GetPrimaryComputeStream().Get(), false, nullptr, nullptr, nullptr, params_.apply_weight);
+      if (params_.activation_function == "swiglu") {
+        INVOKE_MOE_CUTLASS_GEMM(llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE,
+                                llm_kernels::nvidia::ActivationType::Swiglu);
+      } else {
+        INVOKE_MOE_CUTLASS_GEMM(llm_kernels::nvidia::MOEExpertScaleNormalizationMode::NONE,
+                                llm_kernels::nvidia::ActivationType::Gelu);
+      }
+#undef INVOKE_MOE_CUTLASS_GEMM
     }
   }
   output->shape = hidden_states->shape;

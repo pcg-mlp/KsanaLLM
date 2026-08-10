@@ -10,7 +10,7 @@
 
 namespace ksana_llm {
 
-// Model config for qwen2-moe architecture.
+// Model config for hunyuan-turbo architecture.
 struct HunyuanTurboConfig : public BaseModelConfig {
   virtual ~HunyuanTurboConfig() {}
 

@@ -9,15 +9,23 @@
 namespace ksana_llm {
 
 Layernorm::Layernorm(const std::string& weight_name, float layernorm_eps, const LayerCreationContext& creation_context,
-                     const std::string& weight_bias_name) {
-  layernorm_layer_ = std::make_shared<LayernormLayer>();
-  layernorm_layer_->Init({layernorm_eps}, creation_context.runtime_config, creation_context.context,
-                         creation_context.rank);
+                     const std::string& norm_type_str, const std::string& weight_bias_name) {
   weight_ = creation_context.base_weight->GetModelWeights(weight_name);
   if (weight_bias_name != "") {
     weight_bias_ = creation_context.base_weight->GetModelWeights(weight_bias_name);
     with_bias_ = true;
   }
+  NormType norm_type;
+  if (norm_type_str == "layernorm") {
+    norm_type = NormType::LAYERNORM;
+  } else if (norm_type_str == "rmsnorm") {
+    norm_type = NormType::RMSNORM;
+  } else {
+    KLLM_THROW(fmt::format("Unsupported norm function: {}", norm_type_str));
+  }
+  layernorm_layer_ = std::make_shared<LayernormLayer>();
+  layernorm_layer_->Init({layernorm_eps, norm_type}, creation_context.runtime_config, creation_context.context,
+                         creation_context.rank);
 }
 
 Layernorm::Layernorm(const std::string& weight_name, const std::string& weight2_name, float layernorm_eps,

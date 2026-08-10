@@ -7,6 +7,7 @@
 
 #include "csrc/kernels/nvidia/cutlass_extensions/gemm_configs.h"
 #include "csrc/kernels/nvidia/mixture_of_experts/moe_norm_config.h"
+#include "csrc/kernels/nvidia/others/tensorrt-llm/dev/cutlass_kernels/include/common.h"
 #include "csrc/utils/nvidia/cuda_bf16_wrapper.h"
 
 #include <cuda_fp16.h>
@@ -15,12 +16,14 @@
 namespace llm_kernels {
 namespace nvidia {
 
+using llm_kernels::nvidia::tensorrt_llm::dev::kernels::cutlass_kernels::ActivationType;
+
 template <typename T, typename WT, typename OT>
 class MoeGemmWrapper {
  public:
   void GetWorkspaceSize(size_t token_num, size_t expert_num, size_t expert_hidden_size, size_t expert_inter_size,
                         size_t expert_topk, int tp_size, int rank, bool use_lora, size_t& ws_bytes,
-                        std::vector<size_t>& workspace_sizes);
+                        std::vector<size_t>& workspace_sizes, ActivationType activation_type = ActivationType::Swiglu);
 
   size_t GetBestConfigIndex(std::vector<cutlass_extensions::CutlassGemmConfig>& tactics, bool is_fp8 = false);
 
@@ -33,7 +36,7 @@ class MoeGemmWrapper {
             MOEExpertScaleNormalizationMode moe_norm_mode, cudaStream_t stream, bool is_fp8 = false,
             void const* scale1_void = nullptr, void const* scale2_void = nullptr, void const* scale3_void = nullptr,
             RoutingFunctionType custom_routing_function = RoutingFunctionType::GREEDY_TOPK_SOFTMAX_SCORE,
-            bool apply_weight = false);
+            bool apply_weight = false, ActivationType activation_type = ActivationType::Swiglu);
 };
 
 void topkSigmoidKernelLauncher(const float* input, float* output, int* indices, int* source_row, int num_rows,
