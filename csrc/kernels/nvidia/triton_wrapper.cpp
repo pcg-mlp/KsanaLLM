@@ -11,6 +11,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "csrc/kernels/nvidia/moe/humming_triton_moe_fused_mul_sum/humming_moe_fused_mul_sum_config.h"
 #include "csrc/utils/nvidia/cuda_utils.h"
 #include "device/nvidia/cuda_utils.h"
 #include "utils/logger.h"
@@ -31,7 +32,10 @@ namespace ksana_llm {
     }                                                                  \
   } while (0)
 
-inline size_t CeilDiv(size_t a, size_t b) { return (a + b - 1) / b; }
+template <typename T>
+inline T CeilDiv(T a, T b) {
+  return (a + b - 1) / b;
+}
 
 // Triton >= 3.x appends two implicit CUdeviceptr params (global_scratch,
 // profile_scratch) to the compiled kernel's .param list; supplying NULL is
@@ -118,8 +122,8 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["chunk_gated_delta_rule_fwd_kernel_h_blockdim64"] = {"H", "NTB", "BV", "SSM"};
   kernel_key_map_["chunk_gla_fwd_kernel_o"] = {"H", "BK", "BV"};
   kernel_key_map_["fused_recurrent_kda_packed_decode_kernel"] = {"H", "BK", "BV", "LB", "SSM"};
-  kernel_key_map_["fused_sigmoid_gating_delta_rule_update_kernel"] = {"H",  "MODE", "NP2",
-                                                                      "BK", "BV",   "LB", "SSM"};
+  kernel_key_map_["fused_sigmoid_gating_delta_rule_update_kernel"] = {"H", "MODE", "NP2", "BK", "BV", "LB", "SSM"};
+  kernel_key_map_["moe_fused_mul_sum_kernel"] = {"is_ep", "top_k", "size", "BLOCK_M", "BLOCK_K"};
 }
 
 void TritonWrapper::InitKernelsDir() {
@@ -237,7 +241,7 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
       KLLM_THROW(
           fmt::format("Failed to load triton kernel json file: {}. The triton kernel for "
                       "this configuration was not pre-generated in the selected kernel "
-                      "directory; please re-run the kernel creator.sh / re-configure cmake "
+                      "directory; please re-run the kernel creator.py / re-configure cmake "
                       "to produce the missing artifact.",
                       config_path));
     }
@@ -247,7 +251,7 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
     if (result != CUDA_SUCCESS) {
       KLLM_THROW(
           fmt::format("Could not load triton kernel cubin: {}. Re-run the kernel "
-                      "creator.sh to regenerate it.",
+                      "creator.py to regenerate it.",
                       cubin_path));
     }
     kernel_map_[kernel_stream_name] = *triton_kernel;
@@ -520,6 +524,74 @@ INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(float);
 INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(half);
 INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP(__nv_bfloat16);
 #undef INVOKE_HUMMING_FUSED_SILU_MUL_QUANT_EP
+
+template <typename T>
+void TritonWrapper::InvokeHummingMoeFusedMulSum(const void* input, const float* topk_weights, const void* topk_ids,
+                                                void* output, int num_tokens, int topk, int hidden_size, bool is_ep,
+                                                cudaStream_t stream) {
+  // The cubin for moe_fused_mul_sum_kernel is compiled with
+  // dtype_input=torch.bfloat16 and the kernel-name key map does not encode a
+  // compute_type, so there is only one cubin per (is_ep, topk, size, BLOCK_M,
+  // BLOCK_K) variant. Dispatching this wrapper on a non-bf16 T would silently
+  // load the bf16 cubin and reinterpret the data, corrupting results without
+  // any error. Guard with a runtime throw (not static_assert) so the three
+  // explicit template instantiations below still link cleanly when callers
+  // dispatch via DISPATCH_BY_3_DTYPE; the dead branch is elided by the
+  // compiler for T == __nv_bfloat16.
+  if constexpr (!std::is_same_v<T, __nv_bfloat16>) {
+    KLLM_THROW(
+        "InvokeHummingMoeFusedMulSum currently only supports "
+        "__nv_bfloat16; the triton cubin is bf16-only and the kernel "
+        "name key does not encode a compute_type.");
+  }
+
+  if (num_tokens == 0) return;
+
+  int blk_m = llm_kernels::nvidia::SelectBlockMSM90(num_tokens);
+  int blk_k = llm_kernels::nvidia::SelectBlockKSM90(hidden_size);
+
+  std::string kernel_name = "moe_fused_mul_sum_kernel";
+
+  // The cubin's .param list (6 runtime params, verified via PTX):
+  //   param 0: inputs_ptr       (u64)
+  //   param 1: topk_weights_ptr (u64)
+  //   param 2: outputs_ptr      (u64)
+  //   param 3: top_ids_ptr      (u64)
+  //   param 4: num_tokens       (u32)
+  //   param 5: stride_m         (u32)
+  // Note: expert_map_ptr is eliminated by dead-code elimination because
+  // has_expert_map is tl.constexpr(False).
+  void* inputs_ptr = const_cast<void*>(input);
+  void* topk_weights_ptr = const_cast<float*>(topk_weights);
+  void* top_ids_ptr = const_cast<void*>(topk_ids);
+  void* outputs_ptr = output;
+  int stride_m = topk * hidden_size;
+
+  void* args[] = {
+      TRITON_ARGS(&inputs_ptr, &topk_weights_ptr, &outputs_ptr, &top_ids_ptr, &num_tokens, &stride_m),
+  };
+
+  std::unordered_map<std::string, std::string> map = {
+      {"is_ep", ConvertToString(static_cast<int>(is_ep))},
+      {"top_k", ConvertToString(topk)},
+      {"size", ConvertToString(hidden_size)},
+      {"BLOCK_M", ConvertToString(blk_m)},
+      {"BLOCK_K", ConvertToString(blk_k)},
+  };
+
+  size_t grid_x = static_cast<size_t>(CeilDiv(hidden_size, blk_k));
+  size_t grid_y = static_cast<size_t>(CeilDiv(num_tokens, blk_m));
+  InvokeTritonKernel(kernel_name, args, map, grid_x, grid_y, 1, stream);
+}
+
+#define INVOKE_HUMMING_MOE_FUSED_MUL_SUM(T)                                                                       \
+  template void TritonWrapper::InvokeHummingMoeFusedMulSum<T>(                                                    \
+      const void* input, const float* topk_weights, const void* topk_ids, void* output, int num_tokens, int topk, \
+      int hidden_size, bool is_ep, cudaStream_t stream)
+INVOKE_HUMMING_MOE_FUSED_MUL_SUM(float);
+INVOKE_HUMMING_MOE_FUSED_MUL_SUM(half);
+INVOKE_HUMMING_MOE_FUSED_MUL_SUM(__nv_bfloat16);
+#undef INVOKE_HUMMING_MOE_FUSED_MUL_SUM
 
 template <typename T>
 void TritonWrapper::InvokeFusedBatchedMoeKernel(void* a, void* b, void* c, void* expert_num_tokens, void* a_scale,

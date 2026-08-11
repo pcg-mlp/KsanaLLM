@@ -167,6 +167,12 @@ class TritonWrapper {
                            void* output_norm_weight, void* output, int num_tokens, int hidden_size, int num_blocks,
                            bool write_block, cudaStream_t stream);
 
+  template <typename T>
+  void InvokeHummingMoeFusedMulSum(const void* input, const float* topk_weights,
+                                    const void* topk_ids, void* output,
+                                    int num_tokens, int topk, int hidden_size,
+                                    bool is_ep, cudaStream_t stream);
+
  private:
   std::optional<std::string> ConstructKernelName(const std::string& kernel_base_name,
                                                  const std::unordered_map<std::string, std::string>& map);

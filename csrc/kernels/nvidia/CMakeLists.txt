@@ -25,12 +25,14 @@ cc_test(fused_moe_test SRCS ${FUSED_MOE_TEST_SRCS} DEPS
 # cc_test(fused_moe_gptq_awq_test SRCS ${FUSED_MOE_GPTQ_AWQ_TEST_SRCS} DEPS
 #     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
-set(HUMMING_FP8_QUANT_TEST_SRCS humming_fp8_quant_test.cpp)
-cc_test(humming_fp8_quant_test SRCS ${HUMMING_FP8_QUANT_TEST_SRCS} DEPS
+cpp_test(humming_fp8_quant_test SRCS tests/humming_fp8_quant_test.cpp DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
 set(MOE_SUM_DISPATCH_TEST_SRCS moe_sum_dispatch_test.cpp)
 cc_test(moe_sum_dispatch_test SRCS ${MOE_SUM_DISPATCH_TEST_SRCS} DEPS
+    llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
+
+cpp_test(humming_moe_fused_mul_sum_test SRCS tests/humming_moe_fused_mul_sum_test.cpp DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
 # if (SM STREQUAL "90" OR SM STREQUAL "90a")

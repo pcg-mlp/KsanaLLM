@@ -234,36 +234,33 @@ def generate_silu_mul_quant_ep_kernel(
     return outputs, scales, kernel
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Generate fused SiluAndMul+FP8 quant Triton kernel artifacts")
-    parser.add_argument("--n", type=int, required=True,
-                        help="Inter size (output dimension after SiluAndMul)")
-    parser.add_argument("--output_dir", type=str, required=True,
-                        help="Output directory for .cubin, .json, .ptx files")
-    args = parser.parse_args()
+def generate_kernel_variant(n: int, output_dir: str) -> None:
+    """Compile fused SiluAndMul+FP8 quant kernels (base + EP) for one N and dump artifacts.
 
-    assert args.n % 128 == 0, f"N must be divisible by 128, got {args.n}"
-    os.makedirs(args.output_dir, exist_ok=True)
+    Shared by the CLI entry point (main) and the batch creator script so the
+    Triton/torch runtime is imported only once per process.
+    """
+    assert n % 128 == 0, f"N must be divisible by 128, got {n}"
+    os.makedirs(output_dir, exist_ok=True)
 
     max_tokens = 4096
-    x = torch.randn(max_tokens, args.n * 2, dtype=torch.bfloat16, device="cuda")
+    x = torch.randn(max_tokens, n * 2, dtype=torch.bfloat16, device="cuda")
 
     def fn():
-        out, scale, k = generate_silu_mul_quant_kernel(x, args.n, swiglu_limit=10.0)
+        out, scale, k = generate_silu_mul_quant_kernel(x, n, swiglu_limit=10.0)
         return (out, k)
 
     compiled_kernel, kernel_time_us, _ = performance_kernel(fn)
 
-    out, scale, _ = generate_silu_mul_quant_kernel(x, args.n, swiglu_limit=10.0)
+    out, scale, _ = generate_silu_mul_quant_kernel(x, n, swiglu_limit=10.0)
 
-    assert out.shape == (max_tokens, args.n), f"Output shape {out.shape} != ({max_tokens}, {args.n})"
+    assert out.shape == (max_tokens, n), f"Output shape {out.shape} != ({max_tokens}, {n})"
     assert out.dtype == torch.float8_e4m3fn
     assert scale.numel() == max_tokens
 
-    kernel_name = f"_silu_and_mul_quant_kernel_N_{args.n}"
+    kernel_name = f"_silu_and_mul_quant_kernel_N_{n}"
 
-    BLOCK = triton.next_power_of_2(args.n)
+    BLOCK = triton.next_power_of_2(n)
     num_warps = min(max(BLOCK // 256, 1), 8)
     num_stages = 1
 
@@ -274,27 +271,39 @@ def main():
         }
     }
 
-    dump_kernel(compiled_kernel, args.output_dir, kernel_name, default_config)
-    print(f"Generated {kernel_name}.{{cubin,json,ptx}} in {args.output_dir} (kernel_time={kernel_time_us:.1f} us)")
+    dump_kernel(compiled_kernel, output_dir, kernel_name, default_config)
+    print(f"Generated {kernel_name}.{{cubin,json,ptx}} in {output_dir} (kernel_time={kernel_time_us:.1f} us)")
 
     topk_ids = torch.zeros(max_tokens, dtype=torch.int32, device="cuda")
 
     def fn_ep():
-        out, scale, k = generate_silu_mul_quant_ep_kernel(x, topk_ids, args.n, swiglu_limit=10.0)
+        out, scale, k = generate_silu_mul_quant_ep_kernel(x, topk_ids, n, swiglu_limit=10.0)
         return (out, k)
 
     compiled_kernel_ep, kernel_time_ep, _ = performance_kernel(fn_ep)
 
-    out_ep, scale_ep, _ = generate_silu_mul_quant_ep_kernel(x, topk_ids, args.n, swiglu_limit=10.0)
+    out_ep, scale_ep, _ = generate_silu_mul_quant_ep_kernel(x, topk_ids, n, swiglu_limit=10.0)
 
-    assert out_ep.shape == (max_tokens, args.n), f"EP output shape {out_ep.shape} != ({max_tokens}, {args.n})"
+    assert out_ep.shape == (max_tokens, n), f"EP output shape {out_ep.shape} != ({max_tokens}, {n})"
     assert out_ep.dtype == torch.float8_e4m3fn
     assert scale_ep.numel() == max_tokens
 
-    kernel_name_ep = f"_silu_and_mul_quant_ep_kernel_N_{args.n}"
+    kernel_name_ep = f"_silu_and_mul_quant_ep_kernel_N_{n}"
 
-    dump_kernel(compiled_kernel_ep, args.output_dir, kernel_name_ep, default_config)
-    print(f"Generated {kernel_name_ep}.{{cubin,json,ptx}} in {args.output_dir} (kernel_time={kernel_time_ep:.1f} us)")
+    dump_kernel(compiled_kernel_ep, output_dir, kernel_name_ep, default_config)
+    print(f"Generated {kernel_name_ep}.{{cubin,json,ptx}} in {output_dir} (kernel_time={kernel_time_ep:.1f} us)")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate fused SiluAndMul+FP8 quant Triton kernel artifacts")
+    parser.add_argument("--n", type=int, required=True,
+                        help="Inter size (output dimension after SiluAndMul)")
+    parser.add_argument("--output_dir", type=str, required=True,
+                        help="Output directory for .cubin, .json, .ptx files")
+    args = parser.parse_args()
+
+    generate_kernel_variant(n=args.n, output_dir=args.output_dir)
 
 
 if __name__ == "__main__":

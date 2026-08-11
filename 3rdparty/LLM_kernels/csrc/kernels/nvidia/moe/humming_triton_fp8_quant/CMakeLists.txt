@@ -1,7 +1,7 @@
 # Copyright 2026 Tencent Inc.  All rights reserved.
 
 file(GLOB_RECURSE TRITON_FP8_QUANT_ALL_FILES
-  triton_fp8_quant_creator.sh
+  triton_fp8_quant_creator.py
   generate_triton_fp8_quant.py
   generate_triton_silu_mul_quant.py
 )
@@ -30,13 +30,13 @@ endif()
 if(TRITON_FP8_QUANT_NEED_REGENERATE)
   message(STATUS "Start generate triton_fp8_quant triton kernel")
 
-  execute_process(COMMAND bash triton_fp8_quant_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH}
+  execute_process(COMMAND python triton_fp8_quant_creator.py ${TRITON_KERNEL_PATH}
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE TRITON_FP8_QUANT_RESULT_VARIABLE
     OUTPUT_VARIABLE TRITON_FP8_QUANT_RESULT_OUTPUT)
 
   if(TRITON_FP8_QUANT_RESULT_VARIABLE AND NOT TRITON_FP8_QUANT_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "bash triton_fp8_quant_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH} with error:\n${TRITON_FP8_QUANT_RESULT_OUTPUT}")
+    message(FATAL_ERROR "python triton_fp8_quant_creator.py ${TRITON_KERNEL_PATH} with error:\n${TRITON_FP8_QUANT_RESULT_OUTPUT}")
   endif()
 
   calculate_files_md5("${TRITON_FP8_QUANT_ALL_FILES}" NEW_MD5)

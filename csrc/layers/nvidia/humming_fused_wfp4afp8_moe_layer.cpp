@@ -987,15 +987,10 @@ Status HummingFusedWfp4Afp8MoeLayer::ForwardT(const Tensor* hidden_states, const
 
     // ----- Fused MulTopkWeight + Sum: intermediate_cache3 → output [tokens, hidden_size] -----
     if (do_profile) RecordEvent(Evt::MulSumStart, stream);
-    if (use_expert_parallel) {
-      llm_kernels::nvidia::InvokeMoeFusedMulSum<T, true>(
-          ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
-          static_cast<int>(total_tokens), static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
-    } else {
-      llm_kernels::nvidia::InvokeMoeFusedMulSum<T, false>(
-          ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
-          static_cast<int>(total_tokens), static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size), stream);
-    }
+    Singleton<TritonWrapper>::GetInstance()->InvokeHummingMoeFusedMulSum<T>(
+        ws_.cache.gemm2_output, reinterpret_cast<const float*>(curr_topk_weights), curr_topk_ids, output_ptr,
+        static_cast<int>(total_tokens), static_cast<int>(params_.expert_topk), static_cast<int>(hidden_size),
+        use_expert_parallel, stream);
     if (do_profile) RecordEvent(Evt::MulSumEnd, stream);
 
     // Per-Forward flush: sync + read elapsed times. When defer_perf_flush_ is true
