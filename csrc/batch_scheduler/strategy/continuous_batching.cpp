@@ -458,8 +458,9 @@ void ContinuousBatchingStrategy::UpdateRunningRequests(const std::vector<std::sh
     if (req->IsStopped()) {
       continue;
     }
-    req->UpdateAfterInflightTaskFinished();
-    req->ResetInflightTask();
+    if (req->UpdateAfterInflightTaskFinished()) {
+      req->ResetInflightTask();
+    }
     // clear flexible cache copy tasks after context stage is finished
     req->flexible_cached_copy_tasks.clear();
 

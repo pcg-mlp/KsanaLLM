@@ -12,8 +12,8 @@ namespace ksana_llm {
 
 void ScheduleProcessor::Initialize(std::shared_ptr<BatchSchedulerInterface> batch_scheduler) {
   batch_scheduler_ = batch_scheduler;
+  planning_sched_results_.resize(max_pp_batch_num_, nullptr);
   if (enable_async_) {
-    planning_sched_results_.resize(max_pp_batch_num_, nullptr);
     for (size_t multi_batch_id = 0; multi_batch_id < max_pp_batch_num_; ++multi_batch_id) {
       sched_threads_.emplace_back(&ScheduleProcessor::AsyncScheduleThread, this, multi_batch_id);
     }
@@ -45,39 +45,43 @@ void ScheduleProcessor::UpdateWithGenerationResult(const GenerationOutputGroup& 
   size_t multi_batch_id = generation_output.multi_batch_id;
   batch_scheduler_->UpdateWithGenerationResult(multi_batch_id, generation_output);
 
-  // No need to lock here because only one thread will call UpdateWithGenerationResult
-
-  // Async mode, check if there are any launchable schedule results
-  if (enable_async_) {
-    if (planning_sched_results_[multi_batch_id] != nullptr) {
-      std::shared_ptr<ScheduleResult> result = planning_sched_results_[multi_batch_id];
-      std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
-      bool launched =
-          batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs);
-      // launch 被拒绝时保留 planning_sched_results_, 等下一次 generation 回流后重试.
-      // 典型场景: pipeline 已满, 或 fast path 下某 req 仍有 inflight 暂不可 launch.
-      if (!launched) {
-        return;
-      }
-      if (!result->schedule_output->running_reqs.empty()) {
-        KLLM_LOG_SCHEDULER << "Put result running_reqs size=" << result->schedule_output->running_reqs.size();
-        ProcessScheduleDataInternal(multi_batch_id, *result);
-        sched_result_queue_.Put(result);
-      } else {
-        KLLM_LOG_SCHEDULER << "Drop result because running_reqs is empty";
-      }
-      for (const auto& req : stopped_reqs) {
-        RemoveRequestFromQueue(result->generation_output_group.reqs[req->attn_dp_group_id], req);
-      }
-      planning_sched_results_[multi_batch_id] = nullptr;
-      // Notify all waiting AsyncScheduleThread that the planning result has been consumed
-      schedule_guard_cv_.notify_all();
+  // Check if there are any launchable schedule results
+  if (enable_async_ || max_pp_batch_num_ > 1) {
+    TryConsumeScheduleResult(multi_batch_id);
+  }
+  if (!enable_async_) {
+    {
+      std::lock_guard<std::mutex> lock(schedule_guard_);
+      KLLM_CHECK(!sync_generating_finished_[multi_batch_id]);
+      sync_generating_finished_[multi_batch_id] = true;
     }
-  } else {
-    KLLM_CHECK(!sync_generating_finished_[multi_batch_id]);
-    sync_generating_finished_[multi_batch_id] = true;
     // Notify all waiting SyncScheduleThread that the generation result has been consumed
     schedule_guard_cv_.notify_all();
+  }
+}
+
+void ScheduleProcessor::NotifyNextPPMultiBatch(size_t multi_batch_id,
+                                               const std::shared_ptr<ScheduleOutput>& schedule_output) {
+  // Only meaningful when more than one multi-batch is in flight — otherwise
+  // there is no other mb to wake.
+  if (max_pp_batch_num_ <= 1) {
+    return;
+  }
+
+  // Release the inflight task on chunked-mid reqs.
+  bool any_freed = false;
+  batch_scheduler_->Lock();
+  for (auto& req : schedule_output->running_reqs) {
+    if (req->HasInflightTask() && req->IsSplitPrefillStep()) {
+      req->RetireChunkedReqs();
+      any_freed = true;
+    }
+  }
+  batch_scheduler_->Unlock();
+
+  if (any_freed) {
+    // Consume parked results on the next multi-batch.
+    TryConsumeScheduleResult((multi_batch_id + 1) % max_pp_batch_num_);
   }
 }
 
@@ -96,10 +100,13 @@ void ScheduleProcessor::Unlock() {
 void ScheduleProcessor::SyncScheduleThread(size_t multi_batch_id) {
   while (!terminated_) {
     std::shared_ptr<ScheduleResult> result = GetScheduleResultInSync(multi_batch_id);
-    sched_result_queue_.Put(result);
-
     if (terminated_) {
+      // Wake the consumer on stop.
+      sched_result_queue_.Put(nullptr);
       return;
+    }
+    if (result != nullptr) {
+      sched_result_queue_.Put(result);
     }
   }
 }
@@ -161,10 +168,36 @@ std::shared_ptr<ScheduleResult> ScheduleProcessor::GetScheduleResultInSync(size_
   }
 
   std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
-  KLLM_CHECK(
-      batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs));
+  if (!batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs)) {
+    if (!result->schedule_output->running_reqs.empty()) {
+      std::lock_guard<std::mutex> lock(schedule_guard_);
+      if (planning_sched_results_[multi_batch_id] != nullptr) {
+        // A previous GetScheduleResultInSync parked a result here, and a
+        // subsequent TryConsumeScheduleResult (triggered by
+        // NotifyNextPPMultiBatch of the neighbor multi-batch) failed to
+        // launch it again, leaving the slot occupied.  Now the current
+        // SyncScheduleThread was woken by UpdateWithGenerationResult (the
+        // generation from an earlier successful launch completed), but the
+        // slot is still dirty. Discard the newly-scheduled result and keep
+        // the old one parked — TryConsumeScheduleResult will retry it when
+        // the neighbor multi-batch dispatches again.
+        sync_generating_finished_[multi_batch_id] = false;
+        return nullptr;
+      }
+      planning_sched_results_[multi_batch_id] = result;
+      sync_generating_finished_[multi_batch_id] = false;
+    }
+    return nullptr;
+  }
+
+  for (const auto& req : stopped_reqs) {
+    RemoveRequestFromQueue(result->generation_output_group.reqs[req->attn_dp_group_id], req);
+  }
   ProcessScheduleDataInternal(multi_batch_id, *result);
-  sync_generating_finished_[multi_batch_id] = false;
+  {
+    std::lock_guard<std::mutex> lock(schedule_guard_);
+    sync_generating_finished_[multi_batch_id] = false;
+  }
   return result;
 }
 
@@ -220,6 +253,42 @@ Status ScheduleProcessor::ProcessScheduleDataInternal(size_t multi_batch_id, Sch
     result.running_reqs[req->req_id] = req;
   }
   return Status();
+}
+
+bool ScheduleProcessor::TryConsumeScheduleResult(size_t multi_batch_id) {
+  std::shared_ptr<ScheduleResult> result;
+  {
+    std::lock_guard<std::mutex> lock(schedule_guard_);
+    result = planning_sched_results_[multi_batch_id];
+    if (result == nullptr) {
+      return false;
+    }
+  }
+
+  std::vector<std::shared_ptr<InferRequest>> stopped_reqs;
+  if (!batch_scheduler_->TryToLaunchPlannedScheduleOutput(multi_batch_id, *(result->schedule_output), stopped_reqs)) {
+    // Still not launchable — leave parked.
+    return false;
+  }
+
+  if (!result->schedule_output->running_reqs.empty()) {
+    KLLM_LOG_SCHEDULER << "Put result running_reqs size=" << result->schedule_output->running_reqs.size();
+    ProcessScheduleDataInternal(multi_batch_id, *result);
+    sched_result_queue_.Put(result);
+  } else {
+    KLLM_LOG_SCHEDULER << "Drop result because running_reqs is empty";
+  }
+  for (const auto& req : stopped_reqs) {
+    RemoveRequestFromQueue(result->generation_output_group.reqs[req->attn_dp_group_id], req);
+  }
+  {
+    std::lock_guard<std::mutex> lock(schedule_guard_);
+    planning_sched_results_[multi_batch_id] = nullptr;
+  }
+
+  // Notify that its slot is free again.
+  schedule_guard_cv_.notify_all();
+  return true;
 }
 
 void ScheduleProcessor::Start() {}

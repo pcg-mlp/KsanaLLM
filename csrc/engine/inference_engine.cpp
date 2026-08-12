@@ -512,7 +512,9 @@ Status InferenceEngine::Initialize() {
         event_driven_schedule_processor->SetPpBatchDistributor(distributor);
         KLLM_LOG_INFO << "PpBatchDistributor created for event-driven scheduler, max_pp_batch_num="
                       << batch_scheduler_config.max_pp_batch_num
-                      << ", strategy=" << static_cast<int>(batch_scheduler_config.pp_multibatch_wb_strategy);
+                      << ", wb_enable=" << batch_scheduler_config.pp_multibatch_wb_strategy.enable
+                      << ", prefill_hold_iters=" << batch_scheduler_config.pp_multibatch_wb_strategy.prefill_hold_iters
+                      << ", threshold_factor=" << batch_scheduler_config.pp_multibatch_wb_strategy.threshold_factor;
       }
 
       schedule_processor_ = event_driven_schedule_processor;

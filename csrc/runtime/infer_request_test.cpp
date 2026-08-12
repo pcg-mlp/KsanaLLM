@@ -384,6 +384,118 @@ TEST_F(InferRequestTest, LaunchPlanningTaskPreservesLogitsCustomLength_Prefill) 
   EXPECT_EQ(req->GetInflightTask().workload.sampling_token_num, 3u);
 }
 
+// RetireChunkedReqs：清空 oldest inflight，remaining prefill 迁到 planning_workload_，
+// remaining_workload_.generated/draft 归零。同时验证 forwarding_tokens 包含正确的
+// chunk 前缀 token、prefill_start_offset 正确推进。
+TEST_F(InferRequestTest, RetireChunkedReqs_ResetsInflightAndUpdatesWorkload) {
+  auto req = CreateInferRequest({1, 2, 3, 4, 5, 6});
+  req->output_tokens = {1, 2, 3, 4, 5, 6};
+  req->ResetPrefillingTokens();
+
+  // First chunk: 2 out of 6 → split step. remaining = 4.
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/2, /*prefill_start_offset=*/0);
+  ASSERT_EQ(req->GetInflightCount(), 1u);
+  ASSERT_TRUE(req->IsSplitPrefillStep());
+
+  // 第一块 forwarding_tokens 应包含前 2 个 token。
+  ASSERT_EQ(req->forwarding_tokens, std::vector<int>({1, 2}));
+  // remaining_workload_ 的 offset 已由 SetPlanningTask 推进。
+  ASSERT_EQ(req->GetRemainingWorkload().prefill_start_offset, 2u);
+
+  const size_t fwd_before = req->forwarding_tokens.size();
+  req->RetireChunkedReqs();
+
+  EXPECT_EQ(req->GetInflightCount(), 0u);
+  // forwarding_tokens 不变；kv_cached 推进到当前 forwarding_tokens 尾部
+  EXPECT_EQ(req->forwarding_tokens.size(), fwd_before);
+  EXPECT_EQ(req->forwarding_tokens, std::vector<int>({1, 2}));
+  EXPECT_EQ(req->kv_cached_token_num, fwd_before);
+  // planning_workload_ 承载余下 4 个 prefill token；prefill_start_offset 已 Reset 归零
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_token_num, 4u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 0u);
+  // remaining_workload_ offset 保持推进（不受 Retire 影响）
+  EXPECT_EQ(req->GetRemainingWorkload().prefill_start_offset, 2u);
+  EXPECT_EQ(req->GetRemainingWorkload().generated_token_num, 0u);
+  EXPECT_EQ(req->GetRemainingWorkload().draft_token_num, 0u);
+}
+
+// RetireChunkedReqs 之后：下一次 UpdateAfterInflightTaskFinished 必须返回 false，
+// 清掉本次 sample 回流的 generated/accepted/draft，且不推 output_tokens。
+TEST_F(InferRequestTest, RetireChunkedReqs_NextUpdateSkipsSampleFlush) {
+  auto req = CreateInferRequest({1, 2, 3, 4, 5, 6});
+  req->output_tokens = {1, 2, 3, 4, 5, 6};
+  req->ResetPrefillingTokens();
+
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/2, /*prefill_start_offset=*/0);
+  req->RetireChunkedReqs();
+
+  // 模拟：sample 回流带来 stale 结果
+  req->generated_tokens = {77};
+  req->accepted_tokens = {88};
+  req->draft_tokens.mtp = {99};
+  const size_t output_before = req->output_tokens.size();
+
+  bool consumed = req->UpdateAfterInflightTaskFinished();
+
+  EXPECT_FALSE(consumed);
+  EXPECT_TRUE(req->generated_tokens.empty());
+  EXPECT_TRUE(req->accepted_tokens.empty());
+  EXPECT_EQ(req->draft_tokens.size(), 0u);
+  EXPECT_EQ(req->output_tokens.size(), output_before);
+}
+
+// RetireChunkedReqs 之后重新 Launch 下一个 chunk：验证 forwarding_tokens 连续拼接、
+// kv_cached 正确推进，形成完整的 chunked prefill 端到端流程。
+TEST_F(InferRequestTest, RetireChunkedReqs_NextChunkPreservesTokenContinuity) {
+  auto req = CreateInferRequest({1, 2, 3, 4, 5, 6});
+  req->output_tokens = {1, 2, 3, 4, 5, 6};
+  req->ResetPrefillingTokens();
+
+  // ----- 第一块：prefill 2 token（offset 0）-----
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/2, /*prefill_start_offset=*/0);
+  ASSERT_EQ(req->forwarding_tokens, std::vector<int>({1, 2}));
+  ASSERT_EQ(req->kv_cached_token_num, 0u);  // Launch 时 kv_cached 取 forwarding_tokens 旧 size
+
+  req->RetireChunkedReqs();
+  ASSERT_EQ(req->GetInflightCount(), 0u);
+  // Retire 把 kv_cached 推进到 forwarding_tokens 尾部
+  ASSERT_EQ(req->kv_cached_token_num, 2u);
+  // remaining_workload_ 仍记录已推进的 offset
+  ASSERT_EQ(req->GetRemainingWorkload().prefill_start_offset, 2u);
+  ASSERT_EQ(req->GetRemainingWorkload().prefill_token_num, 4u);
+
+  // ----- 第二块：prefill 2 token（offset 2）-----
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/2, /*prefill_start_offset=*/2);
+  ASSERT_EQ(req->GetInflightCount(), 1u);
+  // forwarding_tokens 拼接了第一块 + 第二块，完整连续
+  EXPECT_EQ(req->forwarding_tokens, std::vector<int>({1, 2, 3, 4}));
+  // kv_cached 在 Launch 时再次被设为 forwarding_tokens 旧 size（=2），
+  // 表示前 2 个 token 已落 KV cache，后 2 个在飞
+  EXPECT_EQ(req->kv_cached_token_num, 2u);
+  // remaining offset 已推进到 4（第二块结束位置）
+  EXPECT_EQ(req->GetRemainingWorkload().prefill_start_offset, 4u);
+  EXPECT_EQ(req->GetRemainingWorkload().prefill_token_num, 2u);
+
+  // ----- 第二块 Retire -----
+  req->RetireChunkedReqs();
+  EXPECT_EQ(req->GetInflightCount(), 0u);
+  EXPECT_EQ(req->forwarding_tokens, std::vector<int>({1, 2, 3, 4}));
+  EXPECT_EQ(req->kv_cached_token_num, 4u);
+  // 剩余 2 个 prefill 迁入 planning_workload_
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_token_num, 2u);
+}
+
+// 正常 decode step 返回 true（区别于 RetireChunkedReqs 分支）。
+TEST_F(InferRequestTest, UpdateAfterInflightTaskFinished_ReturnsTrueOnNormalDecode) {
+  auto req = CreateInferRequest({1, 2, 3});
+  req->output_tokens = {1, 2, 3};
+  req->ResetPrefillingTokens();
+
+  SetupInflightPrefillTask(req, /*prefill_token_num=*/3, /*prefill_start_offset=*/0);
+  req->generated_tokens = {10};
+  EXPECT_TRUE(req->UpdateAfterInflightTaskFinished());
+}
+
 // build-ahead 下 step N 产出 EOS 后，N+1 占位步必须丢弃，不写 output_tokens、不回填 placeholder。
 TEST_F(InferRequestTest, FastPath_EosDropsExtraStep) {
   const int eos = 999;

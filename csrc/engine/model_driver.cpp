@@ -396,11 +396,11 @@ Status ModelDriver::HandleSchedule() {
       PROFILE_EVENT_SCOPE(handle_schedule_get_next, "Engine.HandleSchedule.GetNext");
       schedule_result = schedule_processor_->GetNextScheduleResult();
     }
-    std::shared_ptr<ScheduleOutput> schedule_output = schedule_result->schedule_output;
-    if (!schedule_output) {
+    if (!schedule_result || !schedule_result->schedule_output) {
       KLLM_LOG_INFO << "HandleSchedule stopped.";
       break;
     }
+    std::shared_ptr<ScheduleOutput> schedule_output = schedule_result->schedule_output;
 
     PROFILE_EVENT_SCOPE(handle_schedule_iter, "Engine.HandleSchedule.iter");
 
@@ -464,6 +464,13 @@ Status ModelDriver::HandleSchedule() {
     }
     if (context_->global->IsDistributedMaster()) {
       schedule_output_pool_->PutSendScheduleOutput(schedule_output.get());
+    }
+
+    // Release chunk N's inflight task to immediately unblock chunk N+1 in the next multi-batch.
+    {
+      PROFILE_EVENT_SCOPE(handle_schedule_notify_multi_batch, "Engine.HandleSchedule.NotifyNextPPMultiBatch");
+      schedule_processor_->NotifyNextPPMultiBatch(schedule_result->generation_output_group.multi_batch_id,
+                                                  schedule_output);
     }
   }
   return Status();

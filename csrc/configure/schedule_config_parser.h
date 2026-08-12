@@ -31,7 +31,16 @@ enum ScheduleStrategy { CONTINUOUS_BATCHING = 0 };
 
 enum class SchedulerType { DEFAULT = 0, EVENT_DRIVEN = 1 };
 
-enum PPMultibatchWBStrategy { NO_WB = 0, NO_DYNAMIC_WB = 1, WB_BATCH_REQ = 2, WB_BATCH_TOKEN = 3, WB_REQ_TOKEN = 4 };
+// Configuration for PP Multibatch workload balance strategy
+struct PPMultibatchWBStrategy {
+  // Whether to enable PP multibatch workload balance.
+  bool enable = false;
+  // Max iters allowed to hold prefill reqs before
+  // the starvation backstop fires and force-commits the assignment.
+  int prefill_hold_iters = 30;
+  // Tolerable balance threshold.
+  float threshold_factor = 0.8f;
+};
 
 // Configuration for Attention Data Parallel Group Balance strategy
 struct AttentionDPGroupBalanceConfig {
@@ -54,7 +63,7 @@ struct BatchSchedulerConfig {
   ScheduleStrategy schedule_strategy = ScheduleStrategy::CONTINUOUS_BATCHING;
 
   // PP Multibatch workload balance strategy
-  PPMultibatchWBStrategy pp_multibatch_wb_strategy = PPMultibatchWBStrategy::NO_WB;
+  PPMultibatchWBStrategy pp_multibatch_wb_strategy;
 
   // Max waiting time in millisecond.
   size_t waiting_timeout_in_ms = 600000;

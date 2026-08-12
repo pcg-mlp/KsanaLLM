@@ -30,6 +30,8 @@ class ScheduleProcessorInterface {
 
   virtual void UpdateWithGenerationResult(const GenerationOutputGroup &generation_output) = 0;
 
+  virtual void NotifyNextPPMultiBatch(size_t multi_batch_id, const std::shared_ptr<ScheduleOutput> &schedule_output) {}
+
   // 外部调用：禁止/恢复 InferRequest 被调度线程修改。
   virtual void Lock() = 0;
   virtual void Unlock() = 0;

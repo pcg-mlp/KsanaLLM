@@ -75,7 +75,12 @@ class BatchScheduler : public BatchSchedulerInterface {
 
   void BalancePPMultiBatchReqs(size_t multi_batch_id);
 
-  void ReportBatchState(std::shared_ptr<BatchState> batch_state, std::string dp_idx_str);
+  // Shift chunked-prefill reqs from `multi_batch_id` onto the next multi_batch's
+  // waiting_queue front, so the next chunk runs on a different multi_batch
+  // for better PP pipeline overlap.
+  void ShiftChunkedReqsAcrossPPMultiBatch(size_t multi_batch_id);
+
+  void ReportBatchState(std::shared_ptr<BatchState> batch_state, size_t dp_idx);
 
   Status CreateMockReq(const RuntimeConfig &runtime_config,
                        std::vector<std::shared_ptr<InferRequest>> &infer_request_group);
@@ -127,8 +132,10 @@ class BatchScheduler : public BatchSchedulerInterface {
   // Balance requests algorithm
   std::unique_ptr<BalanceReqsAlgo> balance_reqs_algo_ = nullptr;
 
-  // Balance requests among multiple batchs in pipeline parallel
-  std::unique_ptr<PPMultibatchWorkloadBalancer> pp_multibatch_wl_balancer_ = nullptr;
+  // Balance requests among multiple batchs in pipeline parallel.
+  // One instance per dp so per-dp state (e.g. starvation hold_iter and
+  // held_waiting_reqs_) does not leak across dp groups.
+  std::vector<std::unique_ptr<PPMultibatchWorkloadBalancer>> pp_multibatch_wl_balancers_;
 
   // NOTE(karlluo, jackyjtang): The thread pool is not thread safe, so we need to be temp variable
   // group of all strategy schedule outputs
@@ -159,6 +166,11 @@ class BatchScheduler : public BatchSchedulerInterface {
   // 与 ModelInput 双 slot / max_depth=2 对齐：在途 launch 不得超过 2，launch(N+1) 前须 retire(N-1)。
   size_t executor_pipeline_depth_ = 0;
   static constexpr size_t kExecutorPipelineMaxDepth = 2;
+
+  // Balance stats
+  std::vector<std::vector<size_t>> last_step_tokens_;  // last observed step_token_num per (dp_idx, multi_batch_id)
+  double accumulated_balance_ratio_ = 0.0;             // sum of min/max(step_token) ratio across rounds
+  size_t accumulated_balance_round_ = 0;
 };
 
 }  // namespace ksana_llm

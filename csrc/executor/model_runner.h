@@ -97,6 +97,8 @@ class ModelRunner {
   std::thread result_report_thread_;
   std::shared_ptr<BlockingQueue<std::shared_ptr<SamplingOutput>>> sampling_output_queue_ = nullptr;
 
+  std::shared_ptr<Waiter> preprocess_drain_waiter_ = std::make_shared<Waiter>(0);
+
   // build-ahead 单次 postprocess 的跨调用状态（仅 Execute 线程经 HandlePostprocessInline 写入）。
   // 慢路径 postprocess 线程从不触碰这些字段，与 model_output_queue_ 消费路径互斥。
   bool postprocess_one_shot_ = false;

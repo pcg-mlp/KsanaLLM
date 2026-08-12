@@ -37,4 +37,5 @@ cpp_test(model_perf_backend_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler
 
 cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/strategy/continuous_batching_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 #cpp_test(batch_scheduler_balance_reqs_algo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_balance_reqs_algo_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
-#cpp_test(pp_multibatch_wb_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler//workload_balance/pp_multibatch_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(pp_multibatch_balancer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/workload_balance/pp_multibatch_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+cpp_test(schedule_processor_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/schedule_processor_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

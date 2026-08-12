@@ -463,6 +463,7 @@ class InferRequest {
   // 返回 oldest（最先 launched / 最先回流）的 inflight task。
   // 慢路径（深度 1）与原行为一致；build-ahead（深度 2）时即队首 inflight。
   const ScheduleTask &GetInflightTask() const { return inflight_tasks_[0]; }
+  const ScheduleTask &GetPlanningTask() const { return planning_task_; }
   const ScheduleTaskWorkload &GetRemainingWorkload() const { return remaining_workload_; }
   const ScheduleTaskWorkload &GetPlanningWorkload() const { return planning_workload_; }
 
@@ -499,7 +500,11 @@ class InferRequest {
   // HasPlanningTask()=true 一直跳过该请求。
   void ResetPlanningTask() { planning_task_.Reset(); }
 
-  void UpdateAfterInflightTaskFinished();
+  // 提前释放 chunked 请求的 inflight slot, 让下一 pp_batch 立即 launch 后续 chunk.
+  void RetireChunkedReqs();
+
+  // 返回 false 表示本次 sample 回流被 RetireChunkedReqs 提前处理过, caller 不应再 ResetInflightTask.
+  bool UpdateAfterInflightTaskFinished();
 
   bool IsEosGenerated() const { return is_eos_generated_; }
 
@@ -542,6 +547,9 @@ class InferRequest {
   // UpdateAfterInflightTaskFinished 在 oldest retire 时用 generated_tokens 回填。慢路径为空 deque，零开销。
   std::deque<size_t> pending_placeholder_positions_;
 
+  // RetireChunkedReqs 已 reset inflight, 后续 UpdateAfterInflightTaskFinished 应跳过正常处理.
+  size_t inflight_update_skip_count_ = 0;
+
   ScheduleTask planning_task_;
   ScheduleTaskWorkload planning_workload_;
   ScheduleTaskWorkload remaining_workload_;
@@ -562,11 +570,5 @@ inline std::string RequestVector2Str(const std::vector<std::shared_ptr<InferRequ
   ss << "]";
   return ss.str();
 }
-
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
-void AppendFlatKVCacheBlkIds(const uint32_t layer_num, const std::vector<int> &device_block_ids,
-                             std::vector<std::vector<int32_t>> &atb_block_ids,
-                             std::shared_ptr<CacheManagerInterface> cache_manager);
-#endif
 
 }  // namespace ksana_llm

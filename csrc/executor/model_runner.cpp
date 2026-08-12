@@ -115,6 +115,8 @@ Status ModelRunner::Stop() {
   model_output_queue_->Stop();
   sampling_output_queue_->Stop();
 
+  preprocess_drain_waiter_->Stop();
+
   // Wake the execute thread if it is currently parked inside ExecutorRuntime::Forward()'s wait for
   // the previous MtpForward Notify(); without this the join below could hang on a Notify that
   // HandlePostprocess will never deliver after the queues have been stopped.
@@ -174,6 +176,12 @@ Status ModelRunner::HandlePreprocess() {
       KLLM_LOG_INFO << "HandlePreprocess stopped.";
       break;
     }
+
+    {
+      PROFILE_EVENT_SCOPE(preprocess_drain_wait, "Exec.HandlePreprocess.DrainWait");
+      preprocess_drain_waiter_->Wait();
+    }
+    preprocess_drain_waiter_->Reset(1);
 
     PROFILE_EVENT_SCOPE(preprocess_iter, "Exec.HandlePreprocess.iter");
 
@@ -326,6 +334,7 @@ Status ModelRunner::HandleExecute() {
       // we must seal the pd_v2 epoch slot here to avoid leaking it from the
       // tracker's free pool.
       Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->ResetState(model_output->pd_v2_epoch_id);
+      preprocess_drain_waiter_->Notify();
     }
 
     // TP: 采样卡 rank 0 WriteRing 后，所有 rank（含非采样 PP stage 上的 TP worker）必须参与 collective。
@@ -463,6 +472,10 @@ Status ModelRunner::HandlePostprocess() {
       } else if (context_->global->IsDistributedResultReporter()) {
         sampling_output_pool_->PutSendSamplingOutput(sampling_output.get());
       }
+    }
+
+    if (context_->global->IsSamplingNode()) {
+      preprocess_drain_waiter_->Notify();
     }
 
     // build-ahead：Execute 线程单次调用，处理完即返回；不进入下一轮 while（慢路径无此分支）。

@@ -24,6 +24,12 @@ class ScheduleProcessor : public ScheduleProcessorInterface {
   std::shared_ptr<ScheduleResult> GetNextScheduleResult() override;
 
   void UpdateWithGenerationResult(const GenerationOutputGroup& generation_output) override;
+
+  // After a ScheduleOutput is dispatched, release the inflight task for
+  // every chunked-mid req it carried, then consume any parked
+  // ScheduleResult on the next multi-batch that may now be launchable.
+  void NotifyNextPPMultiBatch(size_t multi_batch_id, const std::shared_ptr<ScheduleOutput>& schedule_output) override;
+
   void Lock() override;
   void Unlock() override;
 
@@ -40,6 +46,10 @@ class ScheduleProcessor : public ScheduleProcessorInterface {
 
   // Internal helper method: processes data for next forwarding.
   virtual Status ProcessScheduleDataInternal(size_t multi_batch_id, ScheduleResult& result);
+
+  // Try to consume a parked planning_sched_results_[multi_batch_id]
+  // if it is now launchable.
+  bool TryConsumeScheduleResult(size_t multi_batch_id);
 
  private:
   std::atomic<bool> terminated_{false};

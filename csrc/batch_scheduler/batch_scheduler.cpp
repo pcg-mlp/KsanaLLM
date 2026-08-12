@@ -8,6 +8,7 @@
 #include <chrono>
 #include <future>
 #include <iomanip>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <thread>
@@ -44,11 +45,13 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
   waiting_reqs_.reserve(batch_scheduler_config_.max_waiting_queue_len * dp_num_);
 
   schedule_output_group_ = std::make_shared<ScheduleOutputGroup>(dp_num_);
-  KLLM_LOG_DEBUG << "pp_batch_num_=" << pp_batch_num_ << ", batch_scheduler_config_.pp_multibatch_wb_strategy="
-                 << batch_scheduler_config_.pp_multibatch_wb_strategy;
-  if (batch_scheduler_config_.pp_multibatch_wb_strategy != PPMultibatchWBStrategy::NO_WB) {
-    pp_multibatch_wl_balancer_ =
-        std::make_unique<PPMultibatchWorkloadBalancer>(batch_scheduler_config_.pp_multibatch_wb_strategy);
+  KLLM_LOG_DEBUG << "pp_batch_num_=" << pp_batch_num_ << ", batch_scheduler_config_.pp_multibatch_wb_strategy.enable="
+                 << batch_scheduler_config_.pp_multibatch_wb_strategy.enable;
+  if (pp_batch_num_ > 1 && batch_scheduler_config_.pp_multibatch_wb_strategy.enable) {
+    pp_multibatch_wl_balancers_.reserve(dp_num_);
+    for (size_t i = 0; i < dp_num_; ++i) {
+      pp_multibatch_wl_balancers_.emplace_back(std::make_unique<PPMultibatchWorkloadBalancer>(batch_scheduler_config_));
+    }
   }
   balance_reqs_algo_ = std::make_unique<BalanceReqsAlgo>();
   threadpool_ = std::make_unique<ThreadPool>(dp_num_);
@@ -73,6 +76,9 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
     }
     dp_waiting_reqs_[i].reserve(batch_scheduler_config_.max_waiting_queue_len);
   }
+
+  // Initialize PP balance stats: last_step_tokens_[dp_idx][multi_batch_id]
+  last_step_tokens_.assign(dp_num_, std::vector<size_t>(pp_batch_num_, 0));
 
   // Create mock request to make sure there are always launchable requests.
   always_return_launchable_req_ = runtime_config.parallel_basic_config.expert_world_size > 1;
@@ -152,6 +158,13 @@ bool BatchScheduler::IsIdle(size_t multi_batch_id) {
   {
     std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
     if (!waiting_reqs_.empty()) {
+      return false;
+    }
+  }
+
+  // Check if any dp's PP balancer is holding waiting reqs in its private queue.
+  for (auto& balancer : pp_multibatch_wl_balancers_) {
+    if (balancer->HasHeldWaitingReqs()) {
       return false;
     }
   }
@@ -282,33 +295,52 @@ void BatchScheduler::BalanceWaitingReqs() {
 }
 
 void BatchScheduler::BalancePPMultiBatchReqs(size_t multi_batch_id) {
-  if (!pp_multibatch_wl_balancer_) return;
+  if (pp_multibatch_wl_balancers_.empty()) {
+    return;
+  }
 
   for (size_t i = 0; i < dp_num_; ++i) {
-    pp_multibatch_wl_balancer_->BalancePPMultiBatchReqs(multi_batch_id, dp_waiting_reqs_[i], batch_states_[i]);
+    pp_multibatch_wl_balancers_[i]->BalancePPMultiBatchReqs(multi_batch_id, dp_waiting_reqs_[i], batch_states_[i]);
   }
 }
 
-void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, std::string dp_idx_str) {
-  size_t batch_size = batch_state->schedule_output->running_reqs.size();
-  REPORT_METRIC("batch_scheduler_batch_size_" + dp_idx_str, batch_size);
-  REPORT_METRIC("batch_scheduler_waiting_size_" + dp_idx_str, batch_state->waiting_queue.size());
+void BatchScheduler::ShiftChunkedReqsAcrossPPMultiBatch(size_t multi_batch_id) {
+  if (pp_multibatch_wl_balancers_.empty()) {
+    return;
+  }
+
+  for (size_t i = 0; i < dp_num_; ++i) {
+    pp_multibatch_wl_balancers_[i]->ShiftChunkedReqs(multi_batch_id, batch_states_[i]);
+  }
+}
+
+void BatchScheduler::ReportBatchState(std::shared_ptr<BatchState> batch_state, size_t dp_idx) {
+  const std::string multi_batch_idx_str = std::to_string(batch_state->multi_batch_id_);
+  const std::string dp_idx_str = std::to_string(dp_idx);
+  const size_t batch_size = batch_state->schedule_output->running_reqs.size();
+  REPORT_METRIC("batch_scheduler_batch_size_" + multi_batch_idx_str + "_" + dp_idx_str, batch_size);
+  REPORT_METRIC("batch_scheduler_waiting_size_" + multi_batch_idx_str + "_" + dp_idx_str,
+                batch_state->waiting_queue.size());
   REPORT_METRIC("batch_scheduler_batch_size", batch_size);
   REPORT_METRIC("batch_scheduler_waiting_size", batch_state->waiting_queue.size());
 
   if (batch_size > 0) {
-    size_t token_num = 0;
     size_t step_token_num = 0;
     const auto current_time = ProfileTimer::GetCurrentTimeInUs();
     for (const auto& req : batch_state->schedule_output->running_reqs) {
-      token_num += req->forwarding_tokens.size();
-      step_token_num += req->forwarding_tokens.size() - req->prefix_cache_len;
+      const ScheduleTaskWorkload& w = req->GetPlanningTask().workload;
+      const size_t step_tokens =
+          w.prefill_token_num > 0 ? w.prefill_token_num : w.generated_token_num + w.draft_token_num;
+      step_token_num += step_tokens;
+
       if (req->kv_cached_token_num == 0) {
         REPORT_METRIC("batch_manager_schedule_us", current_time - req->timestamp_in_us);
       }
     }
-    REPORT_METRIC("num_tokens_to_schedule", token_num);
     REPORT_METRIC("step_tokens_to_schedule", step_token_num);
+
+    // Track last step_token per (dp, multi_batch) for PP balance reporting.
+    last_step_tokens_[dp_idx][batch_state->multi_batch_id_] = step_token_num;
   }
 }
 
@@ -366,6 +398,10 @@ bool BatchScheduler::TryToLaunchPlannedScheduleOutput(size_t multi_batch_id, Sch
     ++executor_pipeline_depth_;
   }
 
+  // LaunchScheduleOutput() just moved chunk N from planning_task_
+  // into inflight_task_, so planning slot is now empty and the chunked req
+  // is eligible to be moved onto dst's waiting_queue.
+  ShiftChunkedReqsAcrossPPMultiBatch(multi_batch_id);
   return true;
 }
 
@@ -446,7 +482,7 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
   size_t total_mock_queue_size = 0;
   for (size_t i = 0; i < dp_num_; i++) {
     auto& batch_state = batch_states_[i][multi_batch_id];
-    ReportBatchState(batch_state, std::to_string(i));
+    ReportBatchState(batch_state, i);
     schedule_output_group_->outputs[i] = batch_state->schedule_output;
     total_running_size += batch_state->schedule_output->running_reqs.size();
     total_waiting_size_in_batch_states += batch_state->waiting_queue.size();
@@ -469,6 +505,29 @@ std::shared_ptr<ScheduleOutputGroup> BatchScheduler::Schedule(size_t multi_batch
                      << ", total_waiting_size_in_batch_states=" << total_waiting_size_in_batch_states
                      << ", total_dp_waiting_queue_size=" << total_dp_waiting_queue_size
                      << ", total_mock_queue_size=" << total_mock_queue_size;
+
+  // Balance: for each multi_batch, compare its step_token total against the
+  // previous multi_batch's value.
+  if (pp_batch_num_ > 1) {
+    size_t cur_step_token_num = 0;
+    for (size_t dp = 0; dp < dp_num_; ++dp) {
+      cur_step_token_num += last_step_tokens_[dp][multi_batch_id];
+    }
+    const size_t prev_mb = (multi_batch_id + pp_batch_num_ - 1) % pp_batch_num_;
+    size_t prev_step_token_num = 0;
+    for (size_t dp = 0; dp < dp_num_; ++dp) {
+      prev_step_token_num += last_step_tokens_[dp][prev_mb];
+    }
+    // Skip when either side is zero (first round before prev_mb seen, or idle
+    // batch) to avoid div-by-zero and ratio pollution.
+    if (cur_step_token_num > 0 && prev_step_token_num > 0) {
+      const size_t min_v = std::min(cur_step_token_num, prev_step_token_num);
+      const size_t max_v = std::max(cur_step_token_num, prev_step_token_num);
+      const double ratio = static_cast<double>(min_v) / static_cast<double>(max_v);
+      accumulated_balance_ratio_ += ratio;
+      accumulated_balance_round_++;
+    }
+  }
 
   ReportTotalState();
   return schedule_output_group_;
@@ -517,6 +576,21 @@ void BatchScheduler::ReportTotalState() {
                 << ", free_block_num=" << total_free_blocks_num
                 << ", block_utils=" << (total_used_blocks_num * 100 / total_block_num) << "% (" << total_used_blocks_num
                 << "/" << total_block_num << ")";
+
+  // Balance reporting: per-multi_batch last step_token, instantaneous
+  // imbalance ratio (min/max), and accumulated average ratio over rounds.
+  if (pp_batch_num_ > 1) {
+    const double avg_ratio = (accumulated_balance_round_ > 0)
+                                 ? accumulated_balance_ratio_ / static_cast<double>(accumulated_balance_round_)
+                                 : 0.0;
+    KLLM_LOG_INFO << "PP balance: accumulated avg balance ratio=" << avg_ratio << " over " << accumulated_balance_round_
+                  << " rounds";
+    REPORT_METRIC("pp_step_tokens_balance_ratio_avg", avg_ratio);
+
+    // Reset metric
+    accumulated_balance_ratio_ = 0.0;
+    accumulated_balance_round_ = 0;
+  }
 }
 
 Status BatchScheduler::CreateMockReq(const RuntimeConfig& runtime_config,

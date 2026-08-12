@@ -48,6 +48,14 @@ setting:
 
   # 调度相关配置
   batch_scheduler:
+    # 多batch并行（设置流水线并行时启用），大幅提升吞吐性能，默认为1。
+    max_pp_batch_num: 1
+    # 多batch并行负载均衡策略
+    pp_multibatch_wb_strategy:
+      # 是否启用多batch并行负载均衡
+      enable: false
+      # 在请求计算量未达标时最多hold的迭代次数，超过后强制commit
+      prefill_hold_iters: 30
     # 调度器类型，0表示老的default scheduler，1表示event_driven_scheduler
     scheduler_type: 0
     # 调度策略，0表示continuous_batching，默认为0

@@ -43,6 +43,12 @@ class PpBatchDistributorTest : public ::testing::Test {
     }
   }
 
+  static PPMultibatchWBStrategy MakeStrategy(bool enable) {
+    PPMultibatchWBStrategy s;
+    s.enable = enable;
+    return s;
+  }
+
   size_t max_pp_batch_num_ = 2;
   size_t dp_num_ = 1;
   std::vector<std::vector<DpScheduleState>> schedule_states_;
@@ -50,7 +56,7 @@ class PpBatchDistributorTest : public ::testing::Test {
 };
 
 TEST_F(PpBatchDistributorTest, EmptyRequests) {
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   distributor.DistributeRequests(requests, max_pp_batch_num_, dp_num_, schedule_states_, req_to_batch_idx_);
   EXPECT_TRUE(req_to_batch_idx_.empty());
@@ -61,7 +67,7 @@ TEST_F(PpBatchDistributorTest, SingleBatchAssignment) {
   schedule_states_.resize(max_pp_batch_num_);
   schedule_states_[0].resize(dp_num_);
 
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
   requests.push_back(MakeReq(1002, 0));
@@ -75,7 +81,7 @@ TEST_F(PpBatchDistributorTest, SingleBatchAssignment) {
 }
 
 TEST_F(PpBatchDistributorTest, GreedyMinWorkloadDistribution) {
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
   requests.push_back(MakeReq(1002, 0));
@@ -98,7 +104,7 @@ TEST_F(PpBatchDistributorTest, RespectsExistingWorkload) {
   // Pre-populate batch 0 with decoding requests to make it heavier.
   schedule_states_[0][0].decoding_reqs.push_back(MakeReq(2001, 0));
 
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
 
@@ -117,7 +123,7 @@ TEST_F(PpBatchDistributorTest, MultiDpDistribution) {
     schedule_states_[bid].resize(dp_num_);
   }
 
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   // DP 0 requests
   requests.push_back(MakeReq(1001, 0));
@@ -134,7 +140,7 @@ TEST_F(PpBatchDistributorTest, MultiDpDistribution) {
 }
 
 TEST_F(PpBatchDistributorTest, NullRequestSkipped) {
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
   requests.push_back(nullptr);  // should be skipped
@@ -148,7 +154,7 @@ TEST_F(PpBatchDistributorTest, NullRequestSkipped) {
 }
 
 TEST_F(PpBatchDistributorTest, WbReqTokenStrategy) {
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::WB_REQ_TOKEN);
+  PpBatchDistributor distributor(MakeStrategy(true));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0, /*planning_query_len=*/10));
   requests.push_back(MakeReq(1002, 0, /*planning_query_len=*/1));
@@ -163,7 +169,7 @@ TEST_F(PpBatchDistributorTest, WbReqTokenStrategy) {
 
 TEST_F(PpBatchDistributorTest, BatchIsolationAfterDistribution) {
   // Verify that once assigned, requests do NOT appear in the wrong batch's queues.
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
   requests.push_back(MakeReq(1002, 0));
@@ -185,7 +191,7 @@ TEST_F(PpBatchDistributorTest, BatchIsolationAfterDistribution) {
 TEST_F(PpBatchDistributorTest, ReqToBatchIdxConsistency) {
   // Every distributed request must have an entry in req_to_batch_idx,
   // and the entry must match the batch where the request was placed.
-  PpBatchDistributor distributor(PPMultibatchWBStrategy::NO_DYNAMIC_WB);
+  PpBatchDistributor distributor(MakeStrategy(false));
   std::vector<std::shared_ptr<InferRequest>> requests;
   requests.push_back(MakeReq(1001, 0));
   requests.push_back(MakeReq(1002, 0));

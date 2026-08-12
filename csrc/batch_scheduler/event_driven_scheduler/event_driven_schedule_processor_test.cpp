@@ -804,7 +804,7 @@ TEST_F(EventDrivenScheduleProcessorWhiteBox, OnAddKeepsOutputForRestartResubmit)
 }
 
 TEST_F(EventDrivenScheduleProcessorWhiteBox, OnAddWithDistributor) {
-  proc_->SetPpBatchDistributor(std::make_shared<PpBatchDistributor>(PPMultibatchWBStrategy::NO_WB));
+  proc_->SetPpBatchDistributor(std::make_shared<PpBatchDistributor>(PPMultibatchWBStrategy{}));
   auto req = MakeReq(1);
   auto info = std::make_shared<EventAddRequestInfo>();
   info->reqs = {req};

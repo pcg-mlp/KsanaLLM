@@ -295,8 +295,33 @@ void InferRequest::SetPlanningTask() {
   planning_workload_.Reset();
 }
 
-void InferRequest::UpdateAfterInflightTaskFinished() {
+void InferRequest::RetireChunkedReqs() {
+  KLLM_CHECK_WITH_INFO(inflight_count_ > 0 && IsSplitPrefillStep(),
+                       "RetireChunkedReqs precondition violated" + ScheduleStateToStr());
+  KLLM_CHECK(generated_tokens.empty());
+  KLLM_CHECK(accepted_tokens.empty());
+  KLLM_CHECK(draft_tokens.size() == 0);
+
+  kv_cached_token_num = forwarding_tokens.size();
+  remaining_workload_.generated_token_num = 0;
+  remaining_workload_.draft_token_num = 0;
+  planning_workload_.Reset();
+  planning_workload_.prefill_token_num = remaining_workload_.prefill_token_num;
+
+  ResetInflightTask();
+  ++inflight_update_skip_count_;
+}
+
+bool InferRequest::UpdateAfterInflightTaskFinished() {
+  if (inflight_update_skip_count_ > 0) {
+    generated_tokens.clear();
+    accepted_tokens.clear();
+    draft_tokens.clear();
+    --inflight_update_skip_count_;
+    return false;
+  }
   KLLM_CHECK(inflight_count_ > 0);
+
   const ScheduleTask &oldest_inflight = inflight_tasks_[0];
 
   // fast path 深度 2 下, step N 产出 EOS 后仍可能已 launch step N+1 (占位步).
@@ -309,7 +334,7 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
     if (!pending_placeholder_positions_.empty()) {
       pending_placeholder_positions_.pop_front();
     }
-    return;
+    return true;
   }
 
   // placeholder 回填后需清空 generated_tokens, 防止下次 LaunchPlanningTask 重复 append (见函数末尾).
@@ -387,6 +412,7 @@ void InferRequest::UpdateAfterInflightTaskFinished() {
   if (fast_path_placeholder_consumed) {
     generated_tokens.clear();
   }
+  return true;
 }
 
 void InferRequest::ResetInflightTask() {

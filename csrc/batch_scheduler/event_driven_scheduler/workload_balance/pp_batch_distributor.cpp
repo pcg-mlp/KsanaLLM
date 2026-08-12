@@ -14,7 +14,9 @@
 namespace ksana_llm {
 
 PpBatchDistributor::PpBatchDistributor(PPMultibatchWBStrategy strategy) : strategy_(strategy) {
-  KLLM_LOG_INFO << "PpBatchDistributor created with strategy=" << static_cast<int>(strategy_);
+  KLLM_LOG_INFO << "PpBatchDistributor created with strategy: enable=" << strategy_.enable
+                << ", prefill_hold_iters=" << strategy_.prefill_hold_iters
+                << ", threshold_factor=" << strategy_.threshold_factor;
 }
 
 void PpBatchDistributor::DistributeRequests(std::vector<std::shared_ptr<InferRequest>>& requests,
@@ -77,22 +79,11 @@ int PpBatchDistributor::CalculateWorkload(const std::shared_ptr<InferRequest>& r
   if (!req) {
     return 0;
   }
-  switch (strategy_) {
-    case PPMultibatchWBStrategy::NO_WB:
-      return 1;
-    case PPMultibatchWBStrategy::NO_DYNAMIC_WB:
-      return 1;
-    case PPMultibatchWBStrategy::WB_BATCH_REQ:
-      return 1;
-    case PPMultibatchWBStrategy::WB_BATCH_TOKEN:
-      // Coarse token-based: each 200-token chunk counts as 1 workload unit.
-      return static_cast<int>(req->forwarding_tokens.size() / 200) + 1;
-    case PPMultibatchWBStrategy::WB_REQ_TOKEN:
-      // Fine token-based: actual uncached tokens.
-      return std::max(1, static_cast<int>(req->output_tokens.size()) - static_cast<int>(req->kv_cached_token_num));
-    default:
-      return 1;
+  if (!strategy_.enable) {
+    return 1;
   }
+  // Token-based workload: actual uncached tokens.
+  return std::max(1, static_cast<int>(req->output_tokens.size()) - static_cast<int>(req->kv_cached_token_num));
 }
 
 int PpBatchDistributor::CalculateSlotWorkload(const std::vector<std::vector<DpScheduleState>>& schedule_states,

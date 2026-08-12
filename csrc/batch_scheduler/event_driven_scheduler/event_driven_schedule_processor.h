@@ -107,11 +107,6 @@ class EventDrivenScheduleProcessor : public ScheduleProcessorInterface {
   ScheduleLoadStat GetLocalLoadUnlocked();
 
  private:
-  // White-box unit test peer: grants access to private handlers and members so
-  // pd_v2 / async / error branches can be driven deterministically on a single
-  // thread (without spinning up AsyncSchedulerLoop). Test-only; no production use.
-  friend class EventDrivenScheduleProcessorWhiteBox;
-
   void AsyncSchedulerLoop();
   void DispatchEvent(SchedEvent& event);
   void OnEventAddRequest(const std::shared_ptr<EventAddRequestInfo>& info);

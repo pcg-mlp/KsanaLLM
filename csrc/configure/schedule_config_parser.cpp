@@ -326,8 +326,16 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   batch_scheduler_config_.scheduler_type = static_cast<SchedulerType>(scheduler_type_int);
   batch_scheduler_config_.schedule_strategy = static_cast<ScheduleStrategy>(
       yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.schedule_strategy", 0));
-  batch_scheduler_config_.pp_multibatch_wb_strategy = static_cast<PPMultibatchWBStrategy>(
-      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.batch_scheduler.pp_multibatch_wb_strategy", 0));
+  batch_scheduler_config_.pp_multibatch_wb_strategy.enable = yaml_reader.GetScalar<bool>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.pp_multibatch_wb_strategy.enable", false);
+  batch_scheduler_config_.pp_multibatch_wb_strategy.prefill_hold_iters = yaml_reader.GetScalar<int>(
+      yaml_reader.GetRootNode(), "setting.batch_scheduler.pp_multibatch_wb_strategy.prefill_hold_iters", 30);
+  batch_scheduler_config_.max_pp_batch_num =
+      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pp_batch_num", 1);
+  if (batch_scheduler_config_.max_pp_batch_num == 1 && batch_scheduler_config_.pp_multibatch_wb_strategy.enable) {
+    KLLM_LOG_WARNING << "Disable pp balance since max_pp_batch_num is 1.";
+    batch_scheduler_config_.pp_multibatch_wb_strategy.enable = false;
+  }
   batch_scheduler_config_.waiting_timeout_in_ms =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.waiting_timeout_in_ms", 600000);
   batch_scheduler_config_.max_waiting_queue_len =
@@ -344,8 +352,6 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pretransfer_batch_size", 64);
   batch_scheduler_config_.transfer_layer_chunk_size =
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.transfer_layer_chunk_size", 1);
-  batch_scheduler_config_.max_pp_batch_num =
-      yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.batch_scheduler.max_pp_batch_num", 1);
   batch_scheduler_config_.launch_block_threshold =
       yaml_reader.GetScalar<float>(yaml_reader.GetRootNode(), "setting.batch_scheduler.launch_block_threshold", 2.0);
   batch_scheduler_config_.split_fuse_token_num =
@@ -411,6 +417,11 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_xgrammar", true);
   batch_scheduler_config_.enable_async =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.batch_scheduler.enable_async", false);
+  if (batch_scheduler_config_.pp_multibatch_wb_strategy.enable && batch_scheduler_config_.enable_async) {
+    KLLM_LOG_WARNING
+        << "Async scheduling and pp balance cannot be enabled simultaneously, enable_async will be set to false.";
+    batch_scheduler_config_.enable_async = false;
+  }
 
   // Executor 端 build-ahead + device 侧 token 替换总开关（默认关闭）。
   batch_scheduler_config_.enable_executor_build_ahead = yaml_reader.GetScalar<bool>(
