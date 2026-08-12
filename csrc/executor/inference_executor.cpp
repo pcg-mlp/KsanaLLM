@@ -434,6 +434,11 @@ void InferenceExecutor::SetupPdV2PrefillKvWrite(const PdV2RuntimeConfig &pd_v2_r
   // BlockAllocator.
   pd_v2_layer_tracker_->RegisterEpochEndCallback(
       [dispatcher_raw](int rank, uint64_t epoch_id) { dispatcher_raw->OnEpochEnd(rank, epoch_id); });
+  // Pin batch reqs at BeginBatch for PdV2KvDispatcher.
+  model_runner_->SetEpochReqCapture(
+      [dispatcher_raw](uint64_t epoch_id, const std::vector<std::shared_ptr<ExecutorInferRequest>> &reqs) {
+        dispatcher_raw->CaptureEpochReqs(epoch_id, reqs);
+      });
   KLLM_LOG_INFO << "pd_v2 Prefill executor: layer_tracker + kv_dispatcher + "
                 << "kv_barrier wired (num_layers=" << num_layers << " prefill_tp=" << prefill_tp
                 << " chunk_size=" << chunk_size << " use_mla=" << pd_v2_model_config.use_mla << ")";

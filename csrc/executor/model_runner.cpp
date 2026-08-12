@@ -77,6 +77,11 @@ void ModelRunner::SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> 
   global_cache_put_worker_ = global_cache_put_worker;
 }
 
+void ModelRunner::SetEpochReqCapture(
+    std::function<void(uint64_t, const std::vector<std::shared_ptr<ExecutorInferRequest>>&)> cb) {
+  epoch_req_capture_ = std::move(cb);
+}
+
 Status ModelRunner::Start() {
   // Store the inflight resource manager pointer in ModelInstance so that Load()
   // can register resources once the base model is available. Both fields must
@@ -305,6 +310,11 @@ Status ModelRunner::HandleExecute() {
     // never racing with the next batch's writes. No-op (returns 0) on
     // non-pd_v2 / non-Prefill processes.
     model_output->pd_v2_epoch_id = Singleton<pd_v2::PdV2LayerEventTracker>::GetInstance()->BeginBatch();
+
+    // pd_v2: CaptureEpochReqs before Forward.
+    if (epoch_req_capture_ && model_output->pd_v2_epoch_id != 0) {
+      epoch_req_capture_(model_output->pd_v2_epoch_id, model_input->schedule_output->executor_running_reqs);
+    }
 
     {
       PROFILE_EVENT_SCOPE(execute_forward_launch, "Exec.HandleExecute.ForwardLaunch");

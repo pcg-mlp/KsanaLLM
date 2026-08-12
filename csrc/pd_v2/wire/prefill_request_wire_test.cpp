@@ -367,7 +367,7 @@ TEST(PrefillRequestWireTest, PeerHealthSchemaEvolutionLoadFieldsDefaultZero) {
 
 TEST(PrefillRequestWireTest, NotifyBodyFitsUnder64KBWith8Targets) {
   PrefillRequest req;
-  req.decode_engine_inference_addr = "29.226.50.29:8089";
+  req.decode_engine_inference_addr = "10.0.0.1:8089";
   req.req_id = 31931136;
   req.stage_start_slot = 0;
   req.stage_n_slots = 6;

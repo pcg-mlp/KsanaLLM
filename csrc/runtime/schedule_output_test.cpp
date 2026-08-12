@@ -170,6 +170,10 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   auto request = BuildRequest(input);
   auto full_req = BuildInferRequest(request, 1001, false);
   auto patch_req = BuildInferRequest(request, 1002, true);
+  // pd_v2 split-fuse: default is true; set false to prove the non-default
+  // value survives both the full-req and patch serialize/deserialize paths.
+  full_req->is_last_prefill_step = false;
+  patch_req->is_last_prefill_step = false;
   patch_req->forwarding_tokens = {901, 903};
   patch_req->kv_cache_blocks = {31, 33};
   patch_req->kv_cached_token_num = 3;
@@ -218,6 +222,8 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->infer_stage, full_req->infer_stage);
   EXPECT_EQ(exec_req->step, full_req->step);
   EXPECT_EQ(exec_req->kv_cached_token_num, full_req->kv_cached_token_num);
+  EXPECT_EQ(exec_req->is_last_prefill_step, full_req->is_last_prefill_step);  // pd_v2 split-fuse
+  EXPECT_FALSE(exec_req->is_last_prefill_step);
   EXPECT_EQ(exec_req->kv_comm_group_key, full_req->kv_comm_group_key);
   EXPECT_EQ(exec_req->attn_dp_group_id, full_req->attn_dp_group_id);
   EXPECT_EQ(exec_req->sampling_token_num, full_req->sampling_token_num);
@@ -241,6 +247,8 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(patch->infer_stage, patch_req->infer_stage);
   EXPECT_EQ(patch->step, patch_req->step);
   EXPECT_EQ(patch->sampling_token_num, patch_req->sampling_token_num);
+  EXPECT_EQ(patch->is_last_prefill_step, patch_req->is_last_prefill_step);  // pd_v2 split-fuse
+  EXPECT_FALSE(patch->is_last_prefill_step);
 }
 
 // =============================================================================
@@ -425,6 +433,42 @@ TEST(ScheduleOutputTest, SerializePreferSnapshotOverLiveForwardingTokens) {
   ASSERT_EQ(dst.executor_running_reqs.size(), 1u);
   EXPECT_EQ(dst.executor_running_reqs[0]->forwarding_tokens, snap_fwd);
   EXPECT_NE(dst.executor_running_reqs[0]->forwarding_tokens.back(), InferRequest::kFastPathPlaceholderTokenId);
+}
+
+TEST(ScheduleOutputTest, SplitFuseIsLastPrefillStepPrefersSnapshotOverLive) {
+  auto scheduler = std::make_shared<DummyBatchScheduler>();
+  auto schedule_processor = std::make_shared<DummyScheduleProcessor>();
+  schedule_processor->Initialize(scheduler);
+  ScheduleOutputParser::SetScheduleProcessor(schedule_processor);
+
+  auto fixture = BuildDecodeReadyInferRequest(/*req_id=*/2020, /*first_decoded_token=*/55);
+  auto& req = fixture.infer_req;
+  ScheduleOutput output;
+  output.running_reqs = {req};
+  output.schedule_id = 123;
+
+  // step N: 非末 prefill chunk。
+  req->is_last_prefill_step = false;
+  ArmDecodePlanningWorkload(req);
+  output.SetPlanningTask();
+  output.LaunchScheduleOutput(/*max_depth=*/2);
+  EXPECT_FALSE(output.req_serialization_snapshots[req->req_id].is_last_prefill_step);
+
+  // step N+1 抢先覆写 live 字段为末 chunk。
+  req->is_last_prefill_step = true;
+
+  size_t bytes = ScheduleOutputParser::GetSerializedSize(&output);
+  std::vector<uint8_t> buffer(bytes);
+  size_t serialized_bytes = 0;
+  Status status = ScheduleOutputParser::SerializeScheduleOutput(&output, buffer.data(), &serialized_bytes);
+  EXPECT_TRUE(status.OK());
+
+  ScheduleOutput dst;
+  status = ScheduleOutputParser::DeserializeScheduleOutput(buffer.data(), &dst);
+  EXPECT_TRUE(status.OK());
+  ASSERT_EQ(dst.executor_running_reqs.size(), 1u);
+  // Executor 端读到的是 step N 的快照值 (false)，不是被污染的 live (true)。
+  EXPECT_FALSE(dst.executor_running_reqs[0]->is_last_prefill_step);
 }
 
 // stopped req 不参与 inflight capacity 检查，与 EventDrivenStateTest 语义对齐。

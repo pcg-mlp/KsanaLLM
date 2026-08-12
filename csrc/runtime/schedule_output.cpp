@@ -359,6 +359,11 @@ static Status SerializeInferRequests(
     // output.
     SerializePod<bool>(req->pd_v2.kv_from_remote, ptr, offset);
 
+    // is_last_prefill_step (pd_v2 split-fuse). Read from snapshot like `step`
+    // so a next-step overwrite (chunk k -> k+1) can't leak a premature
+    // last-chunk flag into this step's KV write decision.
+    SerializePod<bool>(snap ? snap->is_last_prefill_step : req->is_last_prefill_step, ptr, offset);
+
     // kv_cache_blocks
     if (snap) {
       SerializeVector<int>(snap->kv_cache_blocks, ptr, offset);
@@ -529,6 +534,9 @@ static Status DeserializeInferRequests(std::vector<std::shared_ptr<ExecutorInfer
     // kv_from_remote (pd_v2). See SerializeInferRequests for rationale.
     req->kv_from_remote = DeserializePod<bool>(ptr, offset);
 
+    // is_last_prefill_step (pd_v2 split-fuse). See SerializeInferRequests.
+    req->is_last_prefill_step = DeserializePod<bool>(ptr, offset);
+
     // kv_cache_blocks
     DeserializeVector<int>(req->kv_cache_blocks, ptr, offset);
 
@@ -616,6 +624,9 @@ static Status SerializeInferRequestPatches(const std::vector<std::shared_ptr<Inf
     // kv_from_remote (pd_v2)
     SerializePod<bool>(req->kv_from_remote, ptr, offset);
 
+    // is_last_prefill_step (pd_v2 split-fuse)
+    SerializePod<bool>(req->is_last_prefill_step, ptr, offset);
+
     // prefix_cache_len
     SerializePod<int>(req->prefix_cache_len, ptr, offset);
 
@@ -671,6 +682,9 @@ static Status DeserializeInferRequestPatches(std::vector<std::shared_ptr<InferRe
 
     // kv_from_remote (pd_v2)
     req_patch->kv_from_remote = DeserializePod<bool>(ptr, offset);
+
+    // is_last_prefill_step (pd_v2 split-fuse)
+    req_patch->is_last_prefill_step = DeserializePod<bool>(ptr, offset);
 
     // prefix_cache_len
     req_patch->prefix_cache_len = DeserializePod<int>(ptr, offset);
@@ -749,6 +763,9 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
       // pd_v2: kv_from_remote is per-request (not snapshot-tracked), so it is set
       // directly here; the remaining fields are populated from the snapshot below.
       patch_req->kv_from_remote = req->pd_v2.kv_from_remote;
+      // pd_v2 split-fuse: default to live; overridden by snapshot below when
+      // present (snapshot is the race-free source, same as `step`).
+      patch_req->is_last_prefill_step = req->is_last_prefill_step;
       patch_req->forwarding_tokens_offset = 0;
       patch_req->kv_cache_blocks_offset = 0;
 
@@ -765,6 +782,7 @@ Status ScheduleOutputParser::SerializeScheduleOutput(const ScheduleOutput* sched
         patch_req->mamba_kv_cache_block_id = snap.mamba_kv_cache_block_id;
         patch_req->prefix_cache_len = snap.prefix_cache_len;
         patch_req->step = snap.step;
+        patch_req->is_last_prefill_step = snap.is_last_prefill_step;
       } else {
         patch_req->kv_cached_token_num = req->kv_cached_token_num;
         patch_req->forwarding_tokens_draft_num = req->forwarding_tokens_draft_num;

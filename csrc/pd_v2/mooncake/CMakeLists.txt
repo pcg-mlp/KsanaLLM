@@ -99,30 +99,6 @@ target_link_libraries(pd_v2_connector_mooncake PRIVATE
 target_link_options(pd_v2_connector_mooncake PRIVATE -Wl,--exclude-libs,ALL)
 
 if(WITH_STANDALONE_TEST)
-    # RedisAliveStore unit test. Skips at runtime when the smoke Redis
-    # is unreachable so non-networked CI doesn't block. Compiles
-    # redis_alive_store.cpp directly (rather than depending on the
-    # connector .so) to keep the test isolated from Mooncake link.
-    # hiredis is vendored into the pd_v2 private deps prefix by
-    # cmake/external/mooncake_tent.cmake (not host-installed under
-    # /usr/local on lean CI images), so link the static archive by full
-    # path and add its include dir explicitly — same source as the
-    # connector library above.
-    cpp_test(pd_v2_redis_alive_store_test
-        SRCS
-            ${CMAKE_CURRENT_SOURCE_DIR}/redis_alive_store_test.cpp
-            ${CMAKE_CURRENT_SOURCE_DIR}/redis_alive_store.cpp
-        DEPS utils
-        LIBS ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libhiredis.a)
-    # cpp_test gates on WITH_TESTING; only patch the target when it
-    # actually got created.
-    if(TARGET pd_v2_redis_alive_store_test)
-        target_include_directories(pd_v2_redis_alive_store_test PRIVATE
-            ${PROJECT_SOURCE_DIR}/csrc
-            ${PD_V2_MOONCAKE_DEPS_PREFIX}/include
-            /usr/local/include)
-    endif()
-
     # Cross-device copy contract test. Pins down the CUDA-runtime premises the
     # vendored Mooncake patch depends on. Skips at runtime if fewer than 2 GPUs
     # are visible. Doesn't link Mooncake; it's a pure cuda_runtime contract test.
@@ -240,5 +216,42 @@ if(WITH_STANDALONE_TEST)
             ${PD_V2_MOONCAKE_DEPS_PREFIX}/include
             /usr/local/include)
         target_compile_definitions(pd_v2_engine_connector_fake_test PRIVATE USE_TENT)
+    endif()
+
+    # Split-fuse KV-write trigger test: drives the REAL PdV2KvDispatcher against
+    # the fake tent + real MooncakeExecutorConnector, with a fake host-pointer
+    # BlockAllocatorManager. Verifies the is_last_prefill_step gate — non-final
+    # chunk defers (no write/track), final chunk transfers all blocks.
+    #
+    # Build condition is IDENTICAL to pd_v2_executor_connector_fake_test /
+    # pd_v2_engine_connector_fake_test above: same if(WITH_STANDALONE_TEST)
+    # guard, same libhiredis.a link (pulled in via redis_alive_store.cpp, a
+    # link dependency of mooncake_executor_connector.cpp) and same USE_TENT
+    # define. No extra deps beyond those siblings, so it needs no additional
+    # condition.
+    cpp_test(pd_v2_split_fuse_transfer_fake_test
+        SRCS
+            ${CMAKE_CURRENT_SOURCE_DIR}/../prefill/pd_v2_kv_dispatcher_split_fuse_fake_test.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../prefill/pd_v2_kv_dispatcher.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../prefill/pd_v2_kv_barrier.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/mooncake_executor_connector.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/executor_tent_wrapper.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/redis_alive_store.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/fake_tent/fake_tent_engine.cpp
+            ${PROJECT_SOURCE_DIR}/csrc/executor/executor_request_manager.cpp
+            ${PROJECT_SOURCE_DIR}/csrc/runtime/executor_infer_request.cpp
+        DEPS pd_v2_public pd_v2_wire utils device cache_manager
+        LIBS ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libhiredis.a)
+    if(TARGET pd_v2_split_fuse_transfer_fake_test)
+        target_include_directories(pd_v2_split_fuse_transfer_fake_test BEFORE PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/fake_tent
+            ${CMAKE_CURRENT_SOURCE_DIR}
+            ${PROJECT_SOURCE_DIR}/csrc
+            ${PROJECT_BINARY_DIR}/third_party/install/base64/include
+            ${PROJECT_BINARY_DIR}/third_party/install/nlohmann_json/single_include
+            ${PROJECT_BINARY_DIR}/third_party/download/fmt/include
+            ${PD_V2_MOONCAKE_DEPS_PREFIX}/include
+            /usr/local/include)
+        target_compile_definitions(pd_v2_split_fuse_transfer_fake_test PRIVATE USE_TENT)
     endif()
 endif()

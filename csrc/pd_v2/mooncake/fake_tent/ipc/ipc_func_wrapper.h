@@ -40,8 +40,23 @@ class IpcFuncWrapper {
     return ok ? Status() : Status(RET_RUNTIME_FAILED, "fake ipc: kv pool not ready");
   }
 
+  // Barrier report sink. PdV2KvBarrier calls this once a request's in-flight
+  // KV batches drain; the fake just records the last report for assertions.
+  // Matches the real signature (csrc/ipc/ipc_func_wrapper.h).
+  Status ReportPdV2BarrierDone(int64_t req_id, uint8_t status) {
+    last_barrier_req_id_ = req_id;
+    last_barrier_status_ = status;
+    ++barrier_report_count_;
+    return Status();
+  }
+
   // Test-visible: the fn registered by MooncakeExecutorConnector.
   KvQueryFn kv_query_fn_;
+
+  // Test-visible: last barrier report (see ReportPdV2BarrierDone).
+  int64_t last_barrier_req_id_ = -1;
+  uint8_t last_barrier_status_ = 0;
+  int barrier_report_count_ = 0;
 };
 
 }  // namespace ksana_llm

@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <functional>
+
 #include "device/device_context.h"
 #include "executor/executor_runtime.h"
 #include "ipc/ipc_func_wrapper.h"
@@ -34,6 +36,9 @@ class ModelRunner {
   void SetSamplingOutputPool(std::shared_ptr<SamplingOutputPool> sampling_output_pool);
   void SetCompositeSpeculativeDecoder(std::shared_ptr<CompositeSpeculativeDecoder> decoder);
   void SetGlobalCachePutWorker(std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker);
+
+  // pd_v2: BeginBatch → CaptureEpochReqs; no-op if unset.
+  void SetEpochReqCapture(std::function<void(uint64_t, const std::vector<std::shared_ptr<ExecutorInferRequest>>&)> cb);
 
   // Start runner, all worker threads should be ready.
   Status Start();
@@ -113,6 +118,9 @@ class ModelRunner {
 
   // 全局 cache put 工作器（Forward 完成后异步上传 KV cache）
   std::shared_ptr<GlobalCachePutWorker> global_cache_put_worker_ = nullptr;
+
+  // pd_v2: see SetEpochReqCapture.
+  std::function<void(uint64_t, const std::vector<std::shared_ptr<ExecutorInferRequest>>&)> epoch_req_capture_ = nullptr;
 
   // 本步采样 ring 的当前 slot；仅在 HandlePreprocess 线程内访问，无需原子。
   // build-ahead 启用时每步 cur_ring_slot_ ^= 1u（0/1 交替），上一步写入 slot 为 cur_slot ^ 1u；

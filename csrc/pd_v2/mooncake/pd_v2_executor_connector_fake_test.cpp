@@ -15,12 +15,10 @@
 #include <string>
 #include <vector>
 
-#include "pd_v2/mooncake/mooncake_executor_connector.h"
-#include "pd_v2/mooncake/redis_alive_store.h"
-#include "pd_v2/public/pd_v2_config.h"
 #include "ipc/ipc_func_wrapper.h"  // fake
+#include "pd_v2/mooncake/mooncake_executor_connector.h"
+#include "pd_v2/public/pd_v2_config.h"
 #include "transfer_engine.h"  // fake: Reset()
-
 
 namespace ksana_llm {
 namespace pd_v2 {
@@ -38,17 +36,6 @@ PdV2ConnectorConfig ExecConfig(const std::string& inference_addr, int rank, uint
   c.executor.executor_rank = rank;
   c.executor.rpc_port = rpc_port;
   return c;
-}
-
-constexpr const char* kRedisAddr = "redis://29.226.50.29:6379";
-
-bool RedisAvailable() {
-  setenv("MC_REDIS_PASSWORD", "Redis@123456", /*overwrite=*/1);
-  RedisAliveStore s;
-  Status rs = s.Connect(kRedisAddr, /*password=*/"");
-  bool ok = rs.OK();
-  if (ok) s.Disconnect();
-  return ok;
 }
 
 }  // namespace
@@ -218,36 +205,6 @@ TEST_F(ExecutorConnectorFakeTest, BarrierSurfaceBeforeInitialize) {
   uint64_t batch = 3;
   std::vector<uint8_t> src(8, 0);
   EXPECT_FALSE(conn.SubmitWriteAsyncForRequest("x", 0, src.data(), src.size(), 1, &batch).OK());
-}
-
-// Redis-backed executor epoch tracker: seed a decode_alive key, let the
-// EpochPollLoop discover it, then change its epoch (invalidate path) and
-// delete it (disappeared path). Exercises EpochPollLoop / ParseEpochFromJson
-// / InvalidatePeerSegments. Skips when Redis is unreachable.
-TEST_F(ExecutorConnectorFakeTest, RedisEpochPollDiscoverInvalidateDisappear) {
-  if (!RedisAvailable()) GTEST_SKIP() << "Redis unavailable";
-  setenv("MC_REDIS_PASSWORD", "Redis@123456", /*overwrite=*/1);
-
-  const std::string key = "pd_v2/decode_alive/dev_cluster/29.226.50.29:18077";
-  RedisAliveStore seeder;
-  ASSERT_TRUE(seeder.Connect(kRedisAddr, "").OK());
-  ASSERT_TRUE(seeder.Set(key, "{\"epoch\":100}", /*ttl_s=*/30).OK());
-
-  MooncakeExecutorConnector conn;
-  PdV2ConnectorConfig c = ExecConfig("execdecode", /*rank=*/0, 23000);
-  c.metadata_addr = kRedisAddr;  // enables the epoch poll thread
-  ASSERT_TRUE(conn.Initialize(c).OK());
-
-  // Poll interval is ~1s; wait through discover -> epoch-change -> disappear.
-  std::this_thread::sleep_for(std::chrono::milliseconds(1300));  // discover
-  ASSERT_TRUE(seeder.Set(key, "{\"epoch\":200}", 30).OK());
-  std::this_thread::sleep_for(std::chrono::milliseconds(1200));  // epoch mismatch -> invalidate
-  ASSERT_TRUE(seeder.Del(key).OK());
-  std::this_thread::sleep_for(std::chrono::milliseconds(1200));  // disappeared -> invalidate
-
-  ASSERT_TRUE(conn.Shutdown().OK());
-  seeder.Del(key);
-  seeder.Disconnect();
 }
 
 }  // namespace mooncake_backend

@@ -39,13 +39,7 @@ ContinuousBatchingStrategy::ContinuousBatchingStrategy(const BatchSchedulerConfi
     : BaseScheduleStrategy(batch_scheduler_config, runtime_config) {
   const auto env = Singleton<Environment>::GetInstance();
   env->GetConnectorConfigs(connector_config_);
-  if (connector_config_.group_role != GroupRole::NONE) {
-    if (batch_scheduler_config_.split_fuse_token_num > 0) {
-      KLLM_LOG_INFO << "Disable split fuse in prefill-decoding separating node";
-      batch_scheduler_config_.split_fuse_token_num = 0;
-    }
-  }
-
+  // pd_v2 supports split-fuse on both Prefill and Decode roles
   dp_max_step_token_num_ = batch_scheduler_config_.max_step_token_num;
   dp_max_batch_size_ = batch_scheduler_config_.max_batch_size;
   per_dp_max_batch_size_ = dp_max_batch_size_;
@@ -884,6 +878,8 @@ void ContinuousBatchingStrategy::ProcessWaitingQueue() {
           continue;
         }
 
+        // pd_v2 split-fuse: whether this forward is the final prefill chunk.
+        req->is_last_prefill_step = is_last_prefill_step;
         batch_state_->schedule_output->running_reqs.push_back(req);
         StampOnce(req->scheduled_time_us);
         if (is_last_prefill_step) {

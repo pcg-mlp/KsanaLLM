@@ -6,9 +6,11 @@
 #include <cuda_runtime.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <thread>
 
 #include "executor/executor_request_manager.h"
 #include "pd_v2/prefill/pd_v2_kv_barrier.h"
@@ -29,8 +31,34 @@ PdV2KvDispatcher::PdV2KvDispatcher(Deps deps) : deps_(std::move(deps)) {
   if (deps_.num_layers == 0) {
     KLLM_LOG_ERROR << "PdV2KvDispatcher: num_layers=0; chunk math is invalid";
   }
+  running_.store(true, std::memory_order_release);
+  submit_worker_ = std::thread([this] { WorkerLoop(); });
   KLLM_LOG_INFO << "PdV2KvDispatcher initialized num_layers=" << deps_.num_layers << " prefill_tp=" << deps_.prefill_tp
                 << " transfer_layer_chunk_size=" << deps_.transfer_layer_chunk_size << " use_mla=" << deps_.use_mla;
+}
+
+PdV2KvDispatcher::~PdV2KvDispatcher() {
+  // Stop worker before deps_ / members are destroyed; queued tasks are dropped.
+  running_.store(false, std::memory_order_release);
+  submit_queue_.Stop();
+  if (submit_worker_.joinable()) submit_worker_.join();
+}
+
+void PdV2KvDispatcher::WorkerLoop() {
+  while (running_.load(std::memory_order_acquire)) {
+    SubmitTask task = submit_queue_.Get();
+    if (!running_.load(std::memory_order_acquire)) break;  // queue stopped
+    switch (task.kind) {
+      case SubmitTask::Kind::kChunkEnd:
+        DispatchChunkEnd(task.rank, task.epoch_id, task.layer_index);
+        break;
+      case SubmitTask::Kind::kSeal:
+        SealEpoch(task.rank, task.epoch_id);
+        break;
+    }
+    // After side effects land (WaitUntilIdleForTest relies on this).
+    processed_tasks_.fetch_add(1, std::memory_order_release);
+  }
 }
 
 bool PdV2KvDispatcher::IsChunkEndLayer(uint32_t layer_index) const {
@@ -77,26 +105,22 @@ bool PdV2KvDispatcher::TryGetKvShape(size_t* out_block_size, size_t* out_element
   return true;
 }
 
-std::vector<PdV2KvDispatcher::ReqDispatchPlan> PdV2KvDispatcher::BuildDispatchPlans(int rank) const {
+std::vector<PdV2KvDispatcher::ReqDispatchPlan> PdV2KvDispatcher::BuildDispatchPlans(int rank, uint64_t epoch_id) const {
   std::vector<ReqDispatchPlan> plans;
-  auto live_reqs = deps_.request_manager->SnapshotInferRequests();
-  for (auto& req : live_reqs) {
+  const std::vector<std::shared_ptr<ExecutorInferRequest>>* live_reqs_ptr = nullptr;
+  auto reqs_it = reqs_by_epoch_.find(epoch_id);
+  if (reqs_it != reqs_by_epoch_.end()) live_reqs_ptr = &reqs_it->second;
+  if (live_reqs_ptr == nullptr) return plans;  // batch not captured / already cleaned
+  for (auto& req : *live_reqs_ptr) {
     if (req == nullptr) continue;
     if (req->pd_v2_decode_targets.empty()) continue;
-    // Skip steady-state decode reqs (step >= 1). HandleFullPrefixCacheHit
-    // (full_cache_hit_handler.h) flips infer_stage from kContext to kDecode
-    // when prefill-side prefix cache covers 100% of the input — but step
-    // stays 0 (still on the first-and-only forward pass). The cached KV
-    // must still be RDMA-written to the Decode peer (decode-side cache may
-    // be empty). Filtering only by infer_stage would lose these prefix-hit
-    // reqs and deadlock Decode at pd_v2_awaiting_prefill.
     if (req->infer_stage != InferStage::kContext && req->step != 0) continue;
+    if (!req->is_last_prefill_step) {
+      KLLM_LOG_DEBUG << "PdV2KvDispatcher[split_fuse_defer] req=" << req->req_id << " my_rank=" << rank
+                     << " non-final prefill chunk — deferring KV write to last chunk";
+      continue;
+    }
 
-    // ShouldHandleEntry: physical device_id one-to-one mapping (design
-    // doc §6). target_device_id = decode_attn_dp_group_id * d_attn_TP +
-    // t.decode_attn_tp_rank_in_group; the Prefill rank with my_rank ==
-    // target_device_id participates, others skip. Forward-invariant, so
-    // resolved here once per epoch instead of on every chunk-end callback.
     const uint32_t d_attn_tp = static_cast<uint32_t>(req->pd_v2_decode_targets.size());
     const DecodeTargetLite* picked = nullptr;
     uint32_t target_device_id = 0;
@@ -109,8 +133,7 @@ std::vector<PdV2KvDispatcher::ReqDispatchPlan> PdV2KvDispatcher::BuildDispatchPl
       }
     }
     if (picked == nullptr) {
-      // Not our turn — each DecodeTarget is handled by exactly one Prefill
-      // rank, so this rank emits no barrier report for this req.
+      // Not this Prefill rank's DecodeTarget.
       KLLM_LOG_DEBUG << "PdV2KvDispatcher[skip] req=" << req->req_id << " my_rank=" << rank
                      << " d_gid=" << req->pd_v2_decode_attn_dp_group_id << " d_attn_tp=" << d_attn_tp
                      << " prefill_tp=" << deps_.prefill_tp;
@@ -123,12 +146,7 @@ std::vector<PdV2KvDispatcher::ReqDispatchPlan> PdV2KvDispatcher::BuildDispatchPl
     ReqDispatchPlan plan;
     plan.req = req;
     plan.picked = picked;
-    // Decode side registers each TP rank's KV pool under a distinct
-    // server_name ("<inference_addr>.exec.r<device_id>").
     plan.target_server_name = req->pd_v2_decode_engine_inference_addr + ".exec.r" + std::to_string(target_device_id);
-    // Resolve local block GPU pointers. attn_dp_rank_id = my_rank inside
-    // the local Prefill DP group; each executor process owns one device,
-    // so the matching BlockAllocator slot is at that index.
     const int attn_dp_rank_id =
         deps_.prefill_attn_tp_per_dp == 0 ? 0 : (rank % static_cast<int>(deps_.prefill_attn_tp_per_dp));
     plan.block_ptrs = req->GetBlockPtrs(attn_dp_rank_id);
@@ -150,18 +168,19 @@ std::vector<PdV2KvDispatcher::ReqDispatchPlan> PdV2KvDispatcher::BuildDispatchPl
 }
 
 void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_index) {
-  // Per-layer per-rank: 62 × 8 = ~500 entries per request on DSR1 — DEBUG only.
-  KLLM_LOG_DEBUG << "PdV2KvDispatcher::OnLayerComplete rank=" << rank << " epoch=" << epoch_id
-                 << " layer=" << layer_index << " is_chunk_end=" << IsChunkEndLayer(static_cast<uint32_t>(layer_index));
   if (deps_.connector == nullptr || deps_.request_manager == nullptr) return;
   if (layer_index < 0 || static_cast<uint32_t>(layer_index) >= deps_.num_layers) return;
   const uint32_t li = static_cast<uint32_t>(layer_index);
   if (!IsChunkEndLayer(li)) return;
 
-  // Connector RegisterKvPool record carries block_size + num_layers; we
-  // need block_size to compute target_offset and element_size for chunk
-  // math. Values are stable post-Boot — TryGetKvShape caches them (B) so
-  // we don't re-query the connector on every chunk-end callback.
+  KLLM_LOG_DEBUG << "PdV2KvDispatcher::OnLayerComplete rank=" << rank << " epoch=" << epoch_id
+                 << " layer=" << layer_index << " chunk-end -> enqueue";
+  submitted_tasks_.fetch_add(1, std::memory_order_relaxed);
+  submit_queue_.Put(SubmitTask{SubmitTask::Kind::kChunkEnd, rank, epoch_id, layer_index});
+}
+
+void PdV2KvDispatcher::DispatchChunkEnd(int rank, uint64_t epoch_id, int layer_index) {
+  const uint32_t li = static_cast<uint32_t>(layer_index);
   size_t block_size = 0, element_size = 0;
   if (!TryGetKvShape(&block_size, &element_size)) {
     KLLM_LOG_WARNING << "PdV2KvDispatcher: KV pool shape unavailable, skipping layer " << layer_index;
@@ -172,35 +191,22 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
   const size_t chunk_bytes = element_size * static_cast<size_t>(chunk_size);
   const size_t chunk_byte_offset = element_size * static_cast<size_t>(chunk_start);
 
-  // Per-epoch dispatch plans. Different batches arrive on different
-  // epoch_ids (PdV2LayerEventTracker assigns one slot per BeginBatch). We
-  // build plans on the FIRST chunk-end callback for an epoch (resolving
-  // routing / server_name / block_ptrs / prefix-cache count once — all
-  // forward-invariant) and key them by epoch_id behind a shared_ptr. By
-  // the time the layer N-1 callback runs, the next batch's
-  // HandlePreprocess has already EraseRequest'd this batch's prefill-only
-  // reqs; each plan's strong ref keeps them
-  // alive, and epoch-keying keeps batch B's WaitAndNotify on B's plans
-  // even when B's layer 26 fires after C's layer 0. The entry is erased on
-  // this batch's final layer.
+  // Build plans once per epoch (routing/blocks are forward-invariant); strong
+  // refs keep reqs alive after EraseRequest. Erased on final layer.
   std::shared_ptr<std::vector<ReqDispatchPlan>> plans;
   {
     std::lock_guard<std::mutex> lk(batch_reqs_mu_);
     auto it = dispatch_plans_by_epoch_.find(epoch_id);
     if (it == dispatch_plans_by_epoch_.end()) {
-      auto built = std::make_shared<std::vector<ReqDispatchPlan>>(BuildDispatchPlans(rank));
+      auto built = std::make_shared<std::vector<ReqDispatchPlan>>(BuildDispatchPlans(rank, epoch_id));
       it = dispatch_plans_by_epoch_.emplace(epoch_id, std::move(built)).first;
-      // Leak guard / metric: in steady state only a handful of epochs are
-      // in flight (tracker pipeline depth ~2). A growing map means epochs
-      // are not being reclaimed (OnEpochEnd should always seal them) — warn
-      // so the leak surfaces in production logs before KV cache exhaustion.
       constexpr size_t kPendingEpochWarnThreshold = 64;
       if (dispatch_plans_by_epoch_.size() >= kPendingEpochWarnThreshold) {
         KLLM_LOG_WARNING << "PdV2KvDispatcher: dispatch_plans_by_epoch_ size=" << dispatch_plans_by_epoch_.size()
                          << " exceeds threshold; epochs may be leaking (OnEpochEnd not firing?)";
       }
     }
-    plans = it->second;  // copy the shared_ptr only; submits run outside the lock
+    plans = it->second;  // copy shared_ptr; submit outside lock
   }
   for (auto& plan : *plans) {
     const auto& req = plan.req;
@@ -209,30 +215,16 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
     const std::vector<void*>& block_ptrs = plan.block_ptrs;
     const uint32_t cached = plan.cached;
 
-    // pd_v2 prefix-cache aware: skip the leading `cached` blocks (Decode
-    // already has valid K/V there from a shared-prefix request). Source
-    // (Prefill local pool) and target (Decode pool) indices advance in
-    // lockstep, so iteration starts at `cached` instead of 0.
+    // Skip leading prefix-cached blocks already valid on Decode.
     if (cached >= picked->kv_block_ids.size()) {
-      // Entire prompt is prefix-cached on Decode (extreme edge: every
-      // block of this request is already valid on Decode). Nothing to
-      // RDMA-write — Prefill still ran forward + sampled the next
-      // token, which gets returned via PrefillRequestComplete.
-      //
-      // 即使没有需要 RDMA 写的 block，最终层仍要触发 barrier，否则 Decode 侧会一直等待该 rank 上报。
+      // Full prefix hit: nothing to write; still notify barrier on final layer.
       if (li == deps_.num_layers - 1 && deps_.barrier != nullptr) {
         const bool dispatch_failed = TakeDispatchFailed(static_cast<uint64_t>(req->req_id));
         deps_.barrier->WaitAndNotify(static_cast<uint64_t>(req->req_id), dispatch_failed);
       }
       continue;
     }
-    // A: coalesce every block of this (req, chunk) into ONE Mooncake
-    // batch. All blocks share `target_server_name`, so one openSegment +
-    // allocateBatchID + submitTransfer replaces the previous per-block
-    // submit, and the barrier polls one batch id instead of N. Very long
-    // prompts are flushed in bounded sub-batches (kMaxEntriesPerBatch) to
-    // keep allocateBatchID sizes sane; the barrier already tracks
-    // multiple batch ids per req.
+    // Coalesce blocks into Mooncake batches (bounded by kMaxEntriesPerBatch).
     constexpr size_t kMaxEntriesPerBatch = 256;
     const size_t to_write = picked->kv_block_ids.size() - static_cast<size_t>(cached);
     std::vector<PdV2ConnectorInterface::KvWriteEntry> entries;
@@ -257,11 +249,8 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
     };
 
     for (size_t i = static_cast<size_t>(cached); i < picked->kv_block_ids.size(); ++i) {
-      // Source: local block i base + chunk_byte_offset.
       void* source = static_cast<uint8_t*>(block_ptrs[i]) + chunk_byte_offset;
-      // Target: remote KV pool base + remote block_id * block_size +
-      // chunk_byte_offset (same byte offset within the block since the
-      // layout is identical on both sides — invariant).
+      // Same in-block offset on both sides (identical KV layout).
       const uint64_t target_offset =
           picked->kv_pool_base_va + static_cast<uint64_t>(picked->kv_block_ids[i]) * static_cast<uint64_t>(block_size) +
           static_cast<uint64_t>(chunk_byte_offset);
@@ -275,9 +264,6 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
       MarkDispatchFailed(static_cast<uint64_t>(req->req_id));
     }
     if (layer_index == 0) {
-      // One log line per req on layer 0 — captures the (req, peer,
-      // block count, first dst_block, length) tuple for verifying RDMA
-      // write topology under any model/MHA/MLA combination.
       KLLM_LOG_DEBUG << "PdV2KvDispatcher[send] req=" << req->req_id << " peer_segment=" << target_server_name
                      << " submitted_blocks=" << submitted << "/" << to_write
                      << " first_dst_block_id=" << picked->kv_block_ids[cached] << " chunk_bytes=" << chunk_bytes;
@@ -286,8 +272,7 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
                    << " chunk_start=" << chunk_start << " chunk_size=" << chunk_size << " submitted=" << submitted
                    << "/" << picked->kv_block_ids.size();
 
-    // 模型最终层提交完成后，通知 barrier 开始轮询；同时带上提交失败标记，
-    // 让 barrier 在任一提交失败时直接以 kFailed 为初始状态。
+    // Final layer: notify barrier (with dispatch_failed if any submit failed).
     if (li == deps_.num_layers - 1 && deps_.barrier != nullptr) {
       const bool dispatch_failed = TakeDispatchFailed(static_cast<uint64_t>(req->req_id));
       if (dispatch_failed) {
@@ -297,42 +282,68 @@ void PdV2KvDispatcher::OnLayerComplete(int rank, uint64_t epoch_id, int layer_in
       deps_.barrier->WaitAndNotify(static_cast<uint64_t>(req->req_id), dispatch_failed);
     }
   }
-  // Drop the captured plans for this epoch so its slot can be reused by a
-  // future BeginBatch (the tracker recycles EpochSlot pointers, but
-  // epoch_id is monotonic — the map entry would otherwise leak). Done
-  // after the loop (and thus after all per-req WaitAndNotify calls) at
-  // the model's final layer only.
+  // Final layer: reclaim after all WaitAndNotify calls.
   if (li == deps_.num_layers - 1) {
     std::lock_guard<std::mutex> lk(batch_reqs_mu_);
     dispatch_plans_by_epoch_.erase(epoch_id);
+    reqs_by_epoch_.erase(epoch_id);
   }
 }
 
 void PdV2KvDispatcher::OnEpochEnd(int rank, uint64_t epoch_id) {
+  // kSeal after any queued chunk-end tasks for this epoch (FIFO).
+  submitted_tasks_.fetch_add(1, std::memory_order_relaxed);
+  submit_queue_.Put(SubmitTask{SubmitTask::Kind::kSeal, rank, epoch_id, -1});
+}
+
+void PdV2KvDispatcher::SealEpoch(int rank, uint64_t epoch_id) {
   std::shared_ptr<std::vector<ReqDispatchPlan>> plans;
   {
     std::lock_guard<std::mutex> lk(batch_reqs_mu_);
+    reqs_by_epoch_.erase(epoch_id);  // always; OnEpochEnd fires once per BeginBatch
     auto it = dispatch_plans_by_epoch_.find(epoch_id);
     if (it == dispatch_plans_by_epoch_.end()) {
-      // Normal completion path: the final-layer OnLayerComplete already
-      // erased this epoch after WaitAndNotify. Nothing to reclaim.
-      return;
+      return;  // already reclaimed on final layer
     }
     plans = std::move(it->second);
     dispatch_plans_by_epoch_.erase(it);
   }
-  // Only reached when the epoch was sealed without its final layer firing
-  // (Forward aborted, executor short-circuit, or the final-layer event was
-  // never recorded). The plans' strong ExecutorInferRequest refs would
-  // otherwise pin the requests forever and starve the BlockAllocator. Drop
-  // any leftover dispatch-failed marks for these reqs (the take-and-clear in
-  // WaitAndNotify never ran for them) before releasing the refs.
+
+  if (plans->empty()) {
+    KLLM_LOG_DEBUG << "PdV2KvDispatcher::OnEpochEnd: epoch=" << epoch_id << " rank=" << rank
+                   << " had no dispatch plans to reclaim (non-dispatching or non-final split-fuse chunk) — no-op";
+    return;
+  }
+  // Sealed without final layer — reclaim leftover plans.
   KLLM_LOG_WARNING << "PdV2KvDispatcher::OnEpochEnd reclaiming uncompleted epoch=" << epoch_id << " rank=" << rank
                    << " plans=" << plans->size();
   for (auto& plan : *plans) {
     if (plan.req != nullptr) TakeDispatchFailed(static_cast<uint64_t>(plan.req->req_id));
   }
-  // `plans` (and thus the strong req refs) drops here as it goes out of scope.
+}
+
+void PdV2KvDispatcher::CaptureEpochReqs(uint64_t epoch_id,
+                                        const std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {
+  if (epoch_id == 0) return;  // non-pd_v2 / BeginBatch no-op
+  std::lock_guard<std::mutex> lk(batch_reqs_mu_);
+  reqs_by_epoch_[epoch_id] = reqs;  // pin this batch (shared_ptr copy)
+}
+
+size_t PdV2KvDispatcher::PendingEpochCountForTest() const {
+  std::lock_guard<std::mutex> lk(batch_reqs_mu_);
+  return dispatch_plans_by_epoch_.size();
+}
+
+bool PdV2KvDispatcher::WaitUntilIdleForTest(int timeout_ms) {
+  // submitted_ bumped before Put; processed_ after side effects.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (processed_tasks_.load(std::memory_order_acquire) == submitted_tasks_.load(std::memory_order_relaxed)) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  return processed_tasks_.load(std::memory_order_acquire) == submitted_tasks_.load(std::memory_order_relaxed);
 }
 
 void PdV2KvDispatcher::MarkDispatchFailed(uint64_t req_id) {

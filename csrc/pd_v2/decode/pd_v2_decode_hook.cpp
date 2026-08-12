@@ -325,6 +325,17 @@ ReqIdToNextStep PdV2DecodeHook::UpdateAsyncResult(const std::vector<AsyncTaskRes
                    << " pd_v2_pending_stop=" << req->pd_v2.pending_stop
                    << " infer_stage=" << static_cast<int>(req->infer_stage);
 
+    // Drop late PrefillComplete if the req was already stopped/finished.
+    if (req->IsStopped() || req->finished) {
+      req->pd_v2.awaiting_prefill = false;
+      req->pd_v2.pending_stop = false;
+      KLLM_LOG_WARNING << "PdV2DecodeHook::UpdateAsyncResult: req_id=" << req_id
+                       << " already terminated (is_stopped=" << req->IsStopped() << " finished=" << req->finished
+                       << "); dropping late PrefillComplete without writing req fields";
+      result[req->req_id] = NextStep{NextStepAction::kFailAndEnd, 0};
+      continue;
+    }
+
     req->pd_v2.awaiting_prefill = false;
 
     // T3: record the decode-clock arrival of PrefillComplete (stamped on the dispatch thread

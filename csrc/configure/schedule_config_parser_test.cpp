@@ -1325,7 +1325,7 @@ TEST_F(ScheduleConfigParserTest, PrefixCacheAndSplitFuseBothEnabled) {
   EXPECT_TRUE(runtime_config.enable_prefix_caching);
 }
 
-TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
+TEST_F(ScheduleConfigParserTest, PdV2PrefillPreservesSplitFuseWithPrefixCache) {
   std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
   std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
   std::filesystem::path temp_file_path = temp_dir / filename;
@@ -1338,11 +1338,11 @@ TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
 
   std::ofstream file(temp_file_path);
   ASSERT_TRUE(file.is_open());
-
   file << "setting:\n";
   file << "  global:\n";
   file << "    tensor_para_size: 1\n";
   file << "  batch_scheduler:\n";
+  file << "    scheduler_type: 1\n";  // EVENT_DRIVEN — required for backend=v2.
   file << "    max_token_len: 4096\n";
   file << "    max_step_tokens: 4096\n";
   file << "    max_batch_size: 32\n";
@@ -1353,7 +1353,11 @@ TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
   file << "    reserved_device_memory_ratio: 0.01\n";
   file << "  connector:\n";
   file << "    group_role: prefill\n";
-  file << "    router_addr: \"10.0.0.1:8080\"\n";
+  file << "    backend: v2\n";
+  file << "    cluster_name: pd_v2_test_cluster\n";
+  file << "    inference_addr: \"127.0.0.1:18091\"\n";
+  file << "    router_addr: \"http://127.0.0.1:9080\"\n";
+  file << "    metadata_addr: \"redis://127.0.0.1:6379\"\n";
   file << "model_spec:\n";
   file << "  base_model:\n";
   file << "    model_dir: \"" << model_dir.string() << "\"\n";
@@ -1366,68 +1370,16 @@ TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationDisablesSplitFuse) {
   Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
 
-  BatchSchedulerConfig batch_config;
-  parser_->GetBatchSchedulerConfig(batch_config);
-  EXPECT_EQ(batch_config.split_fuse_token_num, 0)
-      << "split_fuse_token_num should be 0 when PD separation + prefix_cache + split_fuse are all enabled";
-}
-
-TEST_F(ScheduleConfigParserTest, ConnectorPDSeparationPreservesSplitFuseWhenPrefixCacheDisabled) {
-  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
-  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
-  std::filesystem::path temp_file_path = temp_dir / filename;
-  temp_files_.push_back(temp_file_path.string());
-
-  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
-  temp_dirs_.push_back(model_dir.string());
-  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
-  std::filesystem::create_directory(model_dir);
-
-  std::ofstream file(temp_file_path);
-  ASSERT_TRUE(file.is_open());
-
-  file << "setting:\n";
-  file << "  global:\n";
-  file << "    tensor_para_size: 1\n";
-  file << "  batch_scheduler:\n";
-  file << "    max_token_len: 4096\n";
-  file << "    max_step_tokens: 4096\n";
-  file << "    max_batch_size: 32\n";
-  file << "    enable_auto_prefix_cache: false\n";
-  file << "    split_fuse_token_num: 256\n";
-  file << "  block_manager:\n";
-  file << "    block_token_num: 16\n";
-  file << "    reserved_device_memory_ratio: 0.01\n";
-  file << "  connector:\n";
-  file << "    group_role: prefill\n";
-  file << "    router_addr: \"10.0.0.1:8080\"\n";
-  file << "model_spec:\n";
-  file << "  base_model:\n";
-  file << "    model_dir: \"" << model_dir.string() << "\"\n";
-  file.close();
-
-  YamlReader yaml_reader;
-  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
-  ModelConfig model_config;
-  model_config.num_key_value_heads = 1;
-  model_config.max_training_seq_len = 4096;
-
-  Status status = parser_->ParseScheduleConfig(yaml_reader, model_config);
-  EXPECT_TRUE(status.OK()) << status.GetMessage();
-  ASSERT_TRUE(parser_->UpdateModelConfig(model_config).OK());
-
-  CacheManagerConfig cache_config;
-  parser_->GetCacheManagerConfig(cache_config);
-  EXPECT_FALSE(cache_config.enable_prefix_caching);
+  ConnectorConfig cc;
+  ASSERT_TRUE(parser_->GetConnectorConfigs(cc).OK());
+  EXPECT_TRUE(cc.is_pd_v2);
+  EXPECT_EQ(cc.group_role, GroupRole::PREFILL);
 
   BatchSchedulerConfig batch_config;
   parser_->GetBatchSchedulerConfig(batch_config);
   EXPECT_EQ(batch_config.split_fuse_token_num, 256u)
-      << "split_fuse_token_num should be preserved when PD separation is enabled but prefix cache is disabled";
-
-  RuntimeConfig runtime_config;
-  ASSERT_TRUE(parser_->GetRuntimeConfig(runtime_config).OK());
-  EXPECT_TRUE(runtime_config.enable_prefix_caching);
+      << "split_fuse_token_num should be preserved for pd_v2 Prefill (dispatcher gates KV write on "
+         "is_last_prefill_step)";
 }
 
 // ==================== GlobalCacheConnector 配置解析测试 ====================

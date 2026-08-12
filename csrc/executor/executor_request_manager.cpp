@@ -29,6 +29,7 @@ void ExecutorRequestManager::UpdateInferRequest(int64_t req_id, std::shared_ptr<
   executor_request.infer_request->spec_state.forwarding_tokens_draft_num = infer_req_patch->forwarding_tokens_draft_num;
   executor_request.infer_request->kv_cached_token_num = infer_req_patch->kv_cached_token_num;
   executor_request.infer_request->kv_from_remote = infer_req_patch->kv_from_remote;
+  executor_request.infer_request->is_last_prefill_step = infer_req_patch->is_last_prefill_step;
   executor_request.infer_request->prefix_cache_len = infer_req_patch->prefix_cache_len;
   executor_request.infer_request->sampling_token_num = infer_req_patch->sampling_token_num;
 
@@ -51,16 +52,6 @@ std::shared_ptr<ExecutorInferRequest> ExecutorRequestManager::GetInferRequest(in
     return cached_requests_.at(req_id).infer_request;
   }
   return nullptr;
-}
-
-std::vector<std::shared_ptr<ExecutorInferRequest>> ExecutorRequestManager::SnapshotInferRequests() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::vector<std::shared_ptr<ExecutorInferRequest>> out;
-  out.reserve(cached_requests_.size());
-  for (const auto& [_id, entry] : cached_requests_) {
-    if (entry.infer_request) out.push_back(entry.infer_request);
-  }
-  return out;
 }
 
 void ExecutorRequestManager::EraseRequest(int64_t req_id) {

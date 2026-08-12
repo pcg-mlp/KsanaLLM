@@ -300,10 +300,9 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       }
 
       const size_t req_step_block_num = cache_manager->GetRequestStepBlockNumber(req->req_id, max_required_token_num);
-      Status status =
-          cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
-                                               req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
-                                               req->mamba_kv_cache_block_id);
+      Status status = cache_manager->AllocateRequestBlocks(
+          req->req_id, req_step_block_num, req->kv_cache_blocks, req->swa_kv_cache_blocks,
+          req->swa_kv_cache_block_idx_offsets, req->mamba_kv_cache_block_id);
       if (status.OK()) {
         agg.has_scheduled_req = true;
         planning_batch.AddRunningReq(dp_idx, req);
@@ -544,10 +543,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         continue;
       }
 
-      Status status =
-          cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
-                                               req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
-                                               req->mamba_kv_cache_block_id);
+      Status status = cache_manager->AllocateRequestBlocks(
+          req->req_id, req_step_block_num, req->kv_cache_blocks, req->swa_kv_cache_blocks,
+          req->swa_kv_cache_block_idx_offsets, req->mamba_kv_cache_block_id);
       if (!status.OK()) {
         KLLM_LOG_SCHEDULER << "Failed to allocate blocks for req_id=" << req->req_id
                            << ", required_block_num=" << req_step_block_num
@@ -579,6 +577,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
       }
 
       req->SetCacheHitStatus(shared_token_num, planning_workload.prefill_start_offset == 0);
+      // pd_v2 split-fuse: whether this forward is the final prefill chunk.
+      req->is_last_prefill_step = is_last_prefill_step;
       planning_batch.AddRunningReq(dp_idx, req);
       // T4 (aggregate/prefill path): first entry into the running batch = scheduled.
       StampOnce(req->scheduled_time_us);

@@ -57,6 +57,17 @@ if(WITH_STANDALONE_TEST)
             ${PROJECT_SOURCE_DIR}/csrc)
     endif()
 
+    cpp_test(pd_v2_kv_dispatcher_epoch_test
+        SRCS
+            ${CMAKE_CURRENT_SOURCE_DIR}/pd_v2_kv_dispatcher_epoch_test.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/pd_v2_kv_dispatcher.cpp
+            ${CMAKE_CURRENT_SOURCE_DIR}/pd_v2_kv_barrier.cpp
+        DEPS pd_v2_public pd_v2_wire pd_v2_layer_event_tracker runtime device utils)
+    if(TARGET pd_v2_kv_dispatcher_epoch_test)
+        target_include_directories(pd_v2_kv_dispatcher_epoch_test PRIVATE
+            ${PROJECT_SOURCE_DIR}/csrc)
+    endif()
+
     # PdV2LayerEventTracker unit test. Links the thin tracker lib + device
     # runtime; exercises the per-batch EpochSlot lifecycle (BeginBatch /
     # RecordLayerProgress / ResetState force-fire / monitor callbacks) on a

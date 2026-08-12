@@ -383,6 +383,9 @@ class InferRequest {
   // The decode step, 0 for context decode, and then 1, 2, 3...
   int step = 0;
 
+  // pd_v2 split-fuse: false on non-final prefill chunks.
+  bool is_last_prefill_step = true;
+
   // The number of tokens for which kv caches have been generated.
   size_t kv_cached_token_num = 0;
 

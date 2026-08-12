@@ -738,16 +738,7 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
 
   InitConnectorConfig(yaml_reader);
   InitGlobalCacheConnectorConfig(yaml_reader);
-  // pd_v2 Decode 节点的本地 prefill 算完直接在本地 decode、不向外传 KV, 因此可以安全使用 splitfuse:
-  // 把本地大 prefill 切块与 decode 交错执行, 压平单步 latency / TPOT。这正是它需要 splitfuse 的场景。
-  // 其余 PD 角色仍不支持: V1 prefill/decode 与 pd_v2 Prefill 节点会把算好的 KV 通过 RDMA 传给对端,
-  // splitfuse 的分块 prefill 与"prefill 一次算完才传 KV"的假设冲突 (见原 TODO(zhongzhicao))。
-  const bool is_pd_v2_decode = connector_config_.is_pd_v2 && connector_config_.group_role == GroupRole::DECODE;
-  if (connector_config_.group_role != GroupRole::NONE && !is_pd_v2_decode &&
-      cache_manager_config_.enable_prefix_caching && batch_scheduler_config_.split_fuse_token_num != 0) {
-    KLLM_LOG_WARNING << "Split-fuse is not supported for this PD role, setting split_fuse_token_num to 0.";
-    batch_scheduler_config_.split_fuse_token_num = 0;
-  }
+
   return Status();
 }
 

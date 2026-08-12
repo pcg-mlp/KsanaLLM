@@ -34,8 +34,7 @@ struct InferRequestSerializationSnapshot {
   int mamba_kv_cache_block_id = -1;
   int prefix_cache_len = 0;
   int step = 0;
-  // patch_transfer 由 ModelDriver::SetInferRequestTransferMode 决策; 相邻 schedule_id 会覆写 req->patch_transfer,
-  // 故序列化读 snapshot 而非 live 字段, 避免 prefill 首步误走 patch 路径.
+  bool is_last_prefill_step = true;
   bool patch_transfer = false;
   bool patch_transfer_populated = false;
 };
@@ -94,6 +93,7 @@ struct ScheduleOutput {
       snap.mamba_kv_cache_block_id = req->mamba_kv_cache_block_id;
       snap.prefix_cache_len = req->prefix_cache_len;
       snap.step = req->step;
+      snap.is_last_prefill_step = req->is_last_prefill_step;
     }
   }
 

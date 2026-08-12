@@ -53,23 +53,57 @@ std::set<int> ParticipatingPrefillRanks(uint32_t d_gid, uint32_t d_attn_tp, uint
   return hits;
 }
 
+// Mirror of PdV2KvDispatcher::BuildDispatchPlans per-request admission gate
+bool ShouldDispatchReq(bool has_decode_targets, bool infer_stage_is_context, int step, bool is_last_prefill_step) {
+  if (!has_decode_targets) return false;
+  if (!infer_stage_is_context && step != 0) return false;
+  if (!is_last_prefill_step) return false;
+  return true;
+}
+
 }  // namespace
 
-// ===== §6.1 Prefill DP=1 (p_aTP=8) ============================================
+TEST(PdV2KvDispatcherSplitFuse, NonFinalChunkDeferred) {
+  EXPECT_FALSE(ShouldDispatchReq(/*has_decode_targets=*/true, /*infer_stage_is_context=*/true, /*step=*/0,
+                                 /*is_last_prefill_step=*/false));
+  EXPECT_FALSE(ShouldDispatchReq(/*has_decode_targets=*/true, /*infer_stage_is_context=*/false, /*step=*/0,
+                                 /*is_last_prefill_step=*/false));
+}
 
-// TP=8 DP=1 + TP=8 DP=1: Prefill [0..7] -> Decode [0..7], 8 路 1-1
+TEST(PdV2KvDispatcherSplitFuse, LastChunkOrSingleShotDispatched) {
+  EXPECT_TRUE(ShouldDispatchReq(/*has_decode_targets=*/true, /*infer_stage_is_context=*/true, /*step=*/0,
+                                /*is_last_prefill_step=*/true));
+}
+
+TEST(PdV2KvDispatcherSplitFuse, PrefixHitFlippedToDecodeStep0Dispatched) {
+  EXPECT_TRUE(ShouldDispatchReq(/*has_decode_targets=*/true, /*infer_stage_is_context=*/false, /*step=*/0,
+                                /*is_last_prefill_step=*/true));
+}
+
+TEST(PdV2KvDispatcherSplitFuse, SteadyStateDecodeSkipped) {
+  EXPECT_FALSE(ShouldDispatchReq(/*has_decode_targets=*/true, /*infer_stage_is_context=*/false, /*step=*/3,
+                                 /*is_last_prefill_step=*/true));
+}
+
+TEST(PdV2KvDispatcherSplitFuse, LocalReqNeverDispatchedEvenNonFinalChunk) {
+  EXPECT_FALSE(ShouldDispatchReq(/*has_decode_targets=*/false, /*infer_stage_is_context=*/true, /*step=*/0,
+                                 /*is_last_prefill_step=*/false));
+  EXPECT_FALSE(ShouldDispatchReq(/*has_decode_targets=*/false, /*infer_stage_is_context=*/true, /*step=*/0,
+                                 /*is_last_prefill_step=*/true));
+}
+
 TEST(PdV2KvDispatcherRouting, MatrixSec61_DecD1_PreD1) {
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/0, /*d_attn_tp=*/8, /*p_tp=*/8),
             (std::set<int>{0, 1, 2, 3, 4, 5, 6, 7}));
 }
 
-// TP=8 DP=2 + TP=8 DP=1: d_gid=0 -> P[0..3], d_gid=1 -> P[4..7], 4 路
+// TP=8 DP=2 + TP=8 DP=1: d_gid=0 -> P[0..3], d_gid=1 -> P[4..7], 4
 TEST(PdV2KvDispatcherRouting, MatrixSec61_DecD2_PreD1) {
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/0, /*d_attn_tp=*/4, /*p_tp=*/8), (std::set<int>{0, 1, 2, 3}));
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/1, /*d_attn_tp=*/4, /*p_tp=*/8), (std::set<int>{4, 5, 6, 7}));
 }
 
-// TP=8 DP=4 + TP=8 DP=1: d_gid=g -> P[2g..2g+1], 2 路
+// TP=8 DP=4 + TP=8 DP=1: d_gid=g -> P[2g..2g+1], 2
 TEST(PdV2KvDispatcherRouting, MatrixSec61_DecD4_PreD1) {
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/0, /*d_attn_tp=*/2, /*p_tp=*/8), (std::set<int>{0, 1}));
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/1, /*d_attn_tp=*/2, /*p_tp=*/8), (std::set<int>{2, 3}));
@@ -77,9 +111,7 @@ TEST(PdV2KvDispatcherRouting, MatrixSec61_DecD4_PreD1) {
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/3, /*d_attn_tp=*/2, /*p_tp=*/8), (std::set<int>{6, 7}));
 }
 
-// TP=8 DP=8 + TP=8 DP=1: d_gid=g -> P[g], 1 路 (this is the user's
-// requested smoke topology — Decode TP=4 DP=4 + Prefill TP=4 DP=1
-// behaves the same way modulo TP=4 vs TP=8).
+// TP=8 DP=8 + TP=8 DP=1: d_gid=g -> P[g], 1
 TEST(PdV2KvDispatcherRouting, MatrixSec61_DecD8_PreD1) {
   for (uint32_t g = 0; g < 8; ++g) {
     EXPECT_EQ(ParticipatingPrefillRanks(g, /*d_attn_tp=*/1, /*p_tp=*/8), (std::set<int>{static_cast<int>(g)}));
@@ -135,21 +167,8 @@ TEST(PdV2KvDispatcherRouting, MatrixSec64_DecD8_PreD8) {
 }
 
 // ===== p_aTP < d_aTP TBD rows: rejected at IntakeWrapper time (P1.3) ==========
-//
-// The dispatcher itself, looked at in isolation, partially "covers" the
-// matching ranks (rank 0..min(prefill_tp, d_attn_tp)-1 hit, the rest
-// can't match). That partial coverage is the silent-corruption mode
-// the review's §P1.3 called out. The fail-fast lives at IntakeWrapper
-// time (see PdV2PrefillIntakeWrapper::OnIncoming) — it rejects the
-// PrefillRequest with kFailed before the dispatcher is ever called.
-// We keep the partial-hit assertion here as a regression check on the
-// dispatcher's pure formula, but the integration path no longer
-// reaches it for unsupported topology.
 TEST(PdV2KvDispatcherRouting, TbdCell_p_aTP_lt_d_aTP_PartialHits_FailFastByIntake) {
   EXPECT_EQ(ParticipatingPrefillRanks(/*d_gid=*/0, /*d_attn_tp=*/8, /*p_tp=*/4), (std::set<int>{0, 1, 2, 3}));
-  // ranks 4..7 don't exist on this Prefill — IntakeWrapper rejects before
-  // the dispatcher even sees the request. See pd_v2_prefill_intake_wrapper.cpp
-  // OnIncoming `prefill_attn_tp` gate.
 }
 
 }  // namespace pd_v2
