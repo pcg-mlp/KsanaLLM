@@ -29,7 +29,7 @@ cpp_test(humming_fp8_quant_test SRCS tests/humming_fp8_quant_test.cpp DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
 set(MOE_SUM_DISPATCH_TEST_SRCS moe_sum_dispatch_test.cpp)
-cc_test(moe_sum_dispatch_test SRCS ${MOE_SUM_DISPATCH_TEST_SRCS} DEPS
+cpp_test(moe_sum_dispatch_test SRCS ${MOE_SUM_DISPATCH_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton)
 
 cpp_test(humming_moe_fused_mul_sum_test SRCS tests/humming_moe_fused_mul_sum_test.cpp DEPS
@@ -65,8 +65,8 @@ if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
         llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 
     set(FUSED_BATCHED_MOE_TEST_SRCS fused_batched_moe_test.cpp)
-    cc_test(fused_batched_moe_test SRCS ${FUSED_BATCHED_MOE_TEST_SRCS} DEPS
-        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+    cpp_test(fused_batched_moe_test SRCS ${FUSED_BATCHED_MOE_TEST_SRCS} DEPS
+        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LIBS ${TORCH_LIBRARIES})
 
     set(LOW_LATENCY_ADAPTER_TEST_SRCS low_latency_adapter_test.cpp)
     cc_test(low_latency_adapter_test SRCS ${LOW_LATENCY_ADAPTER_TEST_SRCS} DEPS

@@ -112,10 +112,22 @@ static const Fp4MoeTestConfig kK3TP8 = {"k3_TP8", ModelType::kK3, 8, 1};
 // ===========================================================================
 // Token sizes for benchmarking
 // NOTE(jinxcwu) 可以多加一点做完整的性能测试覆盖，目前为了节省测试时间设置的比较小
+//
+// Two preset sets coexist: kTokenSizesFast (CI/quick) and kTokenSizesFull
+// (complete coverage).  Select at runtime via TEST_TOKEN_RANGE env var:
+//   unset or "fast" → kTokenSizesFast (default)
+//   "full"          → kTokenSizesFull
 // ===========================================================================
-static const std::vector<size_t> kTokenSizes = {1, 4, 16};
-// static const std::vector<size_t> kTokenSizes = {1,   2,   4,    8,    16,   32,   64,    128,
-//                                                 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
+static const std::vector<size_t> kTokenSizesFast = {1, 4, 16};
+static const std::vector<size_t> kTokenSizesFull = {1,   2,   4,    8,    16,   32,   64,    128,
+                                                    256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
+
+inline const std::vector<size_t>& GetTokenSizes() {
+  if (const char* env = std::getenv("TEST_TOKEN_RANGE"); env != nullptr && std::string(env) == "full") {
+    return kTokenSizesFull;
+  }
+  return kTokenSizesFast;
+}
 
 static constexpr int kWarmupIters = 20;
 static constexpr int kBenchIters = 50;

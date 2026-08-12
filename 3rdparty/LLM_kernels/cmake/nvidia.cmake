@@ -78,6 +78,18 @@ if(GIT_FOUND)
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/3rdparty/c4x/cutlass)
 endif()
 
+# fetch 3rdparty
+if(GIT_FOUND)
+  message(STATUS "Running submodule update to fetch hpc-ops")
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/hpc-ops
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    RESULT_VARIABLE GIT_SUBMOD_RESULT)
+
+  if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+    message(FATAL_ERROR "git submodule update --init 3rdparty/hpc-ops failed with ${GIT_SUBMOD_RESULT}, please checkout hpc-ops submodule")
+  endif()
+endif()
+
 if(CUDA_PTX_VERBOSE_INFO)
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xptxas -v")
 endif()

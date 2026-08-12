@@ -39,8 +39,8 @@ void PrintLatencyTable(const std::string& config_name, const std::vector<std::ve
   }
   std::cout << std::endl;
 
-  for (size_t i = 0; i < kTokenSizes.size(); ++i) {
-    std::cout << " " << std::setw(10) << kTokenSizes[i];
+  for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
+    std::cout << " " << std::setw(10) << GetTokenSizes()[i];
     for (size_t b = 0; b < all_results.size(); ++b) {
       if (i < all_results[b].size()) {
         const auto& r = all_results[b][i];
@@ -75,8 +75,8 @@ void PrintPerfTable(const std::string& config_name, const std::string& table_lab
   }
   std::cout << std::endl;
 
-  for (size_t i = 0; i < kTokenSizes.size(); ++i) {
-    std::cout << " " << std::setw(10) << kTokenSizes[i];
+  for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
+    std::cout << " " << std::setw(10) << GetTokenSizes()[i];
     for (size_t b = 0; b < all_results.size(); ++b) {
       if (i < all_results[b].size()) {
         const auto& r = all_results[b][i];
@@ -146,10 +146,10 @@ void PrintExpertRoutingSummary(const std::string& config_name, const Fp4MoeTestC
               << std::setw(10) << "blk_sz2" << std::setw(18) << "real_pairs_g1" << std::setw(18) << "real_pairs_g2"
               << std::setw(12) << "waste_g1%" << std::setw(12) << "waste_g2%" << std::endl;
 
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       if (i >= all_results[b].size()) break;
       const auto& r = all_results[b][i];
-      std::cout << "  " << std::setw(10) << kTokenSizes[i] << std::setw(6) << cfg.topk() << std::setw(14)
+      std::cout << "  " << std::setw(10) << GetTokenSizes()[i] << std::setw(6) << cfg.topk() << std::setw(14)
                 << r.total_pairs << std::setw(20) << r.experts_accessed << std::setw(16) << ComputeExpertsPerRank(cfg)
                 << std::setw(10) << r.moe_block_size_1 << std::setw(10) << r.moe_block_size_2 << std::setw(18)
                 << r.real_pairs_g1 << std::setw(18) << r.real_pairs_g2 << std::fixed << std::setprecision(1)
@@ -225,7 +225,7 @@ void PrintSelectedKernels(const std::string& config_name, const std::vector<std:
     std::cout << "\n=== " << config_name << " Selected Kernels — " << backends[b].name << " ===" << std::endl;
     std::cout << " " << std::setw(10) << "tokens" << std::setw(36) << "GEMM1" << std::setw(36) << "GEMM2" << std::endl;
 
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       if (i >= all_results[b].size()) break;
       const auto& r = all_results[b][i];
 
@@ -234,7 +234,7 @@ void PrintSelectedKernels(const std::string& config_name, const std::vector<std:
         return llm_kernels::nvidia::humming::FormatKernelMeta(*m);
       };
 
-      std::cout << " " << std::setw(10) << kTokenSizes[i] << std::setw(36)
+      std::cout << " " << std::setw(10) << GetTokenSizes()[i] << std::setw(36)
                 << format_meta(r.has_gemm1_meta ? &r.gemm1_meta : nullptr) << std::setw(36)
                 << format_meta(r.has_gemm2_meta ? &r.gemm2_meta : nullptr) << std::endl;
     }
@@ -259,7 +259,7 @@ void PrintHummingNonGemmBreakdown(const std::string& config_name,
               << std::setw(10) << "quant" << std::setw(10) << "silu" << std::setw(10) << "mulsum" << std::setw(10)
               << "other" << std::setw(10) << "nogemm" << std::setw(10) << "nogemm%" << std::endl;
 
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       if (i >= all_results[b].size()) break;
       const auto& r = all_results[b][i];
 
@@ -267,7 +267,7 @@ void PrintHummingNonGemmBreakdown(const std::string& config_name,
       float other = r.nogemm_ms - measured;
       float nogemm_pct = (r.total_ms > 0.f) ? (r.nogemm_ms / r.total_ms * 100.f) : 0.f;
 
-      std::cout << " " << std::setw(10) << kTokenSizes[i] << std::fixed << std::setprecision(4) << std::setw(10)
+      std::cout << " " << std::setw(10) << GetTokenSizes()[i] << std::fixed << std::setprecision(4) << std::setw(10)
                 << r.gating_ms << std::setw(10) << r.align_ms << std::setw(10) << r.quant_ms << std::setw(10)
                 << r.silu_ms << std::setw(10) << r.mulsum_ms << std::setw(10) << other << std::setw(10) << r.nogemm_ms
                 << std::setw(9) << std::setprecision(1) << nogemm_pct << "%" << std::endl;
@@ -308,12 +308,12 @@ void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
   {
     std::ofstream f(path("_latency.csv"));
     f << "tokens,backend,gemm1_ms,gemm2_ms,nogemm_ms,total_ms\n";
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       for (size_t b = 0; b < all_results.size(); ++b) {
         if (i >= all_results[b].size()) continue;
         const auto& r = all_results[b][i];
-        f << kTokenSizes[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(4) << r.gemm1_ms << ","
-          << r.gemm2_ms << "," << r.nogemm_ms << "," << r.total_ms << "\n";
+        f << GetTokenSizes()[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(4) << r.gemm1_ms
+          << "," << r.gemm2_ms << "," << r.nogemm_ms << "," << r.total_ms << "\n";
       }
     }
   }
@@ -324,11 +324,11 @@ void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
     f << "tokens,backend,topk,total_pairs,experts_accessed,experts_total,blk_sz1,blk_sz2,"
          "real_pairs_g1,real_pairs_g2,waste_g1_pct,waste_g2_pct\n";
     size_t experts_total = ComputeExpertsPerRank(cfg);
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       for (size_t b = 0; b < all_results.size(); ++b) {
         if (i >= all_results[b].size()) continue;
         const auto& r = all_results[b][i];
-        f << kTokenSizes[i] << "," << backends[b].name << ",6," << r.total_pairs << "," << r.experts_accessed << ","
+        f << GetTokenSizes()[i] << "," << backends[b].name << ",6," << r.total_pairs << "," << r.experts_accessed << ","
           << experts_total << "," << r.moe_block_size_1 << "," << r.moe_block_size_2 << "," << r.real_pairs_g1 << ","
           << r.real_pairs_g2 << "," << std::fixed << std::setprecision(1) << (r.waste_rate_g1 * 100.0) << ","
           << (r.waste_rate_g2 * 100.0) << "\n";
@@ -340,11 +340,11 @@ void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
   {
     std::ofstream f(path("_tflops.csv"));
     f << "tokens,backend,eff_gemm1,eff_gemm2,eff_total,real_gemm1,real_gemm2,real_total\n";
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       for (size_t b = 0; b < all_results.size(); ++b) {
         if (i >= all_results[b].size()) continue;
         const auto& r = all_results[b][i];
-        f << kTokenSizes[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(2)
+        f << GetTokenSizes()[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(2)
           << ComputeTFLOPS(r.eff_gemm1_flops, r.gemm1_ms) << "," << ComputeTFLOPS(r.eff_gemm2_flops, r.gemm2_ms) << ","
           << ComputeTFLOPS(r.eff_total_flops, r.total_ms) << "," << ComputeTFLOPS(r.real_gemm1_flops, r.gemm1_ms) << ","
           << ComputeTFLOPS(r.real_gemm2_flops, r.gemm2_ms) << "," << ComputeTFLOPS(r.real_total_flops, r.total_ms)
@@ -358,11 +358,11 @@ void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
     std::ofstream f(path("_bandwidth.csv"));
     f << "tokens,backend,eff_gemm1_gbps,eff_gemm2_gbps,eff_total_gbps,"
          "real_gemm1_gbps,real_gemm2_gbps,real_total_gbps\n";
-    for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+    for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
       for (size_t b = 0; b < all_results.size(); ++b) {
         if (i >= all_results[b].size()) continue;
         const auto& r = all_results[b][i];
-        f << kTokenSizes[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(1)
+        f << GetTokenSizes()[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(1)
           << ComputeBandwidthGBps(r.eff_gemm1_bytes, r.gemm1_ms) << ","
           << ComputeBandwidthGBps(r.eff_gemm2_bytes, r.gemm2_ms) << ","
           << ComputeBandwidthGBps(r.eff_total_bytes, r.total_ms) << ","
@@ -380,13 +380,13 @@ void WritePerfCsv(const std::string& config_name, const Fp4MoeTestConfig& cfg,
     for (size_t b = 0; b < backends.size(); ++b) {
       if (!backends[b].is_humming) continue;
       if (b >= all_results.size()) continue;
-      for (size_t i = 0; i < kTokenSizes.size(); ++i) {
+      for (size_t i = 0; i < GetTokenSizes().size(); ++i) {
         if (i >= all_results[b].size()) break;
         const auto& r = all_results[b][i];
         float measured = r.gating_ms + r.align_ms + r.quant_ms + r.silu_ms + r.mulsum_ms;
         float other = r.nogemm_ms - measured;
         float nogemm_pct = (r.total_ms > 0.f) ? (r.nogemm_ms / r.total_ms * 100.f) : 0.f;
-        f << kTokenSizes[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(4) << r.gating_ms
+        f << GetTokenSizes()[i] << "," << backends[b].name << "," << std::fixed << std::setprecision(4) << r.gating_ms
           << "," << r.align_ms << "," << r.quant_ms << "," << r.silu_ms << "," << r.mulsum_ms << "," << other << ","
           << r.nogemm_ms << "," << std::setprecision(1) << nogemm_pct << "\n";
       }

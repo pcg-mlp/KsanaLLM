@@ -356,9 +356,9 @@ std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
   layer->SetPerfStats(&perf_stats);
 
   std::vector<BenchResult> results;
-  results.reserve(kTokenSizes.size());
+  results.reserve(GetTokenSizes().size());
   std::vector<torch::Tensor> outputs;
-  outputs.reserve(kTokenSizes.size());
+  outputs.reserve(GetTokenSizes().size());
 
   // Wrap e_score_bias into a ksana Tensor for Forward's 8th argument.
   Tensor e_bias_tensor;
@@ -368,8 +368,8 @@ std::pair<std::vector<BenchResult>, std::vector<torch::Tensor>> RunBenchmark(
                     stream);
   }
 
-  for (size_t idx = 0; idx < kTokenSizes.size(); ++idx) {
-    size_t num_tokens = kTokenSizes[idx];
+  for (size_t idx = 0; idx < GetTokenSizes().size(); ++idx) {
+    size_t num_tokens = GetTokenSizes()[idx];
     persistent_inputs[0] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, K});
     persistent_inputs[1] = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {num_tokens, E});
     cudaMemcpyAsync(persistent_inputs[0].GetPtr<void>(), hs_full, num_tokens * K * kBytesPerBF16,
