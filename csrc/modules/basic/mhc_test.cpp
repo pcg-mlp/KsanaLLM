@@ -181,6 +181,22 @@ class MhcTest : public testing::Test {
     for (size_t i = 0; i < output_ref.size(); i++) {
       EXPECT_NEAR(output_ref[i], static_cast<float>(output_host[i]), 1e-3);
     }
+
+    // Test final forward in-place
+    Tensor workspace(MemoryLocation::LOCATION_DEVICE, model_config.weight_data_type, {token_num, hidden_size});
+    std::vector<Tensor> inplace_tensors{input};
+    // Without a workspace the in-place call must fail loudly instead of corrupting rows.
+    EXPECT_ANY_THROW(final_mhc.FinalForward(inplace_tensors, inplace_tensors));
+    EXPECT_TRUE(final_mhc.FinalForward(inplace_tensors, inplace_tensors, &workspace).OK());
+    EXPECT_EQ(inplace_tensors[0].shape[0], token_num);
+    EXPECT_EQ(inplace_tensors[0].shape[1], hidden_size);
+    output_host.resize(inplace_tensors[0].GetElementNumber());
+    MemcpyAsync(output_host.data(), inplace_tensors[0].GetPtr<void>(), inplace_tensors[0].GetTotalBytes(),
+                MEMCPY_DEVICE_TO_HOST, context->device->GetPrimaryComputeStream());
+    StreamSynchronize(context->device->GetPrimaryComputeStream());
+    for (size_t i = 0; i < output_ref.size(); i++) {
+      EXPECT_NEAR(output_ref[i], static_cast<float>(output_host[i]), 1e-3);
+    }
   }
 
   // Test that PreForwardWithNorm produces the same result as PreForward + separate RMSNorm.

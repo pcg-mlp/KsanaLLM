@@ -505,7 +505,7 @@ struct RuntimeConfig {
   // Non-contiguous SWA cache mode controls for DSV4 flash attention.
   // enable_non_contiguous_swa_mode=false: force-disable buffer path (rollback).
   // force_non_contiguous_swa_mode=true:  force-enable buffer path for all flash batches (debug).
-  bool enable_non_contiguous_swa_mode = true;
+  bool enable_non_contiguous_swa_mode = false;
   bool force_non_contiguous_swa_mode = false;
 };
 

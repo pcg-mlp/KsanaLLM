@@ -613,13 +613,14 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   }
 
   auto& input_tensors = assemble_early ? hidden_buffer_tensors_0 : residual_buffer;
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
 
   // Squeeze residual_buffer from [t, hc, d] to [t, d]
   if (run_mode != RunMode::kMain && nextn_final_mhc_) {
     // Use spec-specific hc_head for non-main run modes (MTP/DSpark).
-    nextn_final_mhc_->FinalForward(input_tensors, input_tensors);
+    nextn_final_mhc_->FinalForward(input_tensors, input_tensors, &hidden_buffer_tensors_1[0]);
   } else if (final_mhc_) {
-    final_mhc_->FinalForward(input_tensors, input_tensors);
+    final_mhc_->FinalForward(input_tensors, input_tensors, &hidden_buffer_tensors_1[0]);
   }
 
   if (is_multi_token_forward && run_mode == RunMode::kMain) {
@@ -678,7 +679,6 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   // lm_head
   PROFILE_EVENT_SCOPE(CommonModel_LmHead_, "CommonModel_LmHead", forwarding_context.GetCurrentRank());
 
-  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
   if (forwarding_context.GetModelCommunicator() && runtime_config_.enable_full_shared_expert) {
     forwarding_context.GetModelCommunicator()->ReduceSum(hidden_buffer_tensors_0, hidden_buffer_tensors_1,
                                                          is_multi_token_forward, /*use_custom*/ false);

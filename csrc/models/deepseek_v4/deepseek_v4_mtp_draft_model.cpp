@@ -48,7 +48,8 @@ Status DeepSeekV4MtpDraftModel::ForwardMhcNormLmHead(std::vector<Tensor>& residu
                                                      std::shared_ptr<BaseWeight>& base_weight,
                                                      ForwardingContext& forwarding_context) {
   if (nextn_final_mhc_) {
-    nextn_final_mhc_->FinalForward(residual_buffer, residual_buffer);
+    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context.GetForwardingBuffers()->hidden_buffer_1);
+    nextn_final_mhc_->FinalForward(residual_buffer, residual_buffer, &hidden_buffer_tensors_1[0]);
   }
   if (nextn_shared_head_norm_) {
     nextn_shared_head_norm_->Forward(residual_buffer[0], residual_buffer[0]);

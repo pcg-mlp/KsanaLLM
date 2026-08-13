@@ -192,7 +192,7 @@ class CompressorTest : public testing::Test {
  protected:
   // Initialise environment / block manager / cache for a specific compress_ratio (4 or 128).
   // Replaces the usual SetUp() since cache layout depends on compress_ratios.
-  void InitWithRatio(uint32_t compress_ratio) {
+  void InitWithRatio(uint32_t compress_ratio, DataType state_dtype = TYPE_BF16) {
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
     std::filesystem::path config_path_relate = parent_path / "../../../examples/ksana_llm_deepseekv2.yaml";
@@ -226,6 +226,7 @@ class CompressorTest : public testing::Test {
 
     env->schedule_config_parser_.runtime_config_.attn_backend_config.kv_cache_dtype = TYPE_FP8_DS_MLA;
     env->schedule_config_parser_.runtime_config_.attn_backend_config.block_token_num = 256;
+    env->schedule_config_parser_.runtime_config_.compressor_config.state_dtype = state_dtype;
 
     env->SetModelConfig(model_config);
     block_cache_layout_ = GetTestModelCacheLayout(env);
@@ -373,8 +374,11 @@ TEST_F(CompressorTest, ForwardC128) {
   InitWithRatio(128);
   SetupBf16Config();
   TestCompressorForward();
-  Singleton<Environment>::GetInstance()->schedule_config_parser_.runtime_config_.compressor_config.state_dtype =
-      TYPE_FP32;
+}
+
+TEST_F(CompressorTest, ForwardC128Fp32State) {
+  InitWithRatio(128, TYPE_FP32);
+  SetupBf16Config();
   TestCompressorForward();
 }
 

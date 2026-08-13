@@ -55,15 +55,17 @@ class Mhc {
   Status InitialForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
 
   // Applied before lmhead
-  // 1. Compute output[0] = input[0] * fn
-  // 2. Compute output[0] = sigmoid(scale * output[0] / rms + base)
-  // 3. Compute output[1] = output[0] * input[0]
+  // 1. Compute output[1] = input[0] * fn
+  // 2. Compute output[1] = sigmoid(scale * output[1] / rms + base)
+  // 3. Compute output[0] = output[1] * input[0]
   // input[0]: [t, hc, d]
   // output[0]: [t, hc]
   // output[1]: [t, hc]
-  Status FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors);
+  Status FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                      Tensor* workspace_tensor = nullptr);
 
  private:
+  std::shared_ptr<Context> context_;
   const MhcConfig& mhc_config_;
 
   MhcBuffers& mhc_buffers_;

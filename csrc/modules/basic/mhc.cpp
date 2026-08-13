@@ -4,13 +4,16 @@
 
 #include "modules/basic/mhc.h"
 
+#include "device/device_utils.h"
 #include "layers/mhc_layer.h"
 
 namespace ksana_llm {
 
 Mhc::Mhc(const std::string& weight_name, const LayerCreationContext& creation_context, MhcBuffers& mhc_buffers,
          const std::string& norm_weight_name)
-    : mhc_config_(creation_context.model_config.mhc_config), mhc_buffers_(mhc_buffers) {
+    : context_(creation_context.context),
+      mhc_config_(creation_context.model_config.mhc_config),
+      mhc_buffers_(mhc_buffers) {
   mhc_layer_ = std::make_unique<MhcLayer>();
   mhc_layer_->Init({creation_context.model_config.layernorm_eps, mhc_config_.hc_mult, mhc_config_.hc_sinkhorn_iters,
                     mhc_config_.hc_eps, creation_context.model_config.hidden_units},
@@ -103,9 +106,26 @@ Status Mhc::InitialForward(const std::vector<Tensor>& input_tensors, std::vector
   return typed->ForwardInitial(&input_tensors[0], &output_tensors[0]);
 }
 
-Status Mhc::FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
+Status Mhc::FinalForward(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors,
+                         Tensor* workspace_tensor) {
   KLLM_CHECK(input_tensors.size() == 1);
   KLLM_CHECK(output_tensors.size() == 1);
+
+  if (input_tensors[0].GetPtr<void>() == output_tensors[0].GetPtr<void>()) {
+    KLLM_CHECK_WITH_INFO(workspace_tensor != nullptr,
+                         "Mhc::FinalForward runs in-place but no workspace tensor was provided");
+    KLLM_CHECK_WITH_INFO(workspace_tensor->GetPtr<void>() != input_tensors[0].GetPtr<void>(),
+                         "Mhc::FinalForward workspace must not alias input");
+
+    std::vector<Tensor> workspace_tensors = {*workspace_tensor};
+    STATUS_CHECK_RETURN(FinalForward(input_tensors, workspace_tensors));
+    MemcpyAsync(output_tensors[0].GetPtr<void>(), workspace_tensors[0].GetPtr<void>(),
+                workspace_tensors[0].GetTotalBytes(), MEMCPY_DEVICE_TO_DEVICE,
+                context_->device->GetPrimaryComputeStream());
+    output_tensors[0].shape = workspace_tensors[0].shape;
+    output_tensors[0].dtype = workspace_tensors[0].dtype;
+    return Status();
+  }
 
   CREATE_BUFFER_SCOPE(mix_h_buffer_tensors, mhc_buffers_.mix_h_buffer);
   CREATE_BUFFER_SCOPE(norm_buffer_tensors, mhc_buffers_.norm_buffer);

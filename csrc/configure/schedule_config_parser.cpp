@@ -1183,6 +1183,14 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.enable_executor_build_ahead = batch_scheduler_config_.enable_executor_build_ahead;
   runtime_config_.enable_speculative_decoding = batch_scheduler_config_.enable_speculative_decoding;
 
+  runtime_config_.enable_non_contiguous_swa_mode = cache_manager_config_.enable_non_contiguous_swa_mode;
+  if (runtime_config_.force_non_contiguous_swa_mode) {
+    runtime_config_.enable_non_contiguous_swa_mode = true;
+  }
+  KLLM_LOG_INFO << fmt::format("enable_non_contiguous_swa_mode: {}, force_non_contiguous_swa_mode: {}",
+                               runtime_config_.enable_non_contiguous_swa_mode,
+                               runtime_config_.force_non_contiguous_swa_mode);
+
   runtime_config_.separate_prefill_decode = (connector_config_.group_role != GroupRole::NONE);
   runtime_config_.is_decode_only = (connector_config_.group_role == GroupRole::DECODE);
   // pd_v2 Decode is NOT decode-only: the local-bypass fast path
