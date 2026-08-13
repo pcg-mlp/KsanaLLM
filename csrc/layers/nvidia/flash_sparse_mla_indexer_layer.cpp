@@ -95,6 +95,7 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
       rope_scaling_factor_config.type == "yarn" || rope_scaling_factor_config.type == "default",
       fmt::format("FlashSparseMlaIndexer only supports yarn/default, got {}", rope_scaling_factor_config.type));
   param_idx++;  // max_batch_size unused
+  const int max_position_embeddings = std::any_cast<int>(parameters[param_idx++]);
   layer_index_ = std::any_cast<int>(parameters[param_idx++]);
   layer_num_ = std::any_cast<int>(parameters[param_idx++]);
   is_neox_ = !(std::any_cast<bool>(parameters[param_idx++]));
@@ -121,8 +122,8 @@ Status FlashSparseMlaIndexerLayer::Init(const std::vector<std::any>& parameters,
 
   // Initialize RoPE based on data type
   DISPATCH_BY_2_DTYPE(inter_data_type_, InitYarnRotaryEmbedding, rotary_embedding_cuda_, rope_scaling_factor_config,
-                      cos_sin_cache_ptr, rope_theta, rope_head_dim_, max_seq_len_, head_dim_, n_heads_, is_neox_,
-                      context_->device->GetPrimaryComputeStream().Get());
+                      cos_sin_cache_ptr, rope_theta, rope_head_dim_, max_position_embeddings, head_dim_, n_heads_,
+                      is_neox_, context_->device->GetPrimaryComputeStream().Get());
 }
 
 static void PrepareQuantWorkspace(size_t total_q_tokens, size_t max_chunked_kv_tokens, size_t max_seq_len,

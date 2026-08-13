@@ -66,6 +66,7 @@ SparseMlaIndexer::SparseMlaIndexer(int layer_idx, LayerCreationContext& creation
   indexer_param.push_back(attn_config.cos_sin_cache_ptr);  // cos/sin cache
   indexer_param.push_back(attn_config.model_config.rope_scaling_factor_config);  // rope scaling
   indexer_param.push_back(static_cast<int>(attn_config.max_batch_size));         // max_batch_size
+  indexer_param.push_back(attn_config.max_position_embeddings);                  // max_seq_len
   indexer_param.push_back(attn_config.idx);                                      // local_layer_idx
   indexer_param.push_back(static_cast<int>(attn_config.layer_num_on_node));      // layer_num_on_node
   indexer_param.push_back(model_config.dsa_config.indexer_rope_interleave);      // rope_interleave

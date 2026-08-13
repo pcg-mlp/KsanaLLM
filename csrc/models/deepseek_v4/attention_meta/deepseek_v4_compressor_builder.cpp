@@ -144,7 +144,7 @@ void PrepareTailIndices(const std::vector<ForwardRequest>& reqs, const std::unor
                       "swa_kv_cache_block_idx_offsets (req_id={} prefix_len={} swa_size={}).",
                       last_prefix_block_idx, req.req_id, prefix_len, req.swa_kv_cache_block_idx_offsets.size()));
       tail_read_block_host.push_back(tail_read_block_id);
-      const int slot_id = slot_resource->GetUnderSchedulerInvariant(req.req_id);
+      const int slot_id = slot_resource->Get(req.req_id);
       const int sub_slot_load =
           GetSubSlotId(prefix_len, kC4Ratio, compressor_shared.c4_slot_num, compressor_shared.c128_slot_num);
       tail_target_indices_host.push_back(
@@ -210,7 +210,7 @@ void PrepareIndices(CompressorAttentionMeta& compressor, CompressorSharedAttenti
     const int extend_len = static_cast<int>(req->GetInputIdsLength());
     const int prefix_len = seq_len - extend_len;
 
-    const int slot_id = slot_resource->GetUnderSchedulerInvariant(req->req_id);
+    const int slot_id = slot_resource->Get(req->req_id);
     const int c4_curr_slot_id = GetSubSlotId(seq_len, kC4Ratio, c4_slot_num, c128_slot_num);
     const int c4_prev_slot_id = GetC4PrevSlotId(c4_curr_slot_id, c4_slot_num);
     const int c4_curr_page =

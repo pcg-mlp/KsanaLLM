@@ -243,7 +243,7 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
                              ? model_config.mla_config.qk_rope_head_dim
                              : model_config.rotary_embedding;
   // Limit the cos/sin table size to runtime_max_seq_len to reduce memory usage
-  int max_position_embeddings = runtime_config.max_seq_len;
+  int max_position_embeddings = model_config.max_position_embeddings;
   float scale_factor = model_config.rope_scaling_factor_config.factor;
 
   std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3"};
