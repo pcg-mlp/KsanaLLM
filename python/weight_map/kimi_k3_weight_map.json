@@ -1,0 +1,19 @@
+{
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w1\\.weight_packed$": "$1.mlp.experts.$2.gate_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w1\\.weight_scale$": "$1.mlp.experts.$2.gate_proj.weight_scale_inv",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w3\\.weight_packed$": "$1.mlp.experts.$2.up_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w3\\.weight_scale$": "$1.mlp.experts.$2.up_proj.weight_scale_inv",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w2\\.weight_packed$": "$1.mlp.experts.$2.down_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.experts\\.(\\d+)\\.w2\\.weight_scale$": "$1.mlp.experts.$2.down_proj.weight_scale_inv",
+
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.shared_experts\\.gate_proj\\.weight$": "$1.mlp.shared_expert.gate_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.shared_experts\\.up_proj\\.weight$": "$1.mlp.shared_expert.up_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.shared_experts\\.down_proj\\.weight$": "$1.mlp.shared_expert.down_proj.weight",
+
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.gate\\.weight$": "$1.mlp.gate.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.gate\\.e_score_correction_bias$": "$1.mlp.gate.e_score_correction_bias",
+
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.routed_expert_up_proj\\.weight$": "$1.mlp.routed_expert_up_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.routed_expert_down_proj\\.weight$": "$1.mlp.routed_expert_down_proj.weight",
+    "^(model\\.layers\\.\\d+)\\.block_sparse_moe\\.routed_expert_norm\\.weight$": "$1.mlp.routed_expert_norm.weight"
+}

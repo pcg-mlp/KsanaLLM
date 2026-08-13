@@ -8,11 +8,17 @@
 
 namespace ksana_llm {
 
-// Model config parser for kimi_k3
+// Model config parser for kimi_k3 (executor process).
 class KimiK3ConfigParser : public BaseModelConfigParser {
  public:
-  Status ParseModelConfig(const nlohmann::json &config_json, const ParallelismBasicConfig &parallel_basic_config,
-                          const std::string &model_dir, std::shared_ptr<BaseModelConfig> &model_config) override;
-};
+  // Parse config from config.json
+  virtual Status ParseModelConfig(const nlohmann::json &config_json,
+                                  const ParallelismBasicConfig &parallel_basic_config, const std::string &model_dir,
+                                  std::shared_ptr<BaseModelConfig> &model_config) override;
 
+ private:
+  // Parse quant config
+  Status ParseQuantConfig(const nlohmann::json &config_json, std::shared_ptr<KimiK3Config> kimi_k3_config,
+                          const std::string &yaml_weight_quant_method, const std::string &yaml_gptq_backend);
+};
 }  // namespace ksana_llm

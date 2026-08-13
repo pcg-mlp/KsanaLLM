@@ -562,7 +562,20 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
     } else if (model_config.type == "deepseek_v4") {
       PrepareDeepSeekV4Attributes(config_json, model_config);
     } else if (model_config.type == "kimi_k3") {
+      // Kimi-K3 is multimodal: LLM backbone lives in text_config (model_type "kimi_linear"),
+      // vision tower in vision_config. Extract vision + top-level tokens first, then switch
+      // config_json to text_config so the generic ParseModelMaxLength / ParseModelQuantConfig
+      // (called below) operate on the LLM sub-config.
+      bool has_vision = config_json.contains("vision_config");
+      model_config.media_placeholder_token_id = config_json.value("media_placeholder_token_id", 0);
+      if (has_vision) {
+        PrepareKimiK3VisionAttributes(config_json["vision_config"], model_config);
+      }
+      config_json = config_json["text_config"];
+      model_config.weight_data_type = GetModelDataType(config_json, model_config);
       PrepareKimiK3Attributes(config_json, model_config);
+      model_config.is_visual = has_vision;
+      model_config.has_vision = has_vision;
     } else if (model_config.type == "glm4_moe") {
       PrepareGlm4MoeAttributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {

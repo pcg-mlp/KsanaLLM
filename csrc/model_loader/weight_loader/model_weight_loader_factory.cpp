@@ -19,6 +19,7 @@
 #include "models/hunyuan_turbo/hunyuan_turbo_weight_loader.h"
 #include "models/internlm2/new_internlm2_weight_loader.h"
 #include "models/internlmxcomposer2/new_internlmxcomposer2_weight_loader.h"
+#include "models/kimi_k3/kimi_k3_weight_loader.h"
 #include "models/llama/llama_model_weight_loader.h"
 #include "models/mixtral/mixtral_weight_loader.h"
 #include "models/qwen/qwen_weight_loader.h"
@@ -90,7 +91,7 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
       break;
     }
     case ModelArchitecture::ARCH_KIMI_K3: {
-      model_weight_loader = std::make_shared<DeepSeekV3WeightLoader>(model_config, env, context);
+      model_weight_loader = std::make_shared<KimiK3WeightLoader>(model_config, env, context);
       break;
     }
     case ModelArchitecture::ARCH_GPT_MOE: {
