@@ -318,9 +318,9 @@ TEST_F(ModelPerfBackendTest, ScheduleFirstRoundAllocatesKvAndAddsRunningReq) {
   EXPECT_EQ(req->kv_cached_token_num, 16u);
   // AddRunningReq 会调用 SetPlanningTask()，workload 已转入 planning_task_，planning_workload_ 被清空。
   EXPECT_TRUE(req->HasPlanningTask());
-  // Prefill counts the full sequence (prefill_start_offset + prefill_token_num = 16 + 32)
-  // against running_step_token_num so prefix-cache hits are charged to max_step_token.
-  EXPECT_EQ(planning_batch->running_step_token_num, 48u);
+  // Prefill counts only the tokens forwarded this step (prefill_token_num = 32); the 16-token
+  // prefix-cache hit is already in KV and is not part of the step token budget.
+  EXPECT_EQ(planning_batch->running_step_token_num, 32u);
   EXPECT_EQ(backend.perf_req_states_[req->req_id].snap_planning_workload.prefill_token_num, 32u);
   EXPECT_EQ(backend.perf_req_states_[req->req_id].snap_planning_workload.prefill_start_offset, 16u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_token_num, 0u);
@@ -363,8 +363,8 @@ TEST_F(ModelPerfBackendTest, ScheduleResetRoundRestoresSnapshot) {
   EXPECT_EQ(planning_batch->running_req_num, 1u);
   EXPECT_EQ(req->kv_cached_token_num, 8u);
   EXPECT_TRUE(req->HasPlanningTask());
-  // Full sequence: prefill_start_offset(8) + prefill_token_num(16) = 24.
-  EXPECT_EQ(planning_batch->running_step_token_num, 24u);
+  // Only this step's forwarded tokens: prefill_token_num(16), excluding prefill_start_offset(8).
+  EXPECT_EQ(planning_batch->running_step_token_num, 16u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_token_num, 0u);
   EXPECT_EQ(req->GetRemainingWorkload().prefill_start_offset, 24u);
   EXPECT_FALSE(backend.needs_reset_);

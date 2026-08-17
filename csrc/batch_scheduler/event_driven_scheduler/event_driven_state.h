@@ -101,11 +101,8 @@ struct DpBatch {
   void AddRunningReq(const std::shared_ptr<InferRequest>& req) {
     KLLM_CHECK(req != nullptr);
     KLLM_CHECK(!IsInBatch(req->req_id));
-    // Prefill with prefix cache must account for the full sequence length (prefix + new tokens)
-    // because MLA attention kernel allocates buffer for total_q_tokens + total_prefix_tokens.
-    // Decode only processes a few new tokens per step; GetPlanningQueryLen() is sufficient.
-    const size_t added_tokens =
-        (req->infer_stage == InferStage::kContext) ? req->GetPlanningSequenceLen() : req->GetPlanningQueryLen();
+    // Charge the tokens this step actually forwards.
+    const size_t added_tokens = req->GetPlanningQueryLen();
     const size_t added_logits = req->GetPlanningSamplingTokenNum();
     running_step_token_num += added_tokens;
     running_step_logits_num += added_logits;
@@ -147,13 +144,8 @@ struct PlanningBatch {
     KLLM_CHECK(req != nullptr);
     KLLM_CHECK(!dp_batches[dp_idx].IsInBatch(req->req_id));
     ++running_req_num;
-    // Prefill: use full sequence length (prefix + new tokens) so that prefix cache hits
-    // are correctly counted against max_step_tokens. Decode: only new tokens per step.
-    if (req->infer_stage == InferStage::kContext) {
-      running_step_token_num += req->GetPlanningSequenceLen();
-    } else {
-      running_step_token_num += req->GetPlanningQueryLen();
-    }
+    // Charge the tokens this step actually forwards.
+    running_step_token_num += req->GetPlanningQueryLen();
     running_step_logits_num += req->GetPlanningSamplingTokenNum();
     dp_batches[dp_idx].AddRunningReq(req);
   }
