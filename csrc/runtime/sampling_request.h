@@ -29,7 +29,7 @@ struct SamplingRequest {
 
   std::shared_ptr<std::vector<int>> input_tokens;
 
-  std::vector<int>* forwarding_tokens = nullptr;
+  const std::vector<int>* forwarding_tokens = nullptr;
 
   // Generated tokens in this sampling.
   std::vector<int>* sampling_result_tokens = nullptr;

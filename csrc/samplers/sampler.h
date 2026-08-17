@@ -64,7 +64,7 @@ class Sampler {
   std::function<void()> CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
                                         std::vector<std::vector<float>>& probs_output);
 
-  void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* forwarding_tokens,
+  void ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, const std::vector<int>* forwarding_tokens,
                               const int vocab_size, const float repetition_penalty, Stream& stream);
 
   void CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_reqs,

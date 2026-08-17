@@ -98,8 +98,6 @@ struct MqaSharedAttentionMeta {
 
   // Pre-allocated backing tensors (per-batch views are sliced from these)
   Tensor raw_out_loc_tensor;                // DEVICE, INT32, [max_token_num]
-  Tensor last_raw_out_loc_tensor;           // DEVICE, INT32, [max_token_num] (for DSpark InjectKV)
-  Tensor last_rotary_embedding_pos_tensor;  // DEVICE, INT64, [max_token_num] (for DSpark InjectKV)
   Tensor swa_block_indices_tensor;          // DEVICE, INT32, [max_token_num, kSwaSize]
   Tensor c128_block_indices_tensor;         // DEVICE, INT32, [max_token_num, aligned_max_c128_seq_len]
   Tensor c128_topk_lengths_tensor;          // DEVICE, INT32, [max_batch_size]

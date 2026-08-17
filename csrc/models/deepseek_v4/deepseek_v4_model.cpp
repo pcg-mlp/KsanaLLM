@@ -16,7 +16,6 @@
 
 namespace ksana_llm {
 
-// 用于MLA层张量并行处理的同步屏障
 DeepSeekV4DecoderLayer::DeepSeekV4DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
                                                ModelCreationConfig& model_creation_config, MhcBuffers& mhc_buffers,
                                                Dsv4AttnBuffer& dsv4_attn_buffer, TensorBuffer* moe_buffer,
@@ -182,11 +181,6 @@ Status DeepSeekV4DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tens
 
     // Check if multi-stream parallel is enabled for SharedExpert.
     static const bool enable_shared_expert_parallel = (GetEnvAsPositiveInt("SHARED_EXPERT_PARALLEL", 0) != 0);
-    {
-      PROFILE_EVENT_SCOPE(expert_gate, "expert_gate", forwarding_context.GetCurrentRank());
-      STATUS_CHECK_RETURN(expert_gate_->Forward(hidden_buffer_tensors_0[0], gated_buffer_[0]));
-    }
-
     if (enable_shared_expert_parallel) {
       // ═══ Multi-stream parallel path ═══
       auto& primary_stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
@@ -459,11 +453,10 @@ Status DeepSeekV4Model::CreateLayers(LayerCreationContext& creation_context,
       if (creation_context.model_config.dspark_config.dspark_block_size > 0) {
         dspark_markov_head_ = std::make_unique<DSparkMarkovHead>(
             layer_prefix + ".markov_head.markov_w1.weight", layer_prefix + ".markov_head.markov_w2.weight",
-            creation_context, model_creation_config.attn_config.model_config.quant_config.backend,
-            forwarding_context_->GetModelCommunicator());
+            creation_context, model_creation_config.attn_config.model_config.quant_config.backend);
 
         // Single-step markov input.
-        dspark_step_token_ids_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+        dspark_step_token_ids_ = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT32,
                                         {static_cast<size_t>(creation_context.runtime_config.max_batch_size)});
         dspark_step_token_ids_host_.resize(creation_context.runtime_config.max_batch_size);
         dspark_block_size_ = creation_context.model_config.dspark_config.dspark_block_size;
@@ -521,12 +514,18 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
       }
     }
 
-    dspark_buffer.shape = {token_num, num_target_layers * model_config_.hidden_units};
-    dspark_buffer.dtype = residual_buffer[0].dtype;
-    // Reset DSpark step logits ptr;
-    dspark_step_logits_ptr_ = nullptr;
-  } else if (run_mode == RunMode::kNextN) {
-    forwarding_context.SetIsForwardingLayers(false);
+    if (context_->global->IsSamplingNode() && num_target_layers > 0) {
+      dspark_buffer.shape = {token_num, num_target_layers * model_config_.hidden_units};
+      dspark_buffer.dtype = residual_buffer[0].dtype;
+      dspark_step_logits_ptr_ = nullptr;  // Reset DSpark step logits ptr
+
+      for (int layer_idx = forwarding_context.GetPipelineConfig().lower_nextn_layer_idx;
+           layer_idx <= forwarding_context.GetPipelineConfig().upper_nextn_layer_idx; ++layer_idx) {
+        STATUS_CHECK_RETURN(dspark_layers_[layer_idx]->InjectKVForward(forwarding_context));
+      }
+    }
+  } else if (run_mode == RunMode::kNextN && !nextn_layers_.empty()) {
+    forwarding_context.SetIsForwardingLayers(false);  // Don't record ForwardingLayers event
     std::vector<Tensor>& residual_buffer = GetHiddenUnitBufferTensors(forwarding_context);
     STATUS_CHECK_RETURN(draft_model_->ForwardLayer(residual_buffer, forwarding_context));
   } else if (run_mode == RunMode::kDSpark && !dspark_layers_.empty()) {
@@ -562,29 +561,34 @@ Status DeepSeekV4Model::LayerForward(ForwardingContext& forwarding_context, cons
   return Status();
 }
 
-Status DeepSeekV4Model::ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index) {
+Status DeepSeekV4Model::ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index,
+                                    const uint32_t* prev_step_tokens_dev) {
   std::lock_guard<std::mutex> forward_lock(forward_mutex_);
   PROFILE_EVENT_SCOPE(DSparkMarkovApply, "DSparkMarkovApply", forwarding_context_->GetCurrentRank());
 
   // 1) Pull this step's per-req token from forwarding_tokens.
   const size_t batch_size = forward_reqs.size();
-  for (size_t r = 0; r < batch_size; ++r) {
-    const auto& tokens = *forward_reqs[r].forwarding_tokens;
-    dspark_step_token_ids_host_[r] = tokens[tokens.size() - dspark_block_size_ + step_index];
+  const uint32_t* token_ids_dev = prev_step_tokens_dev;
+  if (token_ids_dev == nullptr) {
+    for (size_t r = 0; r < batch_size; ++r) {
+      const auto& tokens = *forward_reqs[r].forwarding_tokens;
+      dspark_step_token_ids_host_[r] = static_cast<uint32_t>(tokens[tokens.size() - dspark_block_size_ + step_index]);
+    }
+    dspark_step_token_ids_.shape = {batch_size};
+    MemcpyAsync(dspark_step_token_ids_.GetPtr<void>(), dspark_step_token_ids_host_.data(),
+                batch_size * sizeof(uint32_t), MEMCPY_HOST_TO_DEVICE, context_->device->GetPrimaryComputeStream());
+    token_ids_dev = dspark_step_token_ids_.GetPtr<uint32_t>();
   }
-  dspark_step_token_ids_.shape = {batch_size};
-  MemcpyAsync(dspark_step_token_ids_.GetPtr<void>(), dspark_step_token_ids_host_.data(), batch_size * sizeof(int),
-              MEMCPY_HOST_TO_DEVICE, context_->device->GetPrimaryComputeStream());
 
   // 2) Slice this step's [B, V] logits row out of the model's whole logits_tensor [block_size, B, V].
   const Tensor& logits_tensor = forwarding_context_->GetModelOutput()->logits_tensor;
   const size_t vocab_size = logits_tensor.shape[1];
   Tensor logits_row = logits_tensor.GetView({batch_size, vocab_size}, /*offset=*/step_index * batch_size * vocab_size);
 
-  // 3) Markov bias correction (embed → AllGather → matmul → AllGather → add).
+  // 3) Markov bias correction (embed → matmul → add).
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->GetForwardingBuffers()->hidden_buffer_0);
   CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->GetForwardingBuffers()->hidden_buffer_1);
-  STATUS_CHECK_RETURN(dspark_markov_head_->Forward(dspark_step_token_ids_, logits_row, hidden_buffer_tensors_0,
+  STATUS_CHECK_RETURN(dspark_markov_head_->Forward(token_ids_dev, batch_size, logits_row, hidden_buffer_tensors_0,
                                                    hidden_buffer_tensors_1));
 
   // Publish this step's [B, V] row base.

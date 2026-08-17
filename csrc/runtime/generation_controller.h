@@ -30,7 +30,7 @@ class GenerationController {
   void RestoreGenerators(std::shared_ptr<ScheduleOutput> schedule_output);
 
   // Remove generator for a finished request and clear the pointer in the request object
-  void RemoveGenerator(int64_t req_id, std::vector<std::shared_ptr<ExecutorInferRequest>> &reqs);
+  void RemoveGenerator(std::shared_ptr<ExecutorInferRequest> &req);
 
   // Init generation state before sampling (for InferRequest vector)
   // Suggested to init before forwarding, so bitmask can be used in advance

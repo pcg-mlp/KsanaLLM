@@ -146,11 +146,10 @@ Status ModelRunner::Stop() {
 }
 
 void ModelRunner::GetHiddenShape(const std::shared_ptr<ScheduleOutput>& schedule_output, std::vector<size_t>& shape) {
-  std::vector<size_t> input_ids_cpu;
+  size_t total_tokens = 0;
   for (const auto& req : schedule_output->executor_running_reqs) {
     const size_t skip_token_num = std::max(req->kv_cached_token_num, static_cast<size_t>(req->prefix_cache_len));
-    input_ids_cpu.insert(input_ids_cpu.end(), req->forwarding_tokens.begin() + skip_token_num,
-                         req->forwarding_tokens.end());
+    total_tokens += req->forwarding_tokens.size() - skip_token_num;
   }
   const auto& model_config = model_instance_->GetModelConfig();
   size_t per_token_width = model_config.hidden_units * model_config.mhc_config.hc_mult;
@@ -161,7 +160,7 @@ void ModelRunner::GetHiddenShape(const std::shared_ptr<ScheduleOutput>& schedule
     per_token_width = static_cast<size_t>(DivRoundUp(pipeline_config.upper_layer_idx + 1, attn_res_block_size)) *
                       model_config.hidden_units;
   }
-  shape = {input_ids_cpu.size(), per_token_width};
+  shape = {total_tokens, per_token_width};
 }
 
 DataType ModelRunner::GetHiddenDataType() { return model_instance_->GetModelConfig().weight_data_type; }
@@ -417,28 +416,20 @@ Status ModelRunner::HandlePostprocess() {
     }
 
     std::unordered_map<int64_t, GenerationResult> generation_results;
-    std::vector<int64_t> finished_req_ids;
-    const bool has_profile = model_output->schedule_output && model_output->schedule_output->enable_profile_metrics;
     for (auto& req : model_output->schedule_output->executor_running_reqs) {
       auto& result = generation_results[req->req_id];
       result.generated_tokens = req->generated_tokens;
       result.accepted_tokens = req->spec_state.accepted_tokens;
       sampling_output->target_logprobs[req->req_id] = req->logprobs;
       if (req->structured_generator && req->structured_generator->IsTerminated()) {
-        finished_req_ids.push_back(req->req_id);
+        generation_controller->RemoveGenerator(req);
       }
     }
+    const bool has_profile = model_output->schedule_output && model_output->schedule_output->enable_profile_metrics;
     // Batch-level profile metrics: write once to SamplingOutput, not per-request.
     if (has_profile) {
       sampling_output->has_profile_metrics = true;
       sampling_output->profile_metrics = model_output->profile_metrics;
-    }
-
-    if (!finished_req_ids.empty() && generation_controller) {
-      for (int64_t req_id : finished_req_ids) {
-        generation_controller->RemoveGenerator(req_id, model_output->schedule_output->executor_running_reqs);
-        KLLM_LOG_DEBUG << "Cleaned up generator for finished req_id: " << req_id;
-      }
     }
 
     HiddenUnitDeviceBuffer* const hidden_unit = model_output->hidden_unit;
@@ -551,5 +542,4 @@ Status ModelRunner::HandleResultReportProcess() {
   }
   return Status();
 }
-
 }  // namespace ksana_llm

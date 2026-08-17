@@ -95,7 +95,8 @@ class DeepSeekV4Model : public CommonModel {
 
   Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) override;
 
-  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index) override;
+  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index,
+                     const uint32_t* prev_step_tokens_dev = nullptr) override;
 
   // DSpark step: return current step's [B, V] row base when set by ForwardHead;
   // otherwise fall back to the model's whole logits base.
@@ -127,7 +128,7 @@ class DeepSeekV4Model : public CommonModel {
 
   // DSpark single-step markov input.
   Tensor dspark_step_token_ids_;
-  std::vector<int> dspark_step_token_ids_host_;
+  std::vector<uint32_t> dspark_step_token_ids_host_;
   // DSpark cross-layer hidden state capture buffer.
   Tensor dspark_hidden_tensor_;
   // next-step hidden buffer for MTP (owned by model, injected into ForwardingBuffers).

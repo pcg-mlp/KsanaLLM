@@ -2,8 +2,8 @@
 
 ==============================================================================*/
 
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -35,9 +35,8 @@ namespace {
 // Create a temporary directory and write a JSON file into it.
 // Returns the directory path (caller should clean up).
 std::string CreateTempModelDir(const std::string& suffix = "") {
-  auto dir = std::filesystem::temp_directory_path() / ("dsv4_test_" + suffix + "_" +
-                                                        std::to_string(std::hash<std::thread::id>{}(
-                                                            std::this_thread::get_id())));
+  auto dir = std::filesystem::temp_directory_path() /
+             ("dsv4_test_" + suffix + "_" + std::to_string(std::hash<std::thread::id>{}(std::this_thread::get_id())));
   std::filesystem::create_directories(dir);
   return dir.string();
 }
@@ -60,13 +59,12 @@ bool IsRawMtpWeightName(const std::string& weight_name) {
 std::string RewriteMtpWeightName(const std::string& origin_name, size_t num_layer) {
   std::string file_weight_name = origin_name;
   if (auto mtp_pos = file_weight_name.find("model.mtp."); mtp_pos != std::string::npos) {
-    if (auto dot_pos = file_weight_name.find('.', mtp_pos + strlen("model.mtp."));
-        dot_pos != std::string::npos) {
-      int mtp_idx = std::stoi(
-          file_weight_name.substr(mtp_pos + strlen("model.mtp."), dot_pos - mtp_pos - strlen("model.mtp.")));
+    if (auto dot_pos = file_weight_name.find('.', mtp_pos + strlen("model.mtp.")); dot_pos != std::string::npos) {
+      int mtp_idx =
+          std::stoi(file_weight_name.substr(mtp_pos + strlen("model.mtp."), dot_pos - mtp_pos - strlen("model.mtp.")));
       int mapped_layer = static_cast<int>(num_layer) + mtp_idx;
-      file_weight_name = file_weight_name.substr(0, mtp_pos) + "model.layers." + std::to_string(mapped_layer) +
-                         "." + file_weight_name.substr(dot_pos + 1);
+      file_weight_name = file_weight_name.substr(0, mtp_pos) + "model.layers." + std::to_string(mapped_layer) + "." +
+                         file_weight_name.substr(dot_pos + 1);
     }
   }
   return file_weight_name;
@@ -122,14 +120,13 @@ TEST_F(ReadDsparkNumLayersTest, FallBackToSafetensorsIndex) {
   tmp_dir_ = CreateTempModelDir("safetensors");
 
   nlohmann::json index_json;
-  index_json["weight_map"] = {
-      {"mtp.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
-      {"mtp.0.attn.wo_b.weight", "model-00001-of-00002.safetensors"},
-      {"mtp.1.attn.wq_a.weight", "model-00002-of-00002.safetensors"},
-      {"mtp.1.mlp.down_proj.weight", "model-00002-of-00002.safetensors"},
-      {"mtp.2.attn.wq_a.weight", "model-00002-of-00002.safetensors"},
-      {"model.layers.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
-      {"model.embed_tokens.weight", "model-00001-of-00002.safetensors"}};
+  index_json["weight_map"] = {{"mtp.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
+                              {"mtp.0.attn.wo_b.weight", "model-00001-of-00002.safetensors"},
+                              {"mtp.1.attn.wq_a.weight", "model-00002-of-00002.safetensors"},
+                              {"mtp.1.mlp.down_proj.weight", "model-00002-of-00002.safetensors"},
+                              {"mtp.2.attn.wq_a.weight", "model-00002-of-00002.safetensors"},
+                              {"model.layers.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
+                              {"model.embed_tokens.weight", "model-00001-of-00002.safetensors"}};
   WriteJsonFile(tmp_dir_ + "/model.safetensors.index.json", index_json);
 
   int result = ReadDsparkNumLayers(tmp_dir_, 1);
@@ -162,9 +159,8 @@ TEST_F(ReadDsparkNumLayersTest, NoMtpInSafetensorsReturnsDefault) {
   tmp_dir_ = CreateTempModelDir("nomtp");
 
   nlohmann::json index_json;
-  index_json["weight_map"] = {
-      {"model.layers.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
-      {"model.embed_tokens.weight", "model-00001-of-00002.safetensors"}};
+  index_json["weight_map"] = {{"model.layers.0.attn.wq_a.weight", "model-00001-of-00002.safetensors"},
+                              {"model.embed_tokens.weight", "model-00001-of-00002.safetensors"}};
   WriteJsonFile(tmp_dir_ + "/model.safetensors.index.json", index_json);
 
   int result = ReadDsparkNumLayers(tmp_dir_, 4);
@@ -181,9 +177,7 @@ TEST_F(ReadDsparkNumLayersTest, InferenceConfigTakesPriority) {
   WriteJsonFile(tmp_dir_ + "/inference/config.json", inference_config);
 
   nlohmann::json index_json;
-  index_json["weight_map"] = {
-      {"mtp.0.weight", "file.safetensors"},
-      {"mtp.1.weight", "file.safetensors"}};
+  index_json["weight_map"] = {{"mtp.0.weight", "file.safetensors"}, {"mtp.1.weight", "file.safetensors"}};
   WriteJsonFile(tmp_dir_ + "/model.safetensors.index.json", index_json);
 
   int result = ReadDsparkNumLayers(tmp_dir_, 1);
@@ -339,8 +333,8 @@ TEST(DsparkWkvViewTest, GetViewWithScaleTensor) {
   size_t head_dim = 512;
   size_t block_n = 128;
 
-  size_t wkv_scale_rows = head_dim / block_n;  // 4
-  size_t wq_a_scale_rows = q_lora_rank / block_n;  // 8
+  size_t wkv_scale_rows = head_dim / block_n;                  // 4
+  size_t wq_a_scale_rows = q_lora_rank / block_n;              // 8
   size_t fused_scale_rows = wq_a_scale_rows + wkv_scale_rows;  // 12
 
   std::vector<float> fused_data(fused_scale_rows);
@@ -409,8 +403,8 @@ TEST(DsparkWeightNameClassificationTest, HProjWeight) {
 // Each handler is checked in order; the first match wins.
 enum class DsparkMtpRoute {
   kMainProj,        // main_proj.weight: direct copy, no TP split
-  kMarkovW1,        // markov_head.markov_w1.weight: TransSplitOptTrans (split dim 1)
-  kMarkovW2,        // markov_head.markov_w2.weight: SplitOptTrans (split dim 0)
+  kMarkovW1,        // markov_head.markov_w1.weight: replicated full [V, R] (no TP split)
+  kMarkovW2,        // markov_head.markov_w2.weight: replicated + transposed to [R, V] (no TP split)
   kConfidenceHead,  // confidence_head.proj.weight: copy then transpose
   kEProj,           // e_proj.weight: direct copy
   kHProj,           // h_proj.weight: direct copy
@@ -554,9 +548,7 @@ TEST(Fp4MoeWeightNameTest, IsWeightVsScale) {
   auto check_weight = [](const std::string& name) {
     return name.find(".weight") != std::string::npos && name.find("weight_scale_inv") == std::string::npos;
   };
-  auto check_scale = [](const std::string& name) {
-    return name.find(".weight_scale_inv") != std::string::npos;
-  };
+  auto check_scale = [](const std::string& name) { return name.find(".weight_scale_inv") != std::string::npos; };
 
   std::string weight_name = "model.layers.0.mlp.experts.0.gate_proj.weight";
   std::string scale_name = "model.layers.0.mlp.experts.0.gate_proj.weight_scale_inv";
@@ -757,10 +749,10 @@ TEST(ApeHotfixTest, TransformWithOverlap) {
   // left[j] = src[j * 6 ... j*6+2]
   // right[j] = src[j * 6 + 3 ... j*6+5]
   std::vector<float> src = {
-      10, 11, 12,  20, 21, 22,    // row 0: left=[10,11,12], right=[20,21,22]
-      13, 14, 15,  23, 24, 25,    // row 1
-      16, 17, 18,  26, 27, 28,    // row 2
-      19, 100, 101,  29, 200, 201  // row 3
+      10, 11,  12,  20, 21,  22,  // row 0: left=[10,11,12], right=[20,21,22]
+      13, 14,  15,  23, 24,  25,  // row 1
+      16, 17,  18,  26, 27,  28,  // row 2
+      19, 100, 101, 29, 200, 201  // row 3
   };
 
   std::vector<float> dst(ratio * last_dim, 0.0f);
@@ -853,8 +845,7 @@ TEST(AttnSinkReorderTest, ReorderHeads) {
     // Replicate the 3 memcpy calls
     std::copy(src.begin() + rank_offset, src.begin() + rank_offset + local_bytes, dst.begin());
     std::copy(src.begin(), src.begin() + rank_offset, dst.begin() + local_bytes);
-    std::copy(src.begin() + rank_offset + local_bytes, src.end(),
-              dst.begin() + local_bytes + rank_offset);
+    std::copy(src.begin() + rank_offset + local_bytes, src.end(), dst.begin() + local_bytes + rank_offset);
 
     // Verify: local heads should be at front
     for (size_t i = 0; i < n_local_heads; ++i) {
@@ -874,8 +865,8 @@ TEST(AttnSinkReorderTest, ReorderHeads) {
 // Test subclass to expose protected members for testing.
 class TestDeepSeekV4WeightLoader : public DeepSeekV4WeightLoader {
  public:
-  using DeepSeekV4WeightLoader::DeepSeekV4WeightLoader;
   using DeepSeekV4WeightLoader::deepseek_v4_config_;
+  using DeepSeekV4WeightLoader::DeepSeekV4WeightLoader;
   using DeepSeekV4WeightLoader::pipeline_config_;
   using DeepSeekV4WeightLoader::runtime_config_;
   using DeepSeekV4WeightLoader::weight_impl_;
@@ -905,7 +896,7 @@ class DeepSeekV4WeightLoaderIntegrationTest : public testing::Test {
     // Build a DeepSeekV4Config with DSpark enabled.
     auto v4_config = std::make_shared<DeepSeekV4Config>();
     v4_config->type = "deepseek_v4";
-    v4_config->num_layer = 4;  // small model for testing
+    v4_config->num_layer = 4;                 // small model for testing
     v4_config->num_nextn_predict_layers = 1;  // 1 MTP layer
     v4_config->hidden_units = 64;
     v4_config->size_per_head = 64;
@@ -979,7 +970,7 @@ class DeepSeekV4WeightLoaderIntegrationTest : public testing::Test {
 
     PipelineConfig pipeline_config;
     pipeline_config.lower_layer_idx = 0;
-    pipeline_config.upper_layer_idx = 3;  // num_layer - 1
+    pipeline_config.upper_layer_idx = 3;        // num_layer - 1
     pipeline_config.lower_nextn_layer_idx = 4;  // num_layer
     pipeline_config.upper_nextn_layer_idx = 4;  // num_layer + num_nextn - 1
     env->SetPipelineConfig(pipeline_config);
@@ -1028,8 +1019,7 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MainProjWeightLoaded) {
   std::unordered_map<std::string, Tensor> left_host_weights;
 
   // Create a main_proj.weight tensor (after MTP rewrite: model.layers.4.main_proj.weight)
-  host_weights["model.layers.4.main_proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 1.5f);
+  host_weights["model.layers.4.main_proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 1.5f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1042,15 +1032,14 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MainProjWeightLoaded) {
   EXPECT_EQ(dev_tensor.shape[1], 8u);
 }
 
-// Test: markov_head.markov_w1.weight should be processed via
-// TransSplitOptTrans (covers lines 862-871).
+// Test: markov_head.markov_w1.weight should be replicated on every rank
+// (full [V, R] via CopyToDevice, no TP split).
 TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MarkovW1WeightLoaded) {
   std::unordered_map<std::string, Tensor> host_weights;
   std::unordered_map<std::string, Tensor> device_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  host_weights["model.layers.4.markov_head.markov_w1.weight"] =
-      CreateHostTensor({4, 16}, DataType::TYPE_BF16, 2.0f);
+  host_weights["model.layers.4.markov_head.markov_w1.weight"] = CreateHostTensor({4, 16}, DataType::TYPE_BF16, 2.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1058,17 +1047,18 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MarkovW1WeightLoaded) {
   EXPECT_NE(device_weights.find("model.layers.4.markov_head.markov_w1.weight"), device_weights.end());
   auto& dev_tensor = device_weights.at("model.layers.4.markov_head.markov_w1.weight");
   EXPECT_EQ(dev_tensor.shape.size(), 2u);
+  EXPECT_EQ(dev_tensor.shape[0], 4u);
+  EXPECT_EQ(dev_tensor.shape[1], 16u);
 }
 
-// Test: markov_head.markov_w2.weight should be processed via
-// SplitOptTrans (covers lines 874-883).
+// Test: markov_head.markov_w2.weight should be replicated + transposed to [R, V]
+// (CopyToDevice + PermuteWeight, no TP split).
 TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MarkovW2WeightLoaded) {
   std::unordered_map<std::string, Tensor> host_weights;
   std::unordered_map<std::string, Tensor> device_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  host_weights["model.layers.4.markov_head.markov_w2.weight"] =
-      CreateHostTensor({16, 4}, DataType::TYPE_BF16, 3.0f);
+  host_weights["model.layers.4.markov_head.markov_w2.weight"] = CreateHostTensor({16, 4}, DataType::TYPE_BF16, 3.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1076,6 +1066,9 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, MarkovW2WeightLoaded) {
   EXPECT_NE(device_weights.find("model.layers.4.markov_head.markov_w2.weight"), device_weights.end());
   auto& dev_tensor = device_weights.at("model.layers.4.markov_head.markov_w2.weight");
   EXPECT_EQ(dev_tensor.shape.size(), 2u);
+  // After PermuteWeight({1, 0}), shape flipped from [16, 4] -> [4, 16].
+  EXPECT_EQ(dev_tensor.shape[0], 4u);
+  EXPECT_EQ(dev_tensor.shape[1], 16u);
 }
 
 // Test: confidence_head.proj.weight should be copied and transposed
@@ -1085,8 +1078,7 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, ConfidenceHeadWeightLoaded) {
   std::unordered_map<std::string, Tensor> device_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  host_weights["model.layers.4.confidence_head.proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 4.0f);
+  host_weights["model.layers.4.confidence_head.proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 4.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1105,8 +1097,7 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, EProjWeightLoaded) {
   std::unordered_map<std::string, Tensor> device_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  host_weights["model.layers.4.e_proj.weight"] =
-      CreateHostTensor({8, 4}, DataType::TYPE_BF16, 5.0f);
+  host_weights["model.layers.4.e_proj.weight"] = CreateHostTensor({8, 4}, DataType::TYPE_BF16, 5.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1123,8 +1114,7 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, HProjWeightLoaded) {
   std::unordered_map<std::string, Tensor> device_weights;
   std::unordered_map<std::string, Tensor> left_host_weights;
 
-  host_weights["model.layers.4.h_proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 6.0f);
+  host_weights["model.layers.4.h_proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 6.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
@@ -1144,19 +1134,16 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, DsparkWkvViewCreated) {
   std::unordered_map<std::string, Tensor> left_host_weights;
 
   // wq_a.weight: shape [q_lora_rank, hidden] = [16, 64]
-  host_weights["model.layers.4.attn.wq_a.weight"] =
-      CreateHostTensor({16, 64}, DataType::TYPE_BF16, 1.0f);
+  host_weights["model.layers.4.attn.wq_a.weight"] = CreateHostTensor({16, 64}, DataType::TYPE_BF16, 1.0f);
   // wkv.weight: shape [head_dim, hidden] = [64, 64]
-  host_weights["model.layers.4.attn.wkv.weight"] =
-      CreateHostTensor({64, 64}, DataType::TYPE_BF16, 2.0f);
+  host_weights["model.layers.4.attn.wkv.weight"] = CreateHostTensor({64, 64}, DataType::TYPE_BF16, 2.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();
 
   // The fused wqkv_a tensor should be created
   std::string fused_name = "model.layers.4.attn.wqkv_a.weight";
-  EXPECT_NE(device_weights.find(fused_name), device_weights.end())
-      << "Fused wqkv_a tensor should be created";
+  EXPECT_NE(device_weights.find(fused_name), device_weights.end()) << "Fused wqkv_a tensor should be created";
 
   // The wkv view should also be created (DSpark specific)
   std::string wkv_name = "model.layers.4.attn.wkv.weight";
@@ -1180,18 +1167,12 @@ TEST_F(DeepSeekV4WeightLoaderIntegrationTest, AllDsparkMtpWeightsLoaded) {
   std::unordered_map<std::string, Tensor> left_host_weights;
 
   // Add all DSpark MTP weights (layer 4 = num_layer + 0, the first MTP layer)
-  host_weights["model.layers.4.main_proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 1.0f);
-  host_weights["model.layers.4.markov_head.markov_w1.weight"] =
-      CreateHostTensor({4, 16}, DataType::TYPE_BF16, 2.0f);
-  host_weights["model.layers.4.markov_head.markov_w2.weight"] =
-      CreateHostTensor({16, 4}, DataType::TYPE_BF16, 3.0f);
-  host_weights["model.layers.4.confidence_head.proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 4.0f);
-  host_weights["model.layers.4.e_proj.weight"] =
-      CreateHostTensor({8, 4}, DataType::TYPE_BF16, 5.0f);
-  host_weights["model.layers.4.h_proj.weight"] =
-      CreateHostTensor({4, 8}, DataType::TYPE_BF16, 6.0f);
+  host_weights["model.layers.4.main_proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 1.0f);
+  host_weights["model.layers.4.markov_head.markov_w1.weight"] = CreateHostTensor({4, 16}, DataType::TYPE_BF16, 2.0f);
+  host_weights["model.layers.4.markov_head.markov_w2.weight"] = CreateHostTensor({16, 4}, DataType::TYPE_BF16, 3.0f);
+  host_weights["model.layers.4.confidence_head.proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 4.0f);
+  host_weights["model.layers.4.e_proj.weight"] = CreateHostTensor({8, 4}, DataType::TYPE_BF16, 5.0f);
+  host_weights["model.layers.4.h_proj.weight"] = CreateHostTensor({4, 8}, DataType::TYPE_BF16, 6.0f);
 
   Status status = weight_loader_->ProcessModelWeights(host_weights, 0, device_weights, left_host_weights);
   EXPECT_TRUE(status.OK()) << status.GetMessage();

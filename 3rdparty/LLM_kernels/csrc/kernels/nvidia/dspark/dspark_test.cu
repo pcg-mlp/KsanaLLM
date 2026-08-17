@@ -118,27 +118,27 @@ TEST_F(DSparkKernelTest, MarkovEmbedLookupBf16Vec8) {
       host_table[v * kHidden + h] = FromFloat<__nv_bfloat16>(0.01f * v + 0.0001f * h);
     }
   }
-  std::vector<int32_t> host_tokens = {0, 3, 7, kVocab - 1, 5};
+  std::vector<uint32_t> host_tokens = {0, 3, 7, kVocab - 1, 5};
 
   void *dev_table = nullptr, *dev_out = nullptr;
-  int32_t *dev_tokens = nullptr;
+  uint32_t *dev_tokens = nullptr;
   const size_t table_bytes = host_table.size() * sizeof(__nv_bfloat16);
   const size_t out_bytes = kBatch * kHidden * sizeof(__nv_bfloat16);
   ASSERT_EQ(cudaMalloc(&dev_table, table_bytes), cudaSuccess);
   ASSERT_EQ(cudaMalloc(&dev_out, out_bytes), cudaSuccess);
-  ASSERT_EQ(cudaMalloc(&dev_tokens, kBatch * sizeof(int32_t)), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&dev_tokens, kBatch * sizeof(uint32_t)), cudaSuccess);
   ASSERT_EQ(cudaMemcpy(dev_table, host_table.data(), table_bytes, cudaMemcpyHostToDevice), cudaSuccess);
-  ASSERT_EQ(cudaMemcpy(dev_tokens, host_tokens.data(), kBatch * sizeof(int32_t), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(dev_tokens, host_tokens.data(), kBatch * sizeof(uint32_t), cudaMemcpyHostToDevice), cudaSuccess);
   ASSERT_EQ(cudaMemset(dev_out, 0xAB, out_bytes), cudaSuccess);
 
-  InvokeDSparkMarkovEmbedLookup<__nv_bfloat16>(dev_out, dev_tokens, dev_table, kBatch, kHidden, kVocab, stream_);
+  InvokeDSparkMarkovEmbedLookup<__nv_bfloat16>(dev_out, dev_tokens, dev_table, kBatch, kHidden, stream_);
 
   std::vector<__nv_bfloat16> host_out(kBatch * kHidden);
   ASSERT_EQ(cudaMemcpyAsync(host_out.data(), dev_out, out_bytes, cudaMemcpyDeviceToHost, stream_), cudaSuccess);
   ASSERT_EQ(cudaStreamSynchronize(stream_), cudaSuccess);
 
   for (int b = 0; b < kBatch; ++b) {
-    const int32_t tok = host_tokens[b];
+    const uint32_t tok = host_tokens[b];
     for (int h = 0; h < kHidden; ++h) {
       EXPECT_FLOAT_EQ(ToFloat(host_out[b * kHidden + h]), ToFloat(host_table[tok * kHidden + h]))
           << "b=" << b << " h=" << h;
@@ -161,18 +161,18 @@ TEST_F(DSparkKernelTest, MarkovEmbedLookupBf16ScalarFallback) {
       host_table[v * kHidden + h] = FromFloat<__nv_bfloat16>(v * 100.0f + h);
     }
   }
-  std::vector<int32_t> host_tokens = {2, 5, 0};
+  std::vector<uint32_t> host_tokens = {2, 5, 0};
 
   void *dev_table = nullptr, *dev_out = nullptr;
-  int32_t *dev_tokens = nullptr;
+  uint32_t *dev_tokens = nullptr;
   ASSERT_EQ(cudaMalloc(&dev_table, host_table.size() * sizeof(__nv_bfloat16)), cudaSuccess);
   ASSERT_EQ(cudaMalloc(&dev_out, kBatch * kHidden * sizeof(__nv_bfloat16)), cudaSuccess);
-  ASSERT_EQ(cudaMalloc(&dev_tokens, kBatch * sizeof(int32_t)), cudaSuccess);
+  ASSERT_EQ(cudaMalloc(&dev_tokens, kBatch * sizeof(uint32_t)), cudaSuccess);
   ASSERT_EQ(cudaMemcpy(dev_table, host_table.data(), host_table.size() * sizeof(__nv_bfloat16), cudaMemcpyHostToDevice),
             cudaSuccess);
-  ASSERT_EQ(cudaMemcpy(dev_tokens, host_tokens.data(), kBatch * sizeof(int32_t), cudaMemcpyHostToDevice), cudaSuccess);
+  ASSERT_EQ(cudaMemcpy(dev_tokens, host_tokens.data(), kBatch * sizeof(uint32_t), cudaMemcpyHostToDevice), cudaSuccess);
 
-  InvokeDSparkMarkovEmbedLookup<__nv_bfloat16>(dev_out, dev_tokens, dev_table, kBatch, kHidden, kVocab, stream_);
+  InvokeDSparkMarkovEmbedLookup<__nv_bfloat16>(dev_out, dev_tokens, dev_table, kBatch, kHidden, stream_);
 
   std::vector<__nv_bfloat16> host_out(kBatch * kHidden);
   ASSERT_EQ(cudaMemcpyAsync(host_out.data(), dev_out, host_out.size() * sizeof(__nv_bfloat16), cudaMemcpyDeviceToHost,

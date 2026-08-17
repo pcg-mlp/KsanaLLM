@@ -58,17 +58,16 @@ Status DSparkLayer::ForwardInjectKV(const void* kv_in, const void* kv_norm_weigh
 // MarkovEmbedLookup
 // =============================================================================
 template <typename T>
-Status DSparkLayer::ForwardMarkovEmbedLookupT(void* output, const int32_t* token_ids, const void* emb_table,
-                                              int batch_size, int hidden_dim, int vocab_size) {
+Status DSparkLayer::ForwardMarkovEmbedLookupT(void* output, const uint32_t* token_ids, const void* emb_table,
+                                              int batch_size, int hidden_dim) {
   llm_kernels::nvidia::InvokeDSparkMarkovEmbedLookup<T>(output, token_ids, emb_table, batch_size, hidden_dim,
-                                                        vocab_size, context_->device->GetPrimaryComputeStream().Get());
+                                                        context_->device->GetPrimaryComputeStream().Get());
   return Status();
 }
 
-Status DSparkLayer::ForwardMarkovEmbedLookup(void* output, const int32_t* token_ids, const void* emb_table,
-                                             int batch_size, int hidden_dim, int vocab_size, DataType dtype) {
-  DISPATCH_BY_2_DTYPE(dtype, ForwardMarkovEmbedLookupT, output, token_ids, emb_table, batch_size, hidden_dim,
-                      vocab_size);
+Status DSparkLayer::ForwardMarkovEmbedLookup(void* output, const uint32_t* token_ids, const void* emb_table,
+                                             int batch_size, int hidden_dim, DataType dtype) {
+  DISPATCH_BY_2_DTYPE(dtype, ForwardMarkovEmbedLookupT, output, token_ids, emb_table, batch_size, hidden_dim);
 }
 
 // =============================================================================

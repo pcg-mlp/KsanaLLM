@@ -124,4 +124,43 @@ std::vector<int> ExecutorInferRequest::GetKVOccupiedDevices() {
   return kv_occupied_devices;
 }
 
+SamplingRequest *ExecutorInferRequest::GetSamplingRequest(bool enable_main_layers_sampler) {
+  if (sampling_request_ == nullptr) {
+    sampling_request_ = std::make_unique<SamplingRequest>();
+
+    // Set static fields (one-time initialization).
+    sampling_request_->req_id = req_id;
+    sampling_request_->logits_custom_length = logits_custom_length;
+    sampling_request_->sampling_config = &sampling_config;
+    sampling_request_->input_tokens =
+        std::shared_ptr<std::vector<int>>(std::shared_ptr<ExecutorInferRequest>{}, &input_tokens);
+    sampling_request_->forwarding_tokens = &forwarding_tokens;
+    sampling_request_->sampling_result_tokens = &sampling_result_tokens;
+    sampling_request_->response = &response;
+    sampling_request_->request_target =
+        std::make_shared<const std::unordered_map<std::string, TargetDescribe>>(request_target);
+    sampling_request_->logprobs = std::shared_ptr<std::vector<std::vector<std::pair<int, float>>>>(
+        std::shared_ptr<ExecutorInferRequest>{}, &logprobs);
+    sampling_request_->ngram_dict = &ngram_dict;
+  }
+
+  // Always update dynamic fields that change per sampling pass.
+  sampling_request_->sampling_result_tokens->clear();
+  sampling_request_->logits_buf = model_instance ? model_instance->GetLogitsPtr() : nullptr;
+  sampling_request_->logits_offset = logits_offset;
+  sampling_request_->sampling_token_num = sampling_token_num;
+  sampling_request_->last_step_token_num = last_step_token_num;
+  sampling_request_->grammar_matcher = grammar_matcher;
+  sampling_request_->apply_grammar_constraint = enable_main_layers_sampler;
+  sampling_request_->enable_mtp_sampler = !enable_main_layers_sampler;
+  if (sampling_request_->sampling_config->num_beams > 1) {
+    sampling_request_->sampling_config->logprobs_num =
+        std::max(sampling_request_->sampling_config->logprobs_num, sampling_request_->sampling_config->num_beams);
+    sampling_request_->sampling_config->topk =
+        std::max(sampling_request_->sampling_config->topk, sampling_request_->sampling_config->num_beams);
+  }
+
+  return sampling_request_.get();
+}
+
 }  // namespace ksana_llm

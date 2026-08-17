@@ -50,13 +50,6 @@ AttentionMetaCreator::MetaArrays DeepSeekV4AttentionMetaCreator::BuildAttentionM
     const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id, SharedAttentionMeta& shared_meta) {
   // Reset MQA shared tensor shapes; must happen before the builders inspect them.
   auto& dsv4_shared = static_cast<DeepSeekV4SharedAttentionMeta&>(shared_meta);
-  // Swap-in-place preserves the Main batch's raw_out_loc / rotary_embedding_pos into the
-  // corresponding last_* tensors for DSpark's InjectKV.
-  if (!dsv4_shared.mqa.last_raw_out_loc_tensor.shape.empty()) {
-    std::swap(dsv4_shared.mqa.raw_out_loc_tensor, dsv4_shared.mqa.last_raw_out_loc_tensor);
-    std::swap(dsv4_shared.rotary_embedding_pos, dsv4_shared.mqa.last_rotary_embedding_pos_tensor);
-    dsv4_shared.rotary_embedding_pos.shape = {0};
-  }
   dsv4_shared.mqa.raw_out_loc_tensor.shape = {0};
   dsv4_shared.mqa.swa_block_indices_tensor.shape = {0};
   dsv4_shared.mqa.c128_block_indices_tensor.shape = {0};

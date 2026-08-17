@@ -874,11 +874,10 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       continue;
     }
 
-    // markov_head.markov_w1: split along dim 1 (TransSplitOptTrans)
+    // markov_head.markov_w1: replicate full weight on every rank.
     if (file_weight_name.find("markov_head.markov_w1.weight") != std::string::npos) {
       Tensor dev_tensor;
-      size_t tensor_para_size = context_->global->GetTensorParallelSize();
-      weight_impl_->TransSplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, tensor_para_size, true);
+      CopyToDevice(host_weight_tensor, dev_tensor, context_);
       device_model_weights[file_weight_name] = dev_tensor;
       KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark markov_w1] stored: {}, shape: {}, dtype: {}", dev_rank,
                                     file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),
@@ -886,11 +885,11 @@ Status DeepSeekV4WeightLoader::ProcessModelWeights(const std::unordered_map<std:
       continue;
     }
 
-    // markov_head.markov_w2: split along dim 0 (SplitOptTrans)
+    // markov_head.markov_w2: replicate full weight on every rank, transpose [V, R] -> [R, V] for Linear.
     if (file_weight_name.find("markov_head.markov_w2.weight") != std::string::npos) {
       Tensor dev_tensor;
-      size_t tensor_para_size = context_->global->GetTensorParallelSize();
-      weight_impl_->SplitOptTrans(host_weight_tensor, dev_tensor, dev_rank, tensor_para_size, true);
+      CopyToDevice(host_weight_tensor, dev_tensor, context_);
+      weight_impl_->PermuteWeight(dev_tensor, {1, 0}, dev_rank);
       device_model_weights[file_weight_name] = dev_tensor;
       KLLM_LOG_DEBUG << fmt::format("V4: Dev_rank: {}, [DSpark markov_w2] stored: {}, shape: {}, dtype: {}", dev_rank,
                                     file_weight_name, Vector2Str(std::vector<size_t>(dev_tensor.shape)),

@@ -43,7 +43,10 @@ class BaseModel {
                          bool gpu_input_already_prepared = false) = 0;
 
   // DSpark single-step head correction.
-  virtual Status ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) { return Status(); }
+  virtual Status ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/,
+                             const uint32_t* /*prev_step_tokens_dev*/ = nullptr) {
+    return Status();
+  }
 
   // build-ahead: Preprocess 线程在 slot 对应 H2D stream 上构建 ModelInput（默认空实现）。
   virtual Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode,

@@ -91,11 +91,11 @@ TEST_F(DSparkMarkovHeadTest, ForwardBf16Tp1) {
   LayerCreationContext creation_ctx;
   creation_ctx.Init(fake_weight, context, 0, pipeline_config, model_config, runtime_config, &buffer_mgr);
 
-  DSparkMarkovHead head(w1_name, w2_name, creation_ctx, DEFAULT_LINEAR_BACKEND, /*model_comm=*/nullptr);
+  DSparkMarkovHead head(w1_name, w2_name, creation_ctx, DEFAULT_LINEAR_BACKEND);
 
   // Inputs.
-  Tensor token_ids(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {B});
-  std::vector<int32_t> token_ids_host = {0, 3, 7, static_cast<int32_t>(V - 1)};
+  Tensor token_ids(MemoryLocation::LOCATION_DEVICE, TYPE_UINT32, {B});
+  std::vector<uint32_t> token_ids_host = {0, 3, 7, static_cast<uint32_t>(V - 1)};
   Memcpy(token_ids.GetPtr<void>(), token_ids_host.data(), token_ids.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE);
 
   Tensor logits(MemoryLocation::LOCATION_DEVICE, TYPE_FP32, {B, V});
@@ -107,7 +107,7 @@ TEST_F(DSparkMarkovHeadTest, ForwardBf16Tp1) {
   std::vector<Tensor> embed{Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {B, R})};
   std::vector<Tensor> bias{Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_BF16, {B, V})};
 
-  EXPECT_TRUE(head.Forward(token_ids, logits, embed, bias).OK());
+  EXPECT_TRUE(head.Forward(token_ids.GetPtr<uint32_t>(), B, logits, embed, bias).OK());
 
   StreamSynchronize(context->device->GetPrimaryComputeStream());
 
@@ -117,7 +117,7 @@ TEST_F(DSparkMarkovHeadTest, ForwardBf16Tp1) {
   // CPU reference: bias[b, v] = sum_r bf16(w1[tok, r]) * bf16(w2[v, r]); logits[b, v] += bias.
   auto to_bf16 = [](float f) { return static_cast<float>(static_cast<bfloat16>(f)); };
   for (size_t b = 0; b < B; b++) {
-    int32_t tok = token_ids_host[b];
+    uint32_t tok = token_ids_host[b];
     for (size_t v = 0; v < V; v++) {
       float acc = 0.0f;
       for (size_t r = 0; r < R; r++) {

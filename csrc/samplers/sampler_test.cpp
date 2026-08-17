@@ -405,8 +405,8 @@ TEST_F(SamplerTest, MTPSampleTest) {
   // Second call: push tokens so that forwarding_tokens->size() > input_tokens->size() (MTP-like step).
   // This also covers the repetition penalty branch at sampler.cpp:148.
   sample_reqs[0].last_step_token_num = 2;
-  sample_reqs[0].forwarding_tokens->push_back(6);
-  sample_reqs[0].forwarding_tokens->push_back(7);
+  forward_token_ids_.push_back(6);
+  forward_token_ids_.push_back(7);
   sampler_->PrepareDeviceLogitsAndParameter(sample_reqs, sampling_device_parameter, device_logits,
                                             context_->device->GetPrimaryComputeStream());
   // forwarding_tokens tokens beyond input_tokens_size should also have repetition_penalty applied (sampler.cpp:148)

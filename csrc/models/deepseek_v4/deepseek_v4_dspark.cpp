@@ -63,35 +63,35 @@ Status DeepSeekV4DSparkLayer::Forward(std::vector<Tensor>& residual_buffer, Forw
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "DSpark", RequestEventPhase::Begin);
 
-  auto& dspark_hidden = *dspark_hidden_buffer_ptr_;
-  if (num_target_layers_ > 0) {
-    // Convert concat'd hidden from selected main-decoder layers.
-    KLLM_CHECK(dspark_hidden.shape[1] == num_target_layers_ * hidden_dim_);
-
-    // main_proj into hidden_buffer_0: [T, num_target*hidden] -> [T, hidden].
-    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
-    STATUS_CHECK_RETURN(main_proj_->Forward(dspark_hidden, hidden_buffer_tensors_0[0]));
-
-    // main_norm back into dspark_hidden: [T, hidden] -> [T, hidden].
-    STATUS_CHECK_RETURN(main_norm_->Forward(hidden_buffer_tensors_0[0], dspark_hidden));
-  }
-  KLLM_CHECK(dspark_hidden.shape[1] == hidden_dim_);
-
-  {
-    // wkv_proj into hidden_buffer_tensors_0: [T, hidden] -> [T, head_dim]
-    CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
-    STATUS_CHECK_RETURN(wkv_proj_->Forward(dspark_hidden, hidden_buffer_tensors_0));
-
-    // Fused RMSNorm + RoPE + cache store.
-    STATUS_CHECK_RETURN(InjectKV(hidden_buffer_tensors_0[0], forwarding_context));
-  }
-
   const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
   STATUS_CHECK_RETURN(decoder_layer_->Forward(residual_buffer, is_multi_token_forward, forwarding_context));
 
   RecordRequestSchedEvents(forwarding_context.GetBatchRequestSchedInfo(), forwarding_context.GetCurrentRank(),
                            forwarding_context.GetModelInput()->attn_dp_group_id_, "DSpark", RequestEventPhase::End);
   return Status();
+}
+
+Status DeepSeekV4DSparkLayer::InjectKVForward(ForwardingContext& forwarding_context) {
+  PROFILE_EVENT_SCOPE(DeepSeekV4DSparkLayer_InjectKV, "DeepSeekV4DSparkLayer_InjectKV",
+                      forwarding_context.GetCurrentRank());
+
+  auto& dspark_hidden = *dspark_hidden_buffer_ptr_;
+  CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context.GetForwardingBuffers()->hidden_buffer_0);
+
+  if (num_target_layers_ > 0) {
+    // Convert concat'd hidden from selected main-decoder layers.
+    KLLM_CHECK(dspark_hidden.shape[1] == num_target_layers_ * hidden_dim_);
+    // main_proj into hidden_buffer_0: [T, num_target*hidden] -> [T, hidden].
+    STATUS_CHECK_RETURN(main_proj_->Forward(dspark_hidden, hidden_buffer_tensors_0[0]));
+    // main_norm back into dspark_hidden: [T, hidden] -> [T, hidden].
+    STATUS_CHECK_RETURN(main_norm_->Forward(hidden_buffer_tensors_0[0], dspark_hidden));
+  }
+  KLLM_CHECK(dspark_hidden.shape[1] == hidden_dim_);
+
+  // wkv_proj into hidden_buffer_tensors_0: [T, hidden] -> [T, head_dim]
+  STATUS_CHECK_RETURN(wkv_proj_->Forward(dspark_hidden, hidden_buffer_tensors_0));
+  // Fused RMSNorm + RoPE + cache store.
+  return InjectKV(hidden_buffer_tensors_0[0], forwarding_context);
 }
 
 Status DeepSeekV4DSparkLayer::InjectKV(Tensor& kv_buffer, ForwardingContext& forwarding_context) {
@@ -105,13 +105,13 @@ Status DeepSeekV4DSparkLayer::InjectKV(Tensor& kv_buffer, ForwardingContext& for
   // Per-layer SWA cache base ptr lives at slots [2 + local_layer_idx_]
   void* kcache_ptr = mqa_shared->layer_swa_kv_cache_ptr_tensor.GetPtr<void*>()[2 + local_layer_idx_];
   const int64_t swa_block_size = mqa_shared->layer_swa_kv_cache_ptr_tensor.GetPtr<int64_t>()[1];
-  // Use raw_out_loc/rotary_embedding_pos from Main forward
-  const int32_t* last_raw_out_loc_ptr = mqa_shared->last_raw_out_loc_tensor.GetPtr<int32_t>();
-  const int64_t* last_positions_ptr = mqa_shared->last_rotary_embedding_pos_tensor.GetPtr<int64_t>();
+  const int32_t* raw_out_loc_ptr = mqa_shared->raw_out_loc_tensor.GetPtr<int32_t>();
+  const int64_t* positions_ptr =
+      model_input->shared_attention_meta->GetStandard()->rotary_embedding_pos.GetPtr<int64_t>();
 
   STATUS_CHECK_RETURN(dspark_layer_->ForwardInjectKV(
-      kv_buffer.GetPtr<void>(), kv_norm_weight_.GetPtr<void>(), kcache_ptr, last_positions_ptr, cos_sin_cache_ptr_,
-      last_raw_out_loc_ptr, layernorm_eps_, num_tokens, swa_block_size, page_bits_, kv_cache_dtype_));
+      kv_buffer.GetPtr<void>(), kv_norm_weight_.GetPtr<void>(), kcache_ptr, positions_ptr, cos_sin_cache_ptr_,
+      raw_out_loc_ptr, layernorm_eps_, num_tokens, swa_block_size, page_bits_, kv_cache_dtype_));
   return Status();
 }
 

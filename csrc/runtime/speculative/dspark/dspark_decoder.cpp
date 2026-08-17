@@ -93,12 +93,13 @@ Status DSparkDecoder::ExecuteForward(std::vector<std::shared_ptr<ExecutorInferRe
 
   // Per-step head-only sampling: ForwardHead corrects logits via markov bias, then sample.
   const size_t batch_size = reqs.size();
+  const uint32_t* prev_step_tokens_dev = nullptr;
   for (size_t step_index = 0; step_index < dspark_block_size_; ++step_index) {
     KLLM_LOG_DEBUG << "DSpark step: " << step_index;
 
     // Apply markov bias correction to logits for this step.
     // ForwardHead reads from the model's internal forwarding_context_->GetModelOutput()->logits_tensor.
-    model_instance->ForwardHead(model_input->reqs, step_index);
+    model_instance->ForwardHead(model_input->reqs, step_index, prev_step_tokens_dev);
 
     for (size_t i = 0; i < batch_size; ++i) {
       reqs[i]->sampling_token_num = kStepGenerateTokenNum;
@@ -108,6 +109,7 @@ Status DSparkDecoder::ExecuteForward(std::vector<std::shared_ptr<ExecutorInferRe
     // Sample one token per request from this step's [batch_size, V] logits row.
     std::shared_ptr<SamplingOutput> sampling_output = std::make_shared<SamplingOutput>();
     model_sampler->Sampling(model_output, sampling_output);
+    prev_step_tokens_dev = model_sampler->GetSampler()->GetDeviceOutputTokensPtr(/*slot=*/0);
 
     // Collect the generated draft token and update state for the next step.
     for (auto& infer_req : reqs) {

@@ -175,10 +175,6 @@ void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
       dspark_block_size > 0 ? RoundUp(kSwaSize + dspark_block_size, kTopkBlockSize) : kSwaSize;
 
   raw_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-  if (dspark_block_size > 0) {
-    last_raw_out_loc_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num});
-    last_rotary_embedding_pos_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_token_num});
-  }
   swa_block_indices_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, effective_swa_size});
   c4_block_indices_tensor =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num, static_cast<size_t>(index_topk)});

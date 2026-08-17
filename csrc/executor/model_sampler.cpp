@@ -47,36 +47,9 @@ void ModelSampler::BuildSamplingRequest(std::vector<std::shared_ptr<ExecutorInfe
                                         std::vector<SamplingRequest>& sampling_reqs,
                                         const bool enable_main_layers_sampler) {
   PROFILE_EVENT_SCOPE(BuildSamplingRequest_, "BuildSamplingRequest");
+  sampling_reqs.reserve(reqs.size());
   for (std::shared_ptr<ExecutorInferRequest> req_ptr : reqs) {
-    SamplingRequest sampling_req;
-    sampling_req.req_id = req_ptr->req_id;
-    sampling_req.logits_custom_length = req_ptr->logits_custom_length;
-    sampling_req.input_tokens = std::shared_ptr<std::vector<int>>(req_ptr, &req_ptr->input_tokens);
-    sampling_req.forwarding_tokens = &(req_ptr->forwarding_tokens);
-    sampling_req.sampling_token_num = req_ptr->sampling_token_num;
-    sampling_req.last_step_token_num = req_ptr->last_step_token_num;
-    sampling_req.sampling_result_tokens = &(req_ptr->sampling_result_tokens);
-    sampling_req.sampling_result_tokens->clear();
-    sampling_req.response = &(req_ptr->response);
-    sampling_req.request_target = std::make_shared<const decltype(req_ptr->request_target)>(req_ptr->request_target);
-    sampling_req.logprobs = std::shared_ptr<decltype(req_ptr->logprobs)>(req_ptr, &req_ptr->logprobs);
-    sampling_req.logits_offset = req_ptr->logits_offset;
-    sampling_req.logits_buf = req_ptr->model_instance->GetLogitsPtr();
-    sampling_req.sampling_config = &(req_ptr->sampling_config);
-    if (sampling_req.sampling_config->num_beams > 1) {
-      sampling_req.sampling_config->logprobs_num =
-          std::max(sampling_req.sampling_config->logprobs_num, sampling_req.sampling_config->num_beams);
-      sampling_req.sampling_config->topk =
-          std::max(sampling_req.sampling_config->topk, sampling_req.sampling_config->num_beams);
-    }
-    sampling_req.ngram_dict = &(req_ptr->ngram_dict);
-    sampling_req.grammar_matcher = req_ptr->grammar_matcher;
-    sampling_req.apply_grammar_constraint = enable_main_layers_sampler;
-    // Derived from the per-call run_mode (via enable_main_layers_sampler), not from a persisted
-    // request field — a persisted flag would stay stuck at true forever once any MTP forward
-    // sets it, silently degrading every subsequent main-forward sampling call for that request.
-    sampling_req.enable_mtp_sampler = !enable_main_layers_sampler;
-    sampling_reqs.push_back(sampling_req);
+    sampling_reqs.emplace_back(*req_ptr->GetSamplingRequest(enable_main_layers_sampler));
   }
 }
 

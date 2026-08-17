@@ -137,8 +137,9 @@ Sampler::~Sampler() {
   }
 }
 
-void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens, std::vector<int>* forwarding_tokens,
-                                     const int vocab_size, const float repetition_penalty, Stream& stream) {
+void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens,
+                                     const std::vector<int>* forwarding_tokens, const int vocab_size,
+                                     const float repetition_penalty, Stream& stream) {
   // repetition_penalties_ is filled with 1.0f
   std::fill(repetition_penalties_.begin(), repetition_penalties_.end(), 1.0f);
   // If a token has appeared before, repetition_penalty is applied.
@@ -514,8 +515,7 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
     if (sampling_config->repetition_penalty != 1.0f) {
       for (size_t sampling_index = 0; sampling_index < sampling_req.sampling_token_num; sampling_index++) {
         ApplyRepetitionPenalty(logits + (offset + sampling_index) * vocab_size, sampling_req.input_tokens.get(),
-                               sampling_req.forwarding_tokens, vocab_size, sampling_config->repetition_penalty,
-                               stream);
+                               sampling_req.forwarding_tokens, vocab_size, sampling_config->repetition_penalty, stream);
       }
     }
 
@@ -742,8 +742,7 @@ void Sampler::ApplyTokenBitmaskSelective(float* logits, void* bitmask_data, int 
                                          const std::vector<size_t>& logits_offsets, Stream& stream) {
   const int bitmask_stride = (vocab_size + kBitsPerInt - 1) / kBitsPerInt;
   KLLM_LOG_DEBUG << "BitmaskSelective parameters: vocab_size=" << vocab_size
-                 << ", num_requests=" << logits_offsets.size()
-                 << ", bitmask_stride=" << bitmask_stride;
+                 << ", num_requests=" << logits_offsets.size() << ", bitmask_stride=" << bitmask_stride;
 
 #ifdef ENABLE_CUDA
 

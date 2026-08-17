@@ -28,6 +28,9 @@ class DeepSeekV4DSparkLayer {
 
   Status Forward(std::vector<Tensor>& residual_buffer, ForwardingContext& forwarding_context);
 
+  // Runs main_proj + main_norm (embed layer only), then wkv_proj + fused RMSNorm/RoPE/paged-store.
+  Status InjectKVForward(ForwardingContext& forwarding_context);
+
  private:
   Status InjectKV(Tensor& kv_buffer, ForwardingContext& forwarding_context);
 

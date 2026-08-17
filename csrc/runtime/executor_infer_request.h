@@ -14,6 +14,7 @@
 #include "runtime/model_instance.h"
 #include "runtime/speculative/common/draft_tokens.h"
 #include "runtime/speculative/common/speculative_state.h"
+#include "runtime/sampling_request.h"
 #include "utils/calc_intvec_hash.h"
 #include "utils/grammar_matcher.h"
 #include "utils/request.h"
@@ -48,6 +49,10 @@ class ExecutorInferRequest {
   std::vector<int> GetKVOccupiedDevices();
 
   std::vector<int> GetVerifiedTokens();
+
+  // Get cached SamplingRequest, lazily creating and updating dynamic fields per step.
+  // enable_main_layers_sampler: true for main model, false for MTP draft generation.
+  SamplingRequest *GetSamplingRequest(bool enable_main_layers_sampler = true);
 
   std::string PrintKVBlockIds(bool print_details = false) const;
 
@@ -231,6 +236,12 @@ class ExecutorInferRequest {
 
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
+
+ private:
+  // Cached SamplingRequest, lazily initialized by GetSamplingRequest().
+  // Pointer-based fields point into this ExecutorInferRequest, so the cache is
+  // tied to this object's lifetime.
+  std::unique_ptr<SamplingRequest> sampling_request_;
 };
 
 // The incremental patch for infer request.

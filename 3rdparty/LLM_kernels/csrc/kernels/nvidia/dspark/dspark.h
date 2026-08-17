@@ -30,8 +30,8 @@ void InvokeDSparkInjectKV(const __nv_bfloat16* kv_in, const __nv_bfloat16* kv_no
 //
 // output[i, :] = emb_table[token_ids[i], :]
 template <typename T>
-void InvokeDSparkMarkovEmbedLookup(void* output, const int32_t* token_ids, const void* emb_table, int batch_size,
-                                   int hidden_dim, int vocab_size, cudaStream_t stream);
+void InvokeDSparkMarkovEmbedLookup(void* output, const uint32_t* token_ids, const void* emb_table, int batch_size,
+                                   int hidden_dim, cudaStream_t stream);
 
 // DSpark logits += bias with mixed precision.
 //

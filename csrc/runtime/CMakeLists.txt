@@ -45,6 +45,8 @@ cpp_test(sampling_output_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/sampling_o
 
 cpp_test(infer_request_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/infer_request_test.cpp DEPS ${MODELS_TEST_DEPS} ipc LIBS ${MODELS_TEST_LIBS})
 
+cpp_test(executor_infer_request_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/executor_infer_request_test.cpp DEPS ${MODELS_TEST_DEPS} ipc LIBS ${MODELS_TEST_LIBS})
+
 cpp_test(profile_metrics_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/profile_metrics_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 
 cpp_test(speculative_resource_profile_test SRCS ${PROJECT_SOURCE_DIR}/csrc/runtime/speculative/orchestration/speculative_resource_profile_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

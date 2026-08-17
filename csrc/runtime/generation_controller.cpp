@@ -56,7 +56,7 @@ void GenerationController::CreateGenerators(std::shared_ptr<ScheduleOutput> sche
       structured_generators_[req_id] = generator;
       // Also assign to current request
       req->structured_generator = generator;
-      KLLM_LOG_INFO << "Created and stored structured generator for req_id: " << req_id;
+      KLLM_LOG_DEBUG << "Created and stored structured generator for req_id: " << req_id;
     } catch (const std::exception& e) {
       KLLM_LOG_ERROR << "Failed to create structured generator for req_id " << req_id << ": " << e.what();
     }
@@ -79,24 +79,17 @@ void GenerationController::RestoreGenerators(std::shared_ptr<ScheduleOutput> sch
   }
 }
 
-void GenerationController::RemoveGenerator(int64_t req_id, std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {
+void GenerationController::RemoveGenerator(std::shared_ptr<ExecutorInferRequest>& req) {
   std::lock_guard<std::mutex> lock(generators_mutex_);
 
-  auto it = structured_generators_.find(req_id);
-  if (it != structured_generators_.end()) {
-    structured_generators_.erase(it);
-    KLLM_LOG_DEBUG << "Removed generator for req_id: " << req_id;
+  if (structured_generators_.erase(req->req_id) > 0) {
+    KLLM_LOG_DEBUG << "Removed generator for req_id: " << req->req_id;
   }
 
   // Clear the pointer in the request object
   // This prevents FillNextTokenBitmask from being called on terminated generators during MTP
-  for (auto& req : reqs) {
-    if (req->req_id == req_id) {
-      req->structured_generator = nullptr;
-      KLLM_LOG_DEBUG << "Cleared structured_generator pointer for req_id: " << req_id;
-      break;
-    }
-  }
+  req->structured_generator = nullptr;
+  KLLM_LOG_DEBUG << "Cleared structured_generator pointer for req_id: " << req->req_id;
 }
 
 void GenerationController::UpdateGenerationState(std::vector<std::shared_ptr<ExecutorInferRequest>>& reqs) {

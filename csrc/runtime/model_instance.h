@@ -56,7 +56,8 @@ class ModelInstance {
                  const int64_t* prev_ring_dev = nullptr, bool gpu_input_already_prepared = false);
 
   // DSpark single-step head correction passthrough.
-  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index);
+  Status ForwardHead(std::vector<ForwardRequest>& forward_reqs, size_t step_index,
+                     const uint32_t* prev_step_tokens_dev = nullptr);
 
   Status PrepareModelInputGpu(std::vector<ForwardRequest>& forward_reqs, RunMode run_mode, size_t model_input_slot);
 

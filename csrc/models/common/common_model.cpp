@@ -723,7 +723,8 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
   return Status();
 }
 
-Status CommonModel::ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/) {
+Status CommonModel::ForwardHead(std::vector<ForwardRequest>& /*forward_reqs*/, size_t /*step_index*/,
+                                const uint32_t* /*prev_step_tokens_dev*/) {
   // Default: no-op. Models that need per-step head correction override this.
   return Status();
 }

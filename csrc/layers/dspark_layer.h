@@ -25,8 +25,8 @@ class DSparkLayer : public BaseLayer {
                          const void* cos_sin_cache, const int32_t* raw_out_loc, float norm_eps, int num_tokens,
                          int64_t page_stride, int page_bits, DataType kv_cache_dtype);
 
-  Status ForwardMarkovEmbedLookup(void* output, const int32_t* token_ids, const void* emb_table, int batch_size,
-                                  int hidden_dim, int vocab_size, DataType dtype);
+  Status ForwardMarkovEmbedLookup(void* output, const uint32_t* token_ids, const void* emb_table, int batch_size,
+                                  int hidden_dim, DataType dtype);
 
   Status ForwardLogitsAdd(float* logits, const void* bias, int batch_size, int vocab_size, DataType bias_dtype);
 
@@ -36,8 +36,8 @@ class DSparkLayer : public BaseLayer {
                                    int64_t dst_pitch_bytes);
 
   template <typename T>
-  Status ForwardMarkovEmbedLookupT(void* output, const int32_t* token_ids, const void* emb_table, int batch_size,
-                                   int hidden_dim, int vocab_size);
+  Status ForwardMarkovEmbedLookupT(void* output, const uint32_t* token_ids, const void* emb_table, int batch_size,
+                                   int hidden_dim);
 
   template <typename BiasT>
   Status ForwardLogitsAddT(float* logits, const void* bias, int batch_size, int vocab_size);
