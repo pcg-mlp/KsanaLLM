@@ -570,7 +570,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         req->SetRemainingWorkload(remaining_workload);
       }
 
-      if (shared_token_num > 0) {
+      // Only the first prefill step's shared_token_num is a real prefix-cache hit.
+      if (is_first_prefill_step && shared_token_num > 0) {
         // Single source of truth: the Request member (works even when req_ctx is null, e.g.
         // pd_v2 Prefill). KsanaPythonOutput / StreamingIterator read it back.
         req->prefix_cache_hit_tokens = static_cast<int>(shared_token_num);

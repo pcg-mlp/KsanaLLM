@@ -185,6 +185,21 @@ class ParallelTester {
           EXPECT_GE(req_split_step_[req.infer_req_group[0]->req_id],
                     (req.input_token_num - prefix_token_num_) / split_fuse_token_num_);
         }
+        // Split-fuse continuation must not report this request's own already-computed
+        // chunks as prefix_cache_hit_tokens (that value is nearly the whole prompt).
+        if (split_fuse_token_num_ > 0 && req.input_token_num > split_fuse_token_num_) {
+          const int hit = req.infer_req_group[0]->prefix_cache_hit_tokens;
+          if (prefix_token_num_ == 0) {
+            EXPECT_EQ(hit, 0) << "req_id=" << req.req_id
+                              << " no shared prefix configured, prefix_cache_hit_tokens must stay 0"
+                              << ", input_token_num=" << req.input_token_num;
+          } else {
+            EXPECT_LE(hit, static_cast<int>(prefix_token_num_))
+                << "req_id=" << req.req_id << " prefix_cache_hit_tokens inflated by split-fuse continuation"
+                << ", hit=" << hit << ", prefix_token_num=" << prefix_token_num_
+                << ", input_token_num=" << req.input_token_num;
+          }
+        }
       }
     }
 
