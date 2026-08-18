@@ -6,6 +6,14 @@ cmake_minimum_required(VERSION 3.13)
 file(GLOB_RECURSE batch_scheduler_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/*.cpp)
 list(FILTER batch_scheduler_SRCS EXCLUDE REGEX ".*test.cpp")
+# pd_v2_multi_scheduler_test_helper.cpp is test-only infrastructure (compiles
+# BatchSchedulerEnvironmentSimulator::RunAStep's EXPECT_EQ-based checks into
+# its translation unit), so -- unlike production .cpp files here -- it needs
+# gtest at compile+link time. Its filename doesn't end in "test.cpp" so the
+# EXCLUDE REGEX above doesn't catch it; keep it out of the production
+# batch_scheduler static library explicitly and compile it directly into the
+# pd_v2_multi_scheduler_test binary below instead.
+list(FILTER batch_scheduler_SRCS EXCLUDE REGEX ".*pd_v2_multi_scheduler_test_helper.cpp")
 message(STATUS "batch_scheduler_SRCS: ${batch_scheduler_SRCS}")
 
 add_library(batch_scheduler STATIC ${batch_scheduler_SRCS})
@@ -39,3 +47,8 @@ cpp_test(continuous_batching_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_schedule
 #cpp_test(batch_scheduler_balance_reqs_algo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_balance_reqs_algo_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(pp_multibatch_balancer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/workload_balance/pp_multibatch_balancer_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(schedule_processor_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/schedule_processor_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+
+cpp_test(pd_v2_multi_scheduler_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/pd_v2_multi_scheduler_test.cpp
+       ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/event_driven_scheduler/pd_v2_multi_scheduler_test_helper.cpp
+  DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

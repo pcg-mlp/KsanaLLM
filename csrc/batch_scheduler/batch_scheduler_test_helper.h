@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <mutex>
 #include <sstream>
 
 #include "cache_manager/block_allocator/block_allocator_interface.h"
@@ -14,7 +15,10 @@
 
 namespace ksana_llm {
 
-thread_local int g_cur_device_id;
+// inline: required so multi-TU test binaries (e.g. pd_v2_multi_scheduler_test
+// compiling both the TEST_F .cpp and a helper .cpp that both include this
+// header) do not hit an ODR violation / multiple-definition link error.
+inline thread_local int g_cur_device_id;
 
 // The faked memory state shared by block_allocator and block_allocator_group and memory_allocator.
 struct FakedState {
@@ -545,6 +549,15 @@ inline std::vector<std::shared_ptr<InferRequest>> InitFakeRequest(
       std::unordered_map<std::string, std::string>{{"key1", "value1"}, {"key2", "value2"}});
   req = std::make_shared<Request>(ksana_python_input, req_ctx);
   req->req_id = req_id;
+  // req_ids must be re-based on the caller's req_id too: the KsanaPythonInput
+  // constructor filled them from an auto-generated base id, and InferRequest
+  // copies its own req_id out of req_ids -- so without this the InferRequest id
+  // (which is what req_output_num_map_ / req_generation_seeds_ are keyed on, and
+  // what PD tests put on the wire) would differ from the req_id the caller asked
+  // for. Sub-id encoding follows Request's cross-node constructor.
+  for (size_t i = 0; i < req->req_ids.size(); ++i) {
+    req->req_ids[i] = req_id | static_cast<int64_t>(i);
+  }
   req->model_name = "llama";
   req->waiter = std::make_shared<Waiter>(1);
   std::vector<int> dummy_tokens;
@@ -618,11 +631,11 @@ class BatchSchedulerEnvironmentSimulator {
 
       // Generate a token
       int output_token = GetEndId();
-      KLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) != req_output_num_map_.end(),
-                           FormatStr("Req id %d is not exist in req_output_num_map.", req->req_id));
+      const int expected_output_token_num = GetRequestOutputTokenNum(req->req_id);
+      const std::vector<std::pair<int, int>> generation_seeds = GetRequestGenerationSeeds(req->req_id);
       if (req->forwarding_tokens.size() >= req->output_tokens.size()) {
         // Generate new tokens
-        if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(req_output_num_map_[req->req_id] - 1)) {
+        if ((req->output_tokens.size() - req->input_tokens.size()) < (size_t)(expected_output_token_num - 1)) {
           if (sliding_window_size_ > 0 && swa_block_allocator_group_ && !req->swa_kv_cache_blocks.empty()) {
             // SWA mode: combine full KV cache content with SWA window content to generate next token.
             // Use swa_block_allocator_group_ for SWA contents to mirror DirectCacheManager's two-group design.
@@ -660,8 +673,8 @@ class BatchSchedulerEnvironmentSimulator {
             // GenerateAFakeToken so the hash is computed without concatenation.
             // Concatenating would change the sum and produce a different token
             // than what CheckRequestOutput (which uses only input_tokens) expects.
-            GenerateAToken(full_kv_contents, output_token,
-                           GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]), swa_contents);
+            GenerateAToken(full_kv_contents, output_token, GetSeed(req->output_tokens.size(), generation_seeds),
+                           swa_contents);
 
             KLLM_LOG_DEBUG << "SWA GenerateToken req_id=" << req->req_id << ", new_generate_token=" << output_token
                            << ", full_kv_contents.size=" << full_kv_contents.size()
@@ -672,8 +685,7 @@ class BatchSchedulerEnvironmentSimulator {
             // Generate next token based on recorded kv cache content
             // If memory operations break kv cache content, generation results will be wrong
             block_allocator_group_->CollectKvCacheContent(req, kv_contents);
-            GenerateAToken(kv_contents, output_token,
-                           GetSeed(req->output_tokens.size(), req_generation_seeds_[req->req_id]));
+            GenerateAToken(kv_contents, output_token, GetSeed(req->output_tokens.size(), generation_seeds));
 
             std::ostringstream ss;
             ss << "GenerateToken " << *req << ", new_generate_token:" << output_token
@@ -727,7 +739,8 @@ class BatchSchedulerEnvironmentSimulator {
 
   void CheckRequestOutput(const std::shared_ptr<InferRequest>& req) {
     // Check request results
-    int expected_generate_output_token_num = req_output_num_map_[req->req_id];
+    int expected_generate_output_token_num = GetRequestOutputTokenNum(req->req_id);
+    std::vector<std::pair<int, int>> generation_seeds = GetRequestGenerationSeeds(req->req_id);
     KLLM_LOG_DEBUG << "Checking " << *req << ", input_tokens.size=" << req->input_tokens.size()
                    << ", output_tokens.size=" << req->output_tokens.size()
                    << ", expected_generate_output_token_num=" << expected_generate_output_token_num;
@@ -735,7 +748,7 @@ class BatchSchedulerEnvironmentSimulator {
     bool with_eos = true;
 
     GenerateFakeTokens(req->input_tokens, expected_generate_output_token_num, expect_output_tokens, with_eos,
-                       req_generation_seeds_[req->req_id], sliding_window_size_);
+                       generation_seeds, sliding_window_size_);
     if (req->finish_status.OK()) {
       EXPECT_EQ(expect_output_tokens.size(), req->output_tokens.size());
       if (expect_output_tokens.size() != req->output_tokens.size()) {
@@ -762,13 +775,31 @@ class BatchSchedulerEnvironmentSimulator {
   std::shared_ptr<FakedBlockAllocatorGroup> GetBlockAllocatorGroup() { return block_allocator_group_; }
 
  private:
+  int GetRequestOutputTokenNum(int64_t req_id) {
+    std::lock_guard<std::mutex> guard(bookkeeping_mutex_);
+    auto it = req_output_num_map_.find(req_id);
+    KLLM_CHECK_WITH_INFO(it != req_output_num_map_.end(),
+                         FormatStr("Req id %ld is not exist in req_output_num_map.", static_cast<int64_t>(req_id)));
+    return it->second;
+  }
+
+  std::vector<std::pair<int, int>> GetRequestGenerationSeeds(int64_t req_id) {
+    std::lock_guard<std::mutex> guard(bookkeeping_mutex_);
+    auto it = req_generation_seeds_.find(req_id);
+    KLLM_CHECK_WITH_INFO(it != req_generation_seeds_.end(),
+                         FormatStr("Req id %ld is not exist in req_generation_seeds.", static_cast<int64_t>(req_id)));
+    return it->second;
+  }
+
   void SetRequestOutputTokenNum(std::shared_ptr<InferRequest>& req, int output_token_num) {
+    std::lock_guard<std::mutex> guard(bookkeeping_mutex_);
     KLLM_CHECK_WITH_INFO(req_output_num_map_.find(req->req_id) == req_output_num_map_.end(),
                          FormatStr("SetRequestOutputTokenNum: Req id %d is already set.", req->req_id));
     req_output_num_map_[req->req_id] = output_token_num;
   }
 
   void SetRequestGenerationSeeds(int64_t req_id, const std::vector<std::pair<int, int>>& seeds) {
+    std::lock_guard<std::mutex> guard(bookkeeping_mutex_);
     KLLM_CHECK_WITH_INFO(req_generation_seeds_.find(req_id) == req_generation_seeds_.end(),
                          FormatStr("SetRequestGenerationSeed: Req id %d is already set.", req_id));
     KLLM_CHECK_WITH_INFO(seeds.size() > 0,
@@ -797,6 +828,14 @@ class BatchSchedulerEnvironmentSimulator {
   std::shared_ptr<FakedBlockAllocatorGroup> block_allocator_group_ = nullptr;
   // Separate allocator group for SWA blocks; mirrors DirectCacheManager's two-group design.
   std::shared_ptr<FakedBlockAllocatorGroup> swa_block_allocator_group_ = nullptr;
+
+  // Guards req_output_num_map_ / req_generation_seeds_. Both are written by
+  // whichever thread submits a request (in PD tests: connector thread-pool
+  // workers running several InitRequest calls at once) and read by the
+  // scheduling thread inside RunAStep, so an unsynchronized rehash could make
+  // a lookup miss a present req_id -- previously silently yielding seed -1 via
+  // operator[] and thus a wrong generated token.
+  std::mutex bookkeeping_mutex_;
   std::unordered_map<int, int> req_output_num_map_;
 
   BlockManagerConfig block_manager_config_;
