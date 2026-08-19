@@ -12,10 +12,20 @@ file(GLOB_RECURSE MHC_ALL_FILES
 set(MHC_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/mhc_md5_sum)
 set(MHC_MD5_FILE ${MHC_MD5_SUM_DIR}/.mhc.md5sums)
 
-# TileLang needs libnvrtc symbols. Set before cmake:
-#   export MHC_LD_PRELOAD=/path/to/libnvrtc.so
+# TileLang needs libnvrtc symbols visible globally, otherwise kernel generation
+# aborts with "libnvrtc symbols not found globally". Prefer an explicit
+# MHC_LD_PRELOAD from the environment, otherwise auto-detect libnvrtc from the
+# CUDA toolkit (never the stubs/ dir, whose stub carries no real symbols).
 if(DEFINED ENV{MHC_LD_PRELOAD})
   set(MHC_LD_PRELOAD $ENV{MHC_LD_PRELOAD})
+else()
+  find_library(MHC_NVRTC_LIBRARY
+    NAMES nvrtc libnvrtc.so.12
+    HINTS ${CUDA_TOOLKIT_ROOT_DIR} ${CUDA_PATH}
+    PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib)
+  if(MHC_NVRTC_LIBRARY)
+    set(MHC_LD_PRELOAD ${MHC_NVRTC_LIBRARY})
+  endif()
 endif()
 
 if(NOT Python3_EXECUTABLE)

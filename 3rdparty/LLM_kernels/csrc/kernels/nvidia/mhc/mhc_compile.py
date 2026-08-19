@@ -17,8 +17,14 @@ from mhc_kernel import (_mhc_pre_big_fuse, _mhc_pre_big_fuse_with_norm, _mhc_hea
 import tilelang
 import torch
 from typing import Dict
+from tvm.target import Target
 
 import itertools
+
+
+# A Target object works with both the legacy TileLang API and the newer API that
+# no longer accepts command-line-style target options.
+MHC_TARGET = Target({"kind": "cuda", "arch": "sm_90"})
 
 
 def build_mhc_pre_big_fuse(output_dir):
@@ -103,7 +109,7 @@ def build_mhc_pre_big_fuse(output_dir):
              get_kernel_input,
              get_kernel_name,
              output_dir,
-             target="cuda --arch=sm_90",
+             target=MHC_TARGET,
              verbose=True,
              pass_configs=pass_configs)
 
@@ -192,7 +198,7 @@ def build_mhc_pre_big_fuse_with_norm(output_dir):
              get_kernel_input,
              get_kernel_name,
              output_dir,
-             target="cuda --arch=sm_90",
+             target=MHC_TARGET,
              verbose=True,
              pass_configs=pass_configs)
 
@@ -264,7 +270,7 @@ def build_mhc_head_big_fuse(output_dir):
              get_kernel_input,
              get_kernel_name,
              output_dir,
-             target="cuda --arch=sm_90",
+             target=MHC_TARGET,
              verbose=True,
              pass_configs=pass_configs)
 

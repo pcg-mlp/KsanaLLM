@@ -10,13 +10,17 @@
 #include <cstdint>
 #include <optional>
 
+#include "device/device_types.h"
+
 namespace ksana_llm {
 
-// Kimi K3 KDA dtype contract: activations are __nv_bfloat16; gate parameters
-// (A_log, dt_bias), the causal-conv filter and RMSNorm statistics stay in float;
-// every index/metadata tensor is int32_t. Boolean masks are one byte per
-// element, matching torch.bool. The recurrent state is the one exception: it is
-// typed at runtime by KdaSsmDtype, so its buffers are passed as void*.
+// KDA dtype contract: activations are __nv_bfloat16; gate parameters (A_log,
+// dt_bias), the causal-conv filter and RMSNorm statistics stay in float; every
+// index/metadata tensor is int32_t. Boolean masks are one byte per element,
+// matching torch.bool. The recurrent state is the one exception: it is typed at
+// runtime by the state tensor's DataType, so its buffers are passed as void*.
+// FP32 is the delta-rule reference; BF16 halves the state pool. Each storage
+// dtype is a separate AOT artifact selected by the SSM specialization key.
 
 // Structural constants baked into the AOT Triton artifacts. They are part of
 // the call contract and must stay in sync with
@@ -30,17 +34,6 @@ constexpr int kKdaConvStateLen = kKdaConvWidth - 1;
 // Expected gated RMSNorm epsilon. Callers still pass ``eps``; a value other
 // than ``kKdaNormEps`` is accepted but logs a warning for now.
 constexpr float kKdaNormEps = 1e-5f;
-
-// Storage dtype of the recurrent SSM state, i.e. of the state pool and of the
-// per-step verify checkpoints. The kernels always accumulate in FP32 and only
-// load/store in this dtype, but the state pointers are part of the compiled
-// Triton signature, so each dtype is a separate AOT artifact selected through
-// the SSM specialization key. FP32 matches the reference precision of the Kimi
-// K3 delta rule; BF16 halves the state pool at the cost of precision.
-enum class KdaSsmDtype : uint8_t {
-  kFloat32,
-  kBFloat16,
-};
 
 enum class KdaForwardMode : uint8_t {
   kPrefill,
@@ -86,13 +79,17 @@ struct KdaRowStrides {
 // resolves it once per forward call with BuildKdaWorkspaceLayout and passes the
 // slices it needs to each kernel entry point, so the buffer partitioning is an
 // explicit contract instead of an assumption shared between call sites.
-// ``conv_qkv`` and ``rstd`` belong to the causal-conv and output-RMSNorm stages
-// and are never touched by InvokeChunkKda; the remaining slices are the chunked
+// ``conv_qkv`` and ``rstd`` belong to the causal-conv and output-RMSNorm
+// stages and are never touched by InvokeChunkKda; the remaining slices are the chunked
 // core's scratch. Slices are pairwise non-overlapping except for the
 // time-multiplexed solve region (k_norm, akkd, akk) and state region (h, v_new),
 // which share one base offset by design.
 struct KdaWorkspaceLayout {
   __nv_bfloat16* conv_qkv{nullptr};
+  // Chunked prefill consumes sigmoid(beta) in FP32 while the model projection
+  // produces BF16. The NVIDIA layer owns this conversion buffer so model code
+  // does not depend on CUDA scalar types or backend preprocessing helpers.
+  float* beta_fp32{nullptr};
   float* rstd{nullptr};
   __nv_bfloat16* q_norm{nullptr};
   __nv_bfloat16* k_norm{nullptr};
@@ -112,10 +109,6 @@ struct KdaWorkspaceLayout {
 struct KdaCausalConv1dParams {
   const __nv_bfloat16* x{nullptr};
   const float* weight{nullptr};
-  // Optional per-channel bias. Null by default: the current Kimi AOT artifacts
-  // compile with HAS_BIAS=False, so a non-null pointer only takes effect after
-  // regenerating those kernels with HAS_BIAS=True.
-  const float* bias{nullptr};
   __nv_bfloat16* conv_state{nullptr};
   const int32_t* state_indices{nullptr};
   const bool* has_initial_state{nullptr};
@@ -145,15 +138,12 @@ struct KdaCausalConv1dUpdateParams {
 
   const __nv_bfloat16* x{nullptr};
   const float* weight{nullptr};
-  // Optional per-channel bias. Null by default; current AOT uses HAS_BIAS=False.
-  const float* bias{nullptr};
   __nv_bfloat16* conv_state{nullptr};
   // Upstream speculative-decoding circular-buffer metadata. Unused by the
   // current KDA artifacts; kept so a reused launcher can pass them without
   // changing the Params shape.
   const int32_t* cache_seqlens{nullptr};
   const int32_t* state_indices{nullptr};
-  const int32_t* num_accept_tokens{nullptr};
   __nv_bfloat16* output{nullptr};
 
   // Target-verify checkpoint of the conv window, replayed when a draft token is
@@ -193,14 +183,12 @@ struct KdaChunkParams {
   const __nv_bfloat16* v{nullptr};
   const __nv_bfloat16* forget_gate{nullptr};
   const float* beta{nullptr};
-  const float* A_log{nullptr};
+  const float* a_log{nullptr};
   const float* dt_bias{nullptr};
-  // Forget-gate activation, selected per model configuration. Kimi K3 ships
-  // linear_attn_config.gate_lower_bound (-5.0) and is trained with the safe gate
-  // ``g = gate_lower_bound * sigmoid(exp(A_log) * x)``; models without that
-  // field, such as Kimi Linear, use ``g = -exp(A_log) * softplus(x)``. The two
-  // variants are separate AOT artifacts, so an unset optional is not the same
-  // thing as a bound of zero.
+  // Forget-gate activation selected by model configuration. A configured lower
+  // bound uses ``g = gate_lower_bound * sigmoid(exp(A_log) * x)``; an unset
+  // bound uses ``g = -exp(A_log) * softplus(x)``. The variants are separate AOT
+  // artifacts, so an unset optional is not the same thing as a bound of zero.
   std::optional<float> gate_lower_bound{std::nullopt};
 
   const int32_t* cu_seqlens{nullptr};
@@ -208,7 +196,7 @@ struct KdaChunkParams {
   const int32_t* chunk_offsets{nullptr};
   // Recurrent state pool, typed by ``ssm_dtype``.
   void* state{nullptr};
-  KdaSsmDtype ssm_dtype{KdaSsmDtype::kFloat32};
+  DataType ssm_dtype{DataType::TYPE_FP32};
   const int32_t* state_indices{nullptr};
   __nv_bfloat16* output{nullptr};
 
@@ -220,6 +208,8 @@ struct KdaChunkParams {
   int num_sequences{0};
   int num_chunks{0};
   int num_heads{0};
+  // Element pitch between request slots. Zero keeps the dense legacy layout.
+  int state_stride{0};
 };
 
 // One-token-per-sequence decode reading Q/K/V straight out of the packed
@@ -228,7 +218,7 @@ struct KdaPackedDecodeParams {
   const __nv_bfloat16* mixed_qkv{nullptr};
   const __nv_bfloat16* forget_gate{nullptr};
   const __nv_bfloat16* beta{nullptr};
-  const float* A_log{nullptr};
+  const float* a_log{nullptr};
   const float* dt_bias{nullptr};
   // Safe gate when set, softplus gate otherwise; see KdaChunkParams.
   std::optional<float> gate_lower_bound{std::nullopt};
@@ -238,20 +228,24 @@ struct KdaPackedDecodeParams {
   // buffer as both the initial and final state so the decode step updates it in
   // place.
   void* state{nullptr};
-  KdaSsmDtype ssm_dtype{KdaSsmDtype::kFloat32};
+  DataType ssm_dtype{DataType::TYPE_FP32};
   const int32_t* state_indices{nullptr};
 
   int batch_size{0};
   int num_heads{0};
   // Element stride of state_indices across the batch. Contiguous by default.
   int stride_indices{1};
+  // Initial/final state may share one block-strided Direct Cache buffer.
+  // Zero keeps the dense legacy layout.
+  int initial_state_stride{0};
+  int final_state_stride{0};
 };
 
 // Recurrent decode/verify update with fused sigmoid gating.
 struct KdaRecurrentUpdateParams {
   KdaForwardMode mode{KdaForwardMode::kDecode};
 
-  const float* A_log{nullptr};
+  const float* a_log{nullptr};
   const __nv_bfloat16* forget_gate{nullptr};
   const float* dt_bias{nullptr};
   // Safe gate when set, softplus gate otherwise; see KdaChunkParams.
@@ -264,7 +258,7 @@ struct KdaRecurrentUpdateParams {
   __nv_bfloat16* output{nullptr};
   // Recurrent state pool and its verify checkpoints, both typed by ``ssm_dtype``.
   void* state{nullptr};
-  KdaSsmDtype ssm_dtype{KdaSsmDtype::kFloat32};
+  DataType ssm_dtype{DataType::TYPE_FP32};
   const int32_t* state_indices{nullptr};
   const int32_t* cu_seqlens{nullptr};
 
@@ -309,12 +303,17 @@ struct KdaGatedRmsNormParams {
 
 // Resolve the KDA scratch layout for a given shape. ``base`` points at a buffer
 // of at least GetKdaWorkspaceSize() bytes and may be null to compute sizes only.
-KdaWorkspaceLayout BuildKdaWorkspaceLayout(void* base, size_t num_tokens, size_t num_chunks, int num_heads);
+// ``num_chunks`` sizes the chunked-state scratch (layout.h) consumed by
+// InvokeChunkKda. Recurrent decode omits it: that path never reads the slice,
+// so the default of 0 leaves it empty.
+KdaWorkspaceLayout BuildKdaWorkspaceLayout(void* base, size_t num_tokens, int num_heads,
+                                           size_t num_chunks = 0);
 
 // Size in bytes of the contiguous scratch buffer backing KdaWorkspaceLayout.
 // The returned size covers the whole causal-conv -> KDA core -> gated RMSNorm
-// pipeline, not only the chunked core.
-size_t GetKdaWorkspaceSize(size_t num_tokens, size_t num_chunks, int num_heads);
+// pipeline, not only the chunked core. Callers that also run InvokeChunkKda
+// must pass the prefill chunk count; omit it only for a decode-only buffer.
+size_t GetKdaWorkspaceSize(size_t num_tokens, int num_heads, size_t num_chunks = 0);
 
 // Standalone causal-conv forward.
 void InvokeCausalConv1dFn(KdaCausalConv1dParams& params, cudaStream_t stream);

@@ -40,9 +40,14 @@ class TritonWrapper {
 
   void SetKernelsDir(const std::string& kernels_dir);
 
+  // Default allow_pdl=true follows the global PDL switch. AOT artifacts without
+  // the grid-dependency wait/trigger protocol must pass allow_pdl=false.
+  // Callers that override block dims must also pass allow_pdl explicitly so the
+  // ints are not bound to allow_pdl.
   void InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
                           const std::unordered_map<std::string, std::string>& map, size_t grid_x, size_t grid_y,
-                          size_t grid_z, cudaStream_t stream, int block_x = -1, int block_y = -1, int block_z = -1);
+                          size_t grid_z, cudaStream_t stream, bool allow_pdl = true, int block_x = -1,
+                          int block_y = -1, int block_z = -1);
 
   // The directory chosen by InitKernelsDir() (or overridden by SetKernelsDir()).
   // Exposed primarily so the directory-resolution priority can be unit tested.

@@ -217,8 +217,8 @@ CUresult TritonWrapper::LoadTritonKernelFromFile(const std::string& file_path,
 
 void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void* args[],
                                        const std::unordered_map<std::string, std::string>& map, size_t grid_x,
-                                       size_t grid_y, size_t grid_z, cudaStream_t stream, int block_x, int block_y,
-                                       int block_z) {
+                                       size_t grid_y, size_t grid_z, cudaStream_t stream, bool allow_pdl, int block_x,
+                                       int block_y, int block_z) {
   const auto kernel_name = ConstructKernelName(kernel_base_name, map);
   if (!kernel_name) {
     KLLM_THROW(fmt::format("Failed to get kernel file name by kernel name {}.", kernel_base_name));
@@ -268,7 +268,8 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
   }
   CUlaunchAttribute attrs[1];
   attrs[0].id = CU_LAUNCH_ATTRIBUTE_PROGRAMMATIC_STREAM_SERIALIZATION;
-  attrs[0].value.programmaticStreamSerializationAllowed = llm_kernels::utils::GetEnablePDL() ? 1 : 0;
+  attrs[0].value.programmaticStreamSerializationAllowed =
+      allow_pdl && llm_kernels::utils::GetEnablePDL() ? 1 : 0;
 
   CUlaunchConfig config = {};
   config.gridDimX = grid_x;
@@ -315,7 +316,10 @@ void TritonWrapper::InvokeFusedMoeKernel(void* a, void* b, void* c, void* a_scal
                                                       {"use_int8_w8a16", ConvertToString(use_int8_w8a16)}};
   map["even_Ks"] = (k % config["block_size_k"] == 0) ? "True" : "False";
   size_t grid_x = CeilDiv(max_num_tokens_padded, config.at("block_size_m")) * CeilDiv(n, config.at("block_size_n"));
-  InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream);
+  // The current fused MoE AOT artifacts do not contain the device-side GDC
+  // wait/trigger protocol required by programmatic dependent launch.  Keep
+  // ordinary stream serialization until the artifact explicitly supports PDL.
+  InvokeTritonKernel(kernel_name, args, map, grid_x, 1, 1, stream, /*allow_pdl=*/false);
 }
 #define INVOKE_FUSED_MOE_KERNEL(T)                                                                                  \
   template void TritonWrapper::InvokeFusedMoeKernel<T>(                                                             \
@@ -690,7 +694,7 @@ void TritonWrapper::InvokeMhcPreBigFuseKernel(void* gemm_out_mul, void* gemm_out
                                                       {"sinkhorn_repeat", ConvertToString(sinkhorn_repeat)},
                                                       {"n_splits", ConvertToString(n_splits)},
                                                       {"mhc_mult", ConvertToString(mhc_mult)}};
-  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 96, 1, 1);
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, /*allow_pdl=*/true, 96, 1, 1);
 }
 #define INVOKE_MHC_PRE_BIG_FUSE_KERNEL(T)                                                                           \
   template void TritonWrapper::InvokeMhcPreBigFuseKernel<T>(void*, void*, void*, void*, void*, void*, void*, void*, \
@@ -722,7 +726,7 @@ void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel(void* gemm_out_mul, void* 
                                                       {"sinkhorn_repeat", ConvertToString(sinkhorn_repeat)},
                                                       {"n_splits", ConvertToString(n_splits)},
                                                       {"mhc_mult", ConvertToString(mhc_mult)}};
-  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 96, 1, 1);
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, /*allow_pdl=*/true, 96, 1, 1);
 }
 #define INVOKE_MHC_PRE_BIG_FUSE_WITH_NORM_KERNEL(T)                                                                  \
   template void TritonWrapper::InvokeMhcPreBigFuseWithNormKernel<T>(void*, void*, void*, void*, void*, void*, void*, \
@@ -748,7 +752,7 @@ void TritonWrapper::InvokeMhcHeadBigFuseKernel(void* gemm_out_mul, void* gemm_ou
                                                       {"mhc_pre_eps", ConvertToString(mhc_pre_eps)},
                                                       {"n_splits", ConvertToString(n_splits)},
                                                       {"mhc_mult", ConvertToString(mhc_mult)}};
-  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, 64, 1, 1);
+  InvokeTritonKernel(kernel_name, args, map, num_tokens, 1, 1, stream, /*allow_pdl=*/true, 64, 1, 1);
 }
 #define INVOKE_MHC_HEAD_BIG_FUSE_KERNEL(T)                                                                       \
   template void TritonWrapper::InvokeMhcHeadBigFuseKernel<T>(void*, void*, void*, void*, void*, void*, int, int, \

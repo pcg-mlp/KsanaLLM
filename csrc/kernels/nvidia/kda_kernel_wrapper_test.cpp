@@ -124,7 +124,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaSmallGridLaunches) {
   chunk_offsets.Upload<int32_t>({0, kNumChunks});
   state_indices.Upload<int32_t>({0});
 
-  DeviceBuffer workspace(GetKdaWorkspaceSize(kNumTokens, kNumChunks, kNumHeads));
+  DeviceBuffer workspace(GetKdaWorkspaceSize(kNumTokens, kNumHeads, kNumChunks));
 
   KdaChunkParams params;
   params.q = q.As<__nv_bfloat16>();
@@ -132,7 +132,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaSmallGridLaunches) {
   params.v = v.As<__nv_bfloat16>();
   params.forget_gate = raw_gate.As<__nv_bfloat16>();
   params.beta = beta.As<float>();
-  params.A_log = a_log.As<float>();
+  params.a_log = a_log.As<float>();
   params.dt_bias = dt_bias.As<float>();
   params.cu_seqlens = cu_seqlens.As<int32_t>();
   params.chunk_indices = chunk_indices.As<int32_t>();
@@ -140,7 +140,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaSmallGridLaunches) {
   params.state = state.data();
   params.state_indices = state_indices.As<int32_t>();
   params.output = output.As<__nv_bfloat16>();
-  params.scratch = BuildKdaWorkspaceLayout(workspace.data(), kNumTokens, kNumChunks, kNumHeads);
+  params.scratch = BuildKdaWorkspaceLayout(workspace.data(), kNumTokens, kNumHeads, kNumChunks);
   params.num_tokens = kNumTokens;
   params.num_sequences = 1;
   params.num_chunks = kNumChunks;
@@ -186,7 +186,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaLargeGridLaunches) {
   chunk_offsets.Upload(offsets);
   state_indices.Upload(indices);
 
-  DeviceBuffer workspace(GetKdaWorkspaceSize(kTokens, kSequences, kNumHeads));
+  DeviceBuffer workspace(GetKdaWorkspaceSize(kTokens, kNumHeads, kSequences));
 
   KdaChunkParams params;
   params.q = q.As<__nv_bfloat16>();
@@ -194,7 +194,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaLargeGridLaunches) {
   params.v = v.As<__nv_bfloat16>();
   params.forget_gate = raw_gate.As<__nv_bfloat16>();
   params.beta = beta.As<float>();
-  params.A_log = a_log.As<float>();
+  params.a_log = a_log.As<float>();
   params.dt_bias = dt_bias.As<float>();
   params.cu_seqlens = cu_seqlens.As<int32_t>();
   params.chunk_indices = chunk_indices.As<int32_t>();
@@ -202,7 +202,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaLargeGridLaunches) {
   params.state = state.data();
   params.state_indices = state_indices.As<int32_t>();
   params.output = output.As<__nv_bfloat16>();
-  params.scratch = BuildKdaWorkspaceLayout(workspace.data(), kTokens, kSequences, kNumHeads);
+  params.scratch = BuildKdaWorkspaceLayout(workspace.data(), kTokens, kNumHeads, kSequences);
   params.num_tokens = kTokens;
   params.num_sequences = kSequences;
   params.num_chunks = kSequences;
@@ -227,7 +227,7 @@ TEST_F(KdaKernelWrapperTest, PackedDecodeLaunches) {
   params.mixed_qkv = qkv.As<__nv_bfloat16>();
   params.forget_gate = a.As<__nv_bfloat16>();
   params.beta = b.As<__nv_bfloat16>();
-  params.A_log = a_log.As<float>();
+  params.a_log = a_log.As<float>();
   params.dt_bias = dt_bias.As<float>();
   params.output = output.As<__nv_bfloat16>();
   params.state = state.data();
@@ -262,7 +262,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeAndVerifyLaunch) {
                     const int32_t* retrieve_parent_token, int cache_steps) {
     KdaRecurrentUpdateParams params;
     params.mode = mode;
-    params.A_log = a_log.As<float>();
+    params.a_log = a_log.As<float>();
     params.forget_gate = a.As<__nv_bfloat16>();
     params.dt_bias = dt_bias.As<float>();
     params.q = q.As<__nv_bfloat16>();
@@ -322,7 +322,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeBf16StateLaunches) {
 
   KdaRecurrentUpdateParams params;
   params.mode = KdaForwardMode::kDecode;
-  params.A_log = a_log.As<float>();
+  params.a_log = a_log.As<float>();
   params.forget_gate = a.As<__nv_bfloat16>();
   params.dt_bias = dt_bias.As<float>();
   params.q = q.As<__nv_bfloat16>();
@@ -331,7 +331,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeBf16StateLaunches) {
   params.beta = b.As<__nv_bfloat16>();
   params.output = output.As<__nv_bfloat16>();
   params.state = state.data();
-  params.ssm_dtype = KdaSsmDtype::kBFloat16;
+  params.ssm_dtype = DataType::TYPE_BF16;
   params.state_indices = state_indices.As<int32_t>();
   params.cu_seqlens = cu_seqlens.As<int32_t>();
   params.qkv_token_stride = static_cast<int>(kTokenHeadDim);
@@ -352,14 +352,11 @@ TEST_F(KdaKernelWrapperTest, CausalConvAndGatedNormLaunch) {
   DeviceBuffer has_initial(sizeof(uint8_t));
   DeviceBuffer cu_seqlens(2 * sizeof(int32_t));
   DeviceBuffer output(kTokens * kQkvDim * kBf16Bytes);
-  DeviceBuffer bias(kQkvDim * sizeof(float));  // max(prefill_channels, decode_channels)
   DeviceBuffer cache_seqlens(sizeof(int32_t));
-  DeviceBuffer num_accept_tokens(sizeof(int32_t));
   indices.Upload<int32_t>({0});
   has_initial.Upload<uint8_t>({0});
   cu_seqlens.Upload<int32_t>({0, kTokens});
   cache_seqlens.Upload<int32_t>({0});
-  num_accept_tokens.Upload<int32_t>({1});
 
   KdaCausalConv1dParams prefill_conv;
   prefill_conv.x = x.As<__nv_bfloat16>();
@@ -377,7 +374,6 @@ TEST_F(KdaKernelWrapperTest, CausalConvAndGatedNormLaunch) {
   prefill_conv.state_strides = {kKdaConvStateLen * static_cast<int>(kTokenHeadDim), 1,
                                 static_cast<int>(kTokenHeadDim)};
   prefill_conv.output_strides = {0, 1, static_cast<int>(kTokenHeadDim)};
-  prefill_conv.bias = bias.As<float>();
   ExpectLaunchOk([&] { InvokeCausalConv1dFn(prefill_conv, stream_); });
 
   KdaCausalConv1dUpdateParams decode_conv;
@@ -392,11 +388,9 @@ TEST_F(KdaKernelWrapperTest, CausalConvAndGatedNormLaunch) {
   decode_conv.num_cache_lines = 1;
   decode_conv.num_channels = static_cast<int>(kQkvDim);
   decode_conv.cache_seqlens = cache_seqlens.As<int32_t>();
-  decode_conv.num_accept_tokens = num_accept_tokens.As<int32_t>();
   decode_conv.x_strides = {static_cast<int>(kQkvDim), 1, static_cast<int>(kQkvDim)};
   decode_conv.state_strides = {kKdaConvStateLen * static_cast<int>(kQkvDim), 1, static_cast<int>(kQkvDim)};
   decode_conv.output_strides = decode_conv.x_strides;
-  decode_conv.bias = bias.As<float>();
   ExpectLaunchOk([&] { InvokeCausalConv1dUpdate(decode_conv, stream_); });
 
   DeviceBuffer gate(kTokenHeadDim * kBf16Bytes);

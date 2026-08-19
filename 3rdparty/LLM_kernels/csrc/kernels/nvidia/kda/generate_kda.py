@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # Copyright 2026 Tencent Inc.  All rights reserved.
-"""Generate Triton cubin/json/ptx artifacts for Kimi Delta Attention.
+"""Generate Triton cubin/json/ptx artifacts for KDA kernels.
 
-The model specialization follows Kimi K3:
+The AOT kernel contract uses:
   * BF16 inputs; the recurrent SSM state is FP32 by default and BF16 optionally
   * K = V = 128
-  * global heads = 96; local heads are selected by the creator script
+  * local head counts selected by the creator script
   * chunk size = 64 and sub-chunk size = 16
 
 The SSM state dtype is a Triton specialization: the state pointers appear in the
@@ -80,17 +80,17 @@ L2_EPS = 1e-6
 SOFTPLUS_BETA = 1.0
 SOFTPLUS_THRESHOLD = 20.0
 
-# Gate activation variants. ``None`` compiles the softplus gate
-# ``-exp(A_log) * softplus(x)``; a float compiles Kimi K3's safe gate
+# Gate activation variants. ``None`` compiles the default softplus gate
+# ``-exp(A_log) * softplus(x)``; a float compiles the bounded sigmoid gate
 # ``lower_bound * sigmoid(exp(A_log) * x)``. The bound itself stays a runtime
-# argument of the safe-gate artifacts, so this value only has to be non-None:
-# the actual gate_lower_bound comes from the model config at launch time.
+# argument of the bounded-gate artifacts, so this value only selects the AOT
+# variant; the actual gate_lower_bound comes from model config at launch time.
 GATE_LOWER_BOUNDS = (None, -5.0)
 
-# Recurrent-state storage dtypes. FP32 is the reference precision of the Kimi K3
-# delta rule and the KsanaLLM default; BF16 halves the state pool at the cost of
-# precision. The short token is the one that appears in the artifact name and in
-# the C++ wrapper's SSM specialization key.
+# Recurrent-state storage dtypes. FP32 is the reference precision of the delta
+# rule and the KsanaLLM default; BF16 halves the state pool at the cost of
+# precision. The short token appears in the artifact name and in the C++
+# wrapper's SSM specialization key.
 SSM_DTYPES = {
     "float32": torch.float32,
     "bfloat16": torch.bfloat16,
@@ -269,11 +269,11 @@ def _generate_l2norm(output_dir: str) -> None:
 
 
 def _generate_gated_rmsnorm(output_dir: str) -> None:
-    """Generate Kimi's output RMSNorm followed by a sigmoid gate.
+    """Generate output RMSNorm followed by a sigmoid gate.
 
     The KDA output and ``g_proj`` are flattened to [T * H, 128] before this
-    operation.  D=128 and the activation are therefore model constants while
-    the number of rows remains a runtime parameter.
+    operation. D=128 and the activation are therefore AOT constants while the
+    number of rows remains a runtime parameter.
     """
     num_rows = 128
     dtype = torch.bfloat16
@@ -283,9 +283,9 @@ def _generate_gated_rmsnorm(output_dir: str) -> None:
     weight = torch.randn(HEAD_DIM, device="cuda", dtype=dtype)
     rstd = torch.empty(num_rows, device="cuda", dtype=torch.float32)
 
-    # Keep the complete source-level pointer ABI even though the Kimi
-    # specialization has no bias or residual.  The C++ wrapper supplies null
-    # values for these dead arguments, which makes the ABI explicit and stable.
+    # Keep the complete source-level pointer ABI even though this specialization
+    # has no bias or residual. The C++ wrapper supplies null values for these
+    # dead arguments, which makes the ABI explicit and stable.
     def launch(config):
         kernel = layer_norm_gated_fwd_kernel[
             (triton.cdiv(num_rows, GATED_RMSNORM_BLOCK_T),)
@@ -1184,9 +1184,8 @@ def _generate_causal_conv_fwd(output_dir: str, num_heads: int) -> None:
     weight = torch.randn(
         channels, CAUSAL_CONV_WIDTH, device=device, dtype=torch.float32
     )
-    # Dummy bias so that HAS_BIAS=True keeps bias_ptr in the AOT kernel
-    # signature, matching the C++ wrapper's expected ABI.
-    bias = torch.zeros(channels, device=device, dtype=torch.float32)
+    # Kimi-K3 has no learned conv bias. HAS_BIAS=False dead-strips bias_ptr
+    # from the cubin ABI; the C++ launcher must omit it.
     state_storage = torch.randn(
         num_cache_lines,
         CAUSAL_CONV_STATE_LEN,
@@ -1213,7 +1212,7 @@ def _generate_causal_conv_fwd(output_dir: str, num_heads: int) -> None:
         kernel = causal_conv1d_fwd_kernel[grid](
             x_ptr=x,
             w_ptr=weight,
-            bias_ptr=bias,
+            bias_ptr=None,
             initial_states_ptr=state,
             cache_indices_ptr=cache_indices,
             has_initial_states_ptr=has_initial_state,
@@ -1234,7 +1233,7 @@ def _generate_causal_conv_fwd(output_dir: str, num_heads: int) -> None:
             stride_o_dim=out.stride(1),
             stride_o_token=out.stride(0),
             pad_slot_id=CAUSAL_CONV_PAD_SLOT_ID,
-            HAS_BIAS=True,
+            HAS_BIAS=False,
             KERNEL_WIDTH=CAUSAL_CONV_WIDTH,
             SILU_ACTIVATION=True,
             HAS_INITIAL_STATES=True,
@@ -1260,7 +1259,6 @@ def _generate_causal_conv_fwd(output_dir: str, num_heads: int) -> None:
         [
             "x_ptr",
             "w_ptr",
-            "bias_ptr",
             "initial_states_ptr",
             "cache_indices_ptr",
             "has_initial_states_ptr",
@@ -1306,9 +1304,8 @@ def _generate_causal_conv_update(
     weight = torch.randn(
         channels, CAUSAL_CONV_WIDTH, device=device, dtype=torch.float32
     )
-    # Dummy bias so that HAS_BIAS=True keeps bias_ptr in the AOT kernel
-    # signature, matching the C++ wrapper's expected ABI.
-    bias = torch.zeros(channels, device=device, dtype=torch.float32)
+    # Kimi-K3 has no learned conv bias. HAS_BIAS=False dead-strips bias_ptr
+    # from the cubin ABI; the C++ launcher must omit it.
     state_storage = torch.randn(
         num_cache_lines,
         CAUSAL_CONV_STATE_LEN,
@@ -1319,12 +1316,9 @@ def _generate_causal_conv_update(
     state = state_storage.transpose(1, 2)
     state_indices = torch.tensor([0, 2], device=device, dtype=torch.int32)
 
-    # Dummy tensors for cache_seqlens and num_accept_tokens so that
-    # IS_SPEC_DECODING=True keeps them in the AOT kernel signature,
-    # matching the C++ wrapper's expected ABI.  With num_accept_tokens=1
-    # the kernel behaves identically to the decode (non-spec) path.
+    # cache_seqlens stays in the source signature. The compiled ABI drops
+    # num_accept_tokens because IS_SPEC_DECODING=False dead-strips the load.
     cache_seqlens = torch.zeros(batch, device=device, dtype=torch.int32)
-    num_accept_tokens = torch.ones(batch, device=device, dtype=torch.int32)
 
     if is_verify:
         intermediate_storage = torch.empty(
@@ -1363,11 +1357,11 @@ def _generate_causal_conv_update(
         kernel = causal_conv1d_update_kernel[grid](
             x_ptr=x,
             w_ptr=weight,
-            bias_ptr=bias,
+            bias_ptr=None,
             conv_state_ptr=state,
             cache_seqlens_ptr=cache_seqlens,
             conv_state_indices_ptr=state_indices,
-            num_accept_tokens_ptr=num_accept_tokens,
+            num_accept_tokens_ptr=None,
             intermediate_conv_window_ptr=intermediate,
             intermediate_state_indices_ptr=intermediate_indices,
             retrieve_next_token_ptr=next_tokens,
@@ -1417,11 +1411,11 @@ def _generate_causal_conv_update(
             stride_o_dim=out.stride(1),
             stride_o_token=out.stride(2),
             pad_slot_id=CAUSAL_CONV_PAD_SLOT_ID,
-            HAS_BIAS=True,
+            HAS_BIAS=False,
             KERNEL_WIDTH=CAUSAL_CONV_WIDTH,
             SILU_ACTIVATION=True,
             IS_CONTINUOUS_BATCHING=True,
-            IS_SPEC_DECODING=True,
+            IS_SPEC_DECODING=False,
             NP2_STATELEN=CAUSAL_CONV_NP2_STATELEN,
             NP2_SEQLEN=np2_seqlen,
             USE_PAD_SLOT=True,
@@ -1437,11 +1431,9 @@ def _generate_causal_conv_update(
     expected_arg_names = [
         "x_ptr",
         "w_ptr",
-        "bias_ptr",
         "conv_state_ptr",
         "cache_seqlens_ptr",
         "conv_state_indices_ptr",
-        "num_accept_tokens_ptr",
         "intermediate_conv_window_ptr",
         "intermediate_state_indices_ptr",
         "retrieve_next_token_ptr",
@@ -1491,7 +1483,7 @@ def _generate_causal_conv_update(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate Kimi K3 KDA Triton kernel artifacts"
+        description="Generate KDA Triton kernel artifacts"
     )
     parser.add_argument(
         "--num-heads",
