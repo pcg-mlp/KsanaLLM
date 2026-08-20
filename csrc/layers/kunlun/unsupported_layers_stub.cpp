@@ -163,7 +163,7 @@ Status DSparkLayer::ForwardInjectKV(const void*, const void*, void*, const int64
                                     int, int64_t, int, DataType) {
   KLLM_THROW("DSparkLayer not supported on Kunlun.");
 }
-Status DSparkLayer::ForwardMarkovEmbedLookup(void*, const int32_t*, const void*, int, int, int, DataType) {
+Status DSparkLayer::ForwardMarkovEmbedLookup(void*, const uint32_t*, const void*, int, int, DataType) {
   KLLM_THROW("DSparkLayer not supported on Kunlun.");
 }
 Status DSparkLayer::ForwardLogitsAdd(float*, const void*, int, int, DataType) {
