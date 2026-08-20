@@ -105,6 +105,25 @@ else()
     message(STATUS "Mooncake real store backend disabled (default)")
 endif()
 
+# libcupti.so.11.8 is a versioned NEEDED entry in libtorch_cpu.so pulled in by
+# KUNLUN_PYTHON_LIBS; resolve it at link time on Kunlun hosts without CUDA.
+set(CUPTI_LIB_DIR "" CACHE PATH "Directory containing libcupti.so.11.8 (nvidia cuda_cupti conda package)")
+if(WITH_KUNLUN AND NOT DEFINED _CUPTI_LIB_DIR)
+  # libtorch_cpu.so requires libcupti.so.11.8 (versioned SONAME). The file at
+  # /usr/local/cuda*/extras/CUPTI has SONAME 11.7 (mismatch). The nvidia conda
+  # package has the correct SONAME. No .so symlink exists; search by filename.
+  find_file(_CUPTI_LIB_FILE libcupti.so.11.8
+    HINTS $ENV{CONDA_PREFIX}/lib/python3.10/site-packages/nvidia/cuda_cupti/lib
+          ${CUPTI_LIB_DIR}
+    NO_DEFAULT_PATH)
+  if(_CUPTI_LIB_FILE)
+    get_filename_component(_CUPTI_LIB_DIR "${_CUPTI_LIB_FILE}" DIRECTORY)
+  else()
+    message(WARNING "libcupti.so.11.8 not found; Kunlun global_cache_bench link may fail. "
+                    "Set -DCUPTI_LIB_DIR=<path> or install nvidia-cuda-cupti-cu11 in conda.")
+  endif()
+endif()
+
 # ---------- Bench 可执行文件 ----------
 add_executable(global_cache_bench
     ${CMAKE_CURRENT_SOURCE_DIR}/global_cache_bench_test.cpp
@@ -115,6 +134,11 @@ target_link_libraries(global_cache_bench PRIVATE
     yaml-cpp
     -lcudart
 )
+if(WITH_KUNLUN)
+    # Kunlun Python 后端符号（xtorch_ops）在 embed 情况下由 executable 链
+    target_link_libraries(global_cache_bench PRIVATE ${KUNLUN_PYTHON_LIBS})
+    target_link_directories(global_cache_bench PRIVATE ${_CUPTI_LIB_DIR})
+endif()
 
 target_include_directories(global_cache_bench PRIVATE
     ${PROJECT_SOURCE_DIR}/csrc
@@ -136,6 +160,11 @@ if(WITH_TESTING)
         global_cache_connector loguru gtest_main gtest -pthread)
     if(WITH_CUDA)
         target_link_libraries(global_cache_connector_test -lcudart)
+    elseif(WITH_KUNLUN)
+        target_link_libraries(global_cache_connector_test
+            -L${XMLIR_DIR}/xre/so -lcudart
+            ${KUNLUN_PYTHON_LIBS})
+        target_link_directories(global_cache_connector_test PRIVATE ${_CUPTI_LIB_DIR})
     endif()
     add_test(NAME global_cache_connector_test
         COMMAND global_cache_connector_test

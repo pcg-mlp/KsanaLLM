@@ -9,6 +9,7 @@ list(FILTER device_SRCS EXCLUDE REGEX ".*test.cpp")
 list(FILTER device_SRCS EXCLUDE REGEX ".*/nvidia/.*.cpp")
 list(FILTER device_SRCS EXCLUDE REGEX ".*/ascend/.*.cpp")
 list(FILTER device_SRCS EXCLUDE REGEX ".*/zixiao/.*.cpp")
+list(FILTER device_SRCS EXCLUDE REGEX ".*/kunlun/.*.cpp")
 message(STATUS "device_SRCS: ${device_SRCS}")
 
 set(device_nvidia_SRCS "")
@@ -41,10 +42,22 @@ if(WITH_TOPS)
   list(APPEND device_zixiao_LIBS ${TOPS_SHARED_LIBS} topsrt)
 endif()
 
-add_library(device STATIC ${device_SRCS} ${device_nvidia_SRCS} ${device_ascend_SRCS} ${device_zixiao_SRCS})
+# Kunlun XPU
+set(device_kunlun_SRCS "")
+set(device_kunlun_LIBS "")
+
+if(WITH_KUNLUN)
+  file(GLOB_RECURSE device_kunlun_SRCS ${PROJECT_SOURCE_DIR}/csrc/device/kunlun/*.cpp)
+  list(FILTER device_kunlun_SRCS EXCLUDE REGEX ".*test.cpp")
+  list(APPEND device_kunlun_LIBS ${XPU_SHARED_LIBS})
+endif()
+
+add_library(device STATIC ${device_SRCS} ${device_nvidia_SRCS} ${device_ascend_SRCS} ${device_zixiao_SRCS} ${device_kunlun_SRCS})
 add_dependencies(device utils fmt gflags layer_progress_tracker)
+# NOTE: ${device_zixiao_SRCS} in link_libraries is an existing bug (should be LIBS).
+# Keeping as-is to minimize diff; Kunlun uses the correct variable.
 target_link_libraries(device PUBLIC
-  -lpthread -ldl gflags ${device_nvidia_LIBS} ${device_ascend_LIBS} ${device_zixiao_SRCS} utils 
+  -lpthread -ldl gflags ${device_nvidia_LIBS} ${device_ascend_LIBS} ${device_zixiao_SRCS} ${device_kunlun_LIBS} utils
 )
 
 if(WITH_CUDA)

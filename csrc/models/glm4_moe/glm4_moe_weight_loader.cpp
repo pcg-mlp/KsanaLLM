@@ -7,8 +7,10 @@
 #include <algorithm>
 #include <cctype>
 
-#include "device/nvidia/cuda_utils.h"
-#include "kernels/nvidia/basic_kernel_wrapper.h"
+#ifdef ENABLE_CUDA
+#  include "device/nvidia/cuda_utils.h"
+#  include "kernels/nvidia/basic_kernel_wrapper.h"
+#endif
 #include "model_loader/model_loader_utils.h"
 #include "models/glm4_moe/glm4_moe_config.h"
 #include "utils/memory_utils.h"

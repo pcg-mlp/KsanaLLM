@@ -24,7 +24,7 @@ Qwen3MoeDecoderLayer::Qwen3MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buff
 
   bool is_neox = true;
   bool add_qkv_bias = false;
-  bool use_qk_norm = false;
+  bool use_qk_norm = model_creation_config.attn_config.model_config.use_qk_norm;
   KLLM_LOG_DEBUG << "use_qk_norm: " << use_qk_norm;
   KLLM_LOG_DEBUG << "add_qkv_bias: " << add_qkv_bias;
   mha_ = std::make_shared<MultiHeadAttention>(layer_idx, is_neox, add_qkv_bias, use_qk_norm, creation_context,

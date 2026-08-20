@@ -2,6 +2,7 @@
 #
 # ==============================================================================
 import asyncio
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -18,9 +19,118 @@ from .processor_op_base import TokenizerProcessorOpBase
 
 logger = init_logger(__name__)
 
-# Adjust the max_workers to a reasonable number based on the number of CPUs
-plugin_executor = ThreadPoolExecutor(max_workers=32)
-model_executor = ThreadPoolExecutor(max_workers=256)
+# Three separate pools, split by how long the work blocks. Do NOT merge them:
+# mixing fast submits with calls that block for a whole request causes FIFO
+# head-of-line blocking inside the pool. Symptom when that happens is nasty and
+# silent -- engine throughput stays perfect, but token delivery arrives in
+# multi-second bursts and some requests never even reach the engine.
+#
+#   plugin_executor       building the engine input (short, CPU-bound)
+#   submit_executor       handing a request to the C++ engine (short)
+#   engine_wait_executor  calls that block until the engine produces output:
+#                         StreamingIterator.GetNext (once per streamed chunk),
+#                         plus non-streaming Generate and forward (whole request)
+#
+# engine_wait_executor needs one thread per in-flight request, because GetNext
+# parks its thread in step_waiter->Wait() until the next token exists. The
+# bindings release the GIL first (see torch_op/serving_op.cpp), so parked threads
+# are cheap and don't contend -- but the pool must still be sized above peak
+# concurrency or delivery degrades as described above.
+ENGINE_WAIT_THREADS = int(os.environ.get("KSANA_ENGINE_WAIT_THREADS", "2048"))
+
+plugin_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="ksana-plugin")
+submit_executor = ThreadPoolExecutor(max_workers=32, thread_name_prefix="ksana-submit")
+engine_wait_executor = ThreadPoolExecutor(
+    max_workers=ENGINE_WAIT_THREADS, thread_name_prefix="ksana-wait"
+)
+
+_WAIT_POOL_WARNED = False
+
+
+def _warn_if_wait_pool_backed_up() -> None:
+    """Warn once if engine_wait_executor has run out of threads.
+
+    Checked at submit time, so this costs one call per request rather than one
+    per token. A backlog means queued waits are being served FIFO while requests
+    parked in the engine's waiting queue hold threads they cannot use, so
+    actively decoding requests wait seconds for their next token.
+
+    A non-empty queue alone is not saturation: ThreadPoolExecutor puts the work item
+    on the queue before it spawns a worker for it, so under a burst of submits the
+    queue is transiently non-empty while the pool is still growing. Require the pool
+    to have actually reached its thread ceiling as well.
+    """
+    global _WAIT_POOL_WARNED
+    if _WAIT_POOL_WARNED:
+        return
+    work_queue = getattr(engine_wait_executor, "_work_queue", None)
+    threads = getattr(engine_wait_executor, "_threads", None)
+    if work_queue is None or threads is None:  # private attributes, tolerate removal
+        return
+    backlog = work_queue.qsize()
+    if backlog > 0 and len(threads) >= ENGINE_WAIT_THREADS:
+        _WAIT_POOL_WARNED = True
+        logger.warning(
+            f"engine_wait_executor exhausted: {backlog} engine waits queued behind "
+            f"{ENGINE_WAIT_THREADS} threads. Token delivery will stall in bursts. "
+            f"Set KSANA_ENGINE_WAIT_THREADS above the peak concurrent request count."
+        )
+
+
+# The C++ scheduler admits requests through a fixed-size staging buffer
+# (setting.batch_scheduler.max_waiting_queue_len, default 256) that it drains in full
+# exactly once per schedule step, in BatchScheduler::BalanceWaitingReqs. A burst larger
+# than that buffer is rejected with RET_EXCEED_CAPACITY even though the engine is
+# nowhere near its real capacity -- those requests just happened to arrive between two
+# drains. So treat that one code as backpressure and retry rather than failing the
+# request. The wait lands in TTFT, which is honest: the request really is queued.
+#
+# Only RET_EXCEED_CAPACITY is retried, and only until a deadline, so genuine sustained
+# overload still surfaces as an error instead of hanging. The retry count per request is
+# normally tiny -- the next drain frees the whole buffer -- so a fixed short interval is
+# enough and needs no backoff.
+ADMIT_RETRY_TIMEOUT = float(os.environ.get("KSANA_ADMIT_RETRY_TIMEOUT", "60.0"))
+ADMIT_RETRY_INTERVAL = float(os.environ.get("KSANA_ADMIT_RETRY_INTERVAL", "0.02"))
+
+_ADMIT_RETRY_WARNED = False
+
+
+async def _submit_with_backpressure(loop, executor, fn, *fn_args):
+    """Hand a request to the C++ engine, waiting out a full admission buffer.
+
+    Returns whatever fn returns -- a (status, payload) tuple -- so the caller's
+    error handling is unchanged. On timeout the last failing status is returned as-is.
+    """
+    global _ADMIT_RETRY_WARNED
+    deadline = time.time() + ADMIT_RETRY_TIMEOUT
+    attempts = 0
+    while True:
+        result = await loop.run_in_executor(executor, fn, *fn_args)
+        status = result[0]
+        if status.OK() or status.GetCode() != libtorch_serving.RetCode.RET_EXCEED_CAPACITY:
+            if attempts:
+                logger.debug(
+                    f"request admitted after {attempts} retr{'y' if attempts == 1 else 'ies'} "
+                    f"waiting for engine admission buffer space"
+                )
+            return result
+        if time.time() >= deadline:
+            logger.warning(
+                f"engine admission buffer still full after {ADMIT_RETRY_TIMEOUT}s "
+                f"({attempts} retries); failing request. Raise "
+                f"setting.batch_scheduler.max_waiting_queue_len if this is steady state "
+                f"rather than a burst."
+            )
+            return result
+        if not _ADMIT_RETRY_WARNED:
+            _ADMIT_RETRY_WARNED = True
+            logger.info(
+                "engine admission buffer full, applying backpressure (retrying every "
+                f"{ADMIT_RETRY_INTERVAL * 1000:.0f}ms). Expected on a large arrival burst; "
+                "if it persists, raise setting.batch_scheduler.max_waiting_queue_len."
+            )
+        attempts += 1
+        await asyncio.sleep(ADMIT_RETRY_INTERVAL)
 
 
 @dataclass
@@ -78,7 +188,7 @@ class PyAsyncStreamingIterator:
 
         # Run the GetNext method of the serving iterator in an executor
         status, ksana_python_output = await loop.run_in_executor(
-            model_executor, self._serving_iterator.GetNext
+            engine_wait_executor, self._serving_iterator.GetNext
         )
 
         # Check the status of the iteration
@@ -179,6 +289,8 @@ class KsanaLLMEngine:
         self._serving.endpoint_config.port = endpoint_config.port
         self._serving.endpoint_config.access_log = endpoint_config.access_log
         self._access_log_enabled = endpoint_config.access_log
+
+        self._access_log = endpoint_config.access_log
 
         self.pre_post_processor = pre_post_processor
         self.tokenizer = self.pre_post_processor.inner_tokenizer
@@ -696,8 +808,10 @@ class KsanaLLMEngine:
         # 获取输入 token 数量（用于 access log）
         input_tokens = len(ksana_python_input.input_tokens) if ksana_python_input.input_tokens else 0
         if streamer:
-            status, streaming_iterator = await loop.run_in_executor(
-                model_executor,
+            _warn_if_wait_pool_backed_up()
+            status, streaming_iterator = await _submit_with_backpressure(
+                loop,
+                submit_executor,
                 self._call_serving_generate_streaming,
                 ksana_python_input,
                 req_ctx
@@ -723,8 +837,10 @@ class KsanaLLMEngine:
                 access_log_enabled=self._access_log_enabled,
             ), plugin_timing_metrics
 
-        status, ksana_python_output = await loop.run_in_executor(
-            model_executor,
+        _warn_if_wait_pool_backed_up()
+        status, ksana_python_output = await _submit_with_backpressure(
+            loop,
+            engine_wait_executor,
             self._call_serving_generate,
             ksana_python_input,
             req_ctx
@@ -770,7 +886,7 @@ class KsanaLLMEngine:
             req_ctx = {}
         loop = asyncio.get_running_loop()
         status, response_bytes = await loop.run_in_executor(
-            model_executor,
+            engine_wait_executor,
             self._call_serving_forward,
             request_bytes,
             req_ctx

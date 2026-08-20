@@ -11,6 +11,13 @@ option(WITH_ACL "Enable Ascend" OFF)
 # support Tencent ZiXiao
 option(WITH_TOPS "Enable Tops" OFF)
 
+# support Baidu Kunlun XPU (Stage 0 scaffolding)
+# 设计依据: tmp/kunlun-xpu-support-design-cn.md §3.2 / Stage 0
+# 当前阶段 LLM_kernels 子项目不引入任何 XPU kernel —— 仅为通过 platform check,
+# 让 add_subdirectory(3rdparty/LLM_kernels) 不再 fatal_error。
+# Stage 6 自研 .xpu kernel 时再考虑在 csrc/kernels 下加 kunlun 子目录。
+option(WITH_KUNLUN "Enable Kunlun XPU" OFF)
+
 option(WITH_TESTING "Enable testing" OFF)
 option(CUDA_PTX_VERBOSE_INFO "build nvidia kernels with detailed ptx info" OFF)
 
@@ -56,8 +63,12 @@ elseif(WITH_ACL)
 elseif(WITH_TOPS)
   set(ARCH "gcu300")
   project(LLMKernels LANGUAGES CXX)
+elseif(WITH_KUNLUN)
+  # Stage 0: 仅声明 CXX 工程, 不引入任何昆仑 kernel 源.
+  # XPU_ARCH 由顶层 KsanaLLM/CMakeLists.txt 设置 (kl3), 这里不重复 set.
+  project(LLMKernels LANGUAGES CXX)
 else()
-  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON and Tencent ZiXiao with -DWITH_TOPS=ON")
+  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON, Tencent ZiXiao with -DWITH_TOPS=ON or Baidu Kunlun XPU with -DWITH_KUNLUN=ON")
 endif()
 
 find_package(Git QUIET)
@@ -98,7 +109,13 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 include(base)
 include(nvidia)
 include(ascend)
-include(flashinfer)
+# TODO(kunlun-stage0): flashinfer 仅 CUDA 后端使用 (其 cmake 文件 add_subdirectory 已用 if(WITH_CUDA) 守门),
+# 但 flashinfer.cmake 顶部的 FetchContent_Populate 是无条件的, 在无网环境会永久卡死. 这里收紧一层:
+# 非 CUDA 后端 (NPU/ZiXiao/Kunlun) 直接跳过整个 flashinfer.cmake.
+# 这是 LLM_kernels 上游设计 bug 的临时绕过, 上游修复后可回退此处. 见 tmp/kunlun-stage0-todo.md.
+if(WITH_CUDA)
+  include(flashinfer)
+endif()
 
 if(WITH_CUDA)
   include(fmt)
@@ -151,35 +168,46 @@ endif()
 
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
 
-# Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
-set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
-set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
-set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
+# find_package(Torch) 会触发 Caffe2Config -> public/cuda.cmake -> enable_language(CUDA),
+# TODO(kunlun-stage0): 在没有 nvcc / nvcc 与 GCC 不兼容 / 我们根本不要 CUDA 的环境会直接 fatal.
+# Kunlun (XPU) 后端: LLM_kernels 子项目此阶段不引入任何 kernel, 不依赖 libtorch C++ 接口,
+# 故跳过整段 find_package(Torch) 及其 cleanup. 后续若需 host 侧使用 torch C++ API,
+# 应通过 xpytorch 包提供的等价 cmake 配置, 而非原生 Torch.
+# 这是 LLM_kernels 上游设计 bug (REQUIRED + 强制 enable CUDA) 的临时绕过, 上游修复后可回退.
+# 见 tmp/kunlun-stage0-todo.md.
+if(WITH_CUDA OR WITH_ACL OR WITH_TOPS)
+  # Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
+  set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+  set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+  set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
+  set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
 
-find_package(Torch REQUIRED)
+  find_package(Torch REQUIRED)
 
-# Restore CMAKE_CUDA_ARCHITECTURES to our own setting (Torch may have overwritten it)
-set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
-message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+  # Restore CMAKE_CUDA_ARCHITECTURES to our own setting (Torch may have overwritten it)
+  set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
+  message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
-# Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
-set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
-set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
-set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
-message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
+  # Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
+  set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
+  set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
+  set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
+  message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
 
-# Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
-foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
-  if(TARGET ${_torch_tgt})
-    get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
-    if(_opts)
-      list(FILTER _opts EXCLUDE REGEX "-gencode")
-      set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+  # Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
+  foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
+    if(TARGET ${_torch_tgt})
+      get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
+      if(_opts)
+        list(FILTER _opts EXCLUDE REGEX "-gencode")
+        set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+      endif()
     endif()
-  endif()
-endforeach()
-message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+  endforeach()
+  message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+else()
+  message(STATUS "Skipping find_package(Torch) for non-CUDA/ACL/TOPS backend (current: WITH_KUNLUN=${WITH_KUNLUN})")
+endif()
 
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; from distutils import sysconfig;print(sysconfig.get_python_inc());"
   RESULT_VARIABLE _PYTHON_SUCCESS

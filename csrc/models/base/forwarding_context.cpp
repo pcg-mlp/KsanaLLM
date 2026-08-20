@@ -120,6 +120,11 @@ void ForwardingBuffers::CalculateBuffersShape(std::shared_ptr<Context> context, 
       mla_max_dim = std::max(mla_max_dim, head_num_per_tp * (kv_lora_rank + qk_rope_head_dim));
       shared_buffer_unit_size = std::max(shared_buffer_unit_size, head_num_per_tp * kv_lora_rank);
     }
+#ifdef ENABLE_KUNLUN
+    // Kunlun uses kv_b_proj_combined_ which concatenates kv_b_nope_proj and v_head_proj output:
+    // shape = [tokens, head_num_per_tp * (qk_nope_head_dim + v_head_dim)]
+    mla_max_dim = std::max(mla_max_dim, head_num_per_tp * (qk_nope_head_dim + v_head_dim));
+#endif
     // For buffer reuse of MlaPageAtten, see MlaPagedAttention for details.
     // [absorb_q_nope][absorb_q_rope][quant_absorb_q_nope][quant_absorb_q_rope][flash_mla_workspace]
     const size_t mla_page_attn_size = head_num_per_tp * (kv_lora_rank + qk_rope_head_dim) * 2;
@@ -246,6 +251,16 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
   int max_position_embeddings = model_config.max_position_embeddings;
   float scale_factor = model_config.rope_scaling_factor_config.factor;
 
+  // cos_sin_cache dtype: use runtime compute type (inter_data_type), not weight storage type.
+  // This decouples from weight type conversion and kv-cache quantization.
+  // Exception: DeepSeek YARN models require FP32 cos_sin_cache because the
+  // dpsk_*_rotary_embedding kernels only have <T, float, float, TID> instantiations.
+  DataType cos_sin_cache_type = runtime_config.inter_data_type;
+  if (model_config.rope_scaling_factor_config.type == "yarn" &&
+      model_config.rope_scaling_factor_config.use_deepseek_rope) {
+    cos_sin_cache_type = DataType::TYPE_FP32;
+  }
+
   std::unordered_set<std::string> possible_rope_types = {"su", "longrope", "llama3"};
   if (model_config.use_dsv4_attn) {
     // DSV4: cos_sin_cache uses default rope (for compress_ratio==0 layers),
@@ -271,19 +286,19 @@ void ModelBuffers::Init(std::shared_ptr<Context> context, int rank, const ModelC
         "cos_sin_cache_tensor_",
         {static_cast<size_t>(rotary_embedding),
          static_cast<size_t>(max_position_embeddings) * static_cast<size_t>(scale_factor)},
-        weight_type);
+        cos_sin_cache_type);
     cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
   } else if (model_config.rope_scaling_factor_config.type == "xdrope") {
     TensorBuffer* cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
         "cos_sin_cache_tensor_",
         {static_cast<size_t>(rotary_embedding),
          static_cast<size_t>(max_position_embeddings * model_config.rope_scaling_factor_config.scaling_alpha)},
-        weight_type);
+        cos_sin_cache_type);
     cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
   } else {
     TensorBuffer* cos_sin_cache_buffer = buffer_mgr->CreateBufferTensor(
         "cos_sin_cache_tensor_", {static_cast<size_t>(rotary_embedding), static_cast<size_t>(max_position_embeddings)},
-        weight_type);
+        cos_sin_cache_type);
     cos_sin_cache_tensor_ = cos_sin_cache_buffer->GetTensors()[0];
   }
 }
@@ -410,6 +425,21 @@ void ForwardingContext::UpdateBeforeForward(std::vector<ForwardRequest>& forward
       std::max(model_input->multi_token_request_num, model_input->single_token_request_num),
       std::max(model_input->multi_token_request_max_tokens, model_input->single_token_request_max_tokens),
       model_input->context_kv_cache_block_num + model_input->decode_kv_cache_block_num};
+#elif defined(ENABLE_KUNLUN)
+  // Kunlun reuses the CUDA 13D forward_shape layout (above) and appends one Kunlun-specific
+  // slot [13] for dp_max_prefix_per_req (used by FlashMlaAttentionLayer as cross-attention
+  // max_seq_kv). This avoids maintaining a separate Kunlun layout and lets each Kunlun layer
+  // read the same DP-group-scoped slots as its CUDA counterpart:
+  //   Kunlun consumers:
+  //     PagedAttentionLayer (standard MHA decode): shape[9] = dp_single_token_request_num
+  //     FlashMlaAttentionLayer (MLA flash):
+  //       shape[7]  = dp_multi_token_request_num      (batch_size, = len(qlod)-1)
+  //       shape[8]  = dp_multi_token_request_max_tokens (max_tokens, xfa tile hint)
+  //       shape[11] = dp_total_prefix_len             (total prefix tokens)
+  //       shape[13] = dp_max_prefix_per_req           (cross-attn max_seq_kv, Kunlun-specific)
+  //     flash_mla_attention.cpp: shape[11] = dp_total_prefix_len
+  //   PagedMlaAttentionLayer does not read forward_shape.
+  attn_ctx_.forward_shape.shape.push_back(model_input->dp_max_prefix_per_req);
 #endif
   // Pass the `use_cache` flag to `flag_tensor_`.
   attn_ctx_.flag_tensor.template GetPtr<bool>()[0] = model_input->use_cache;

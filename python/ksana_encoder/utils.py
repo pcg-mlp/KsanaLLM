@@ -64,6 +64,7 @@ def pre_configure_cuda():
     )
     if llm_gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = llm_gpu
+        os.environ["XPU_VISIBLE_DEVICES"] = llm_gpu
 
 
 def _parse_encoder_endpoints(engine_args):
@@ -112,6 +113,7 @@ def start_encoder_processes(engine_args):
         port = base_port + i
         env = os.environ.copy()
         env["CUDA_VISIBLE_DEVICES"] = gpu_id
+        env["XPU_VISIBLE_DEVICES"] = gpu_id
 
         cmd = [
             sys.executable, "-u", encoder_script,

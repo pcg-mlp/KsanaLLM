@@ -19,6 +19,8 @@ class InitDeviceCommunicationRequest : public IpcRequest {
 
 #ifdef ENABLE_CUDA
   ncclUniqueId nccl_uid;
+#elif defined(ENABLE_KUNLUN)
+  BKCLUniqueId bkcl_uid;
 #endif
 };
 

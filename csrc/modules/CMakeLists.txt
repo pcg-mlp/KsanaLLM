@@ -44,4 +44,10 @@ if(WITH_STANDALONE_TEST)
       cpp_test(module_attn_res_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/basic/attn_res_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     endif()
   endif()
+
+  if(WITH_KUNLUN)
+    # Kunlun XPU 复用同一份 MLA 测试(通过 ENABLE_KUNLUN 门控 ForwardWithKunlunMlaTest)。
+    set(MODELS_TEST_LIBS ${TORCH_LIBRARIES} ${TORCH_PYTHON_LIBRARY})
+    cpp_test(module_mla_test SRCS ${PROJECT_SOURCE_DIR}/csrc/modules/attention/multihead_latent_attention_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  endif()
 endif()

@@ -24,7 +24,7 @@ void LookupEmbedding(const aclTensor* input_ids, const aclTensor* embedding_tabl
   ACL_CHECK_RET(aclnnEmbedding(workspace, ws_size, executor, stream));
 }
 
-Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
+Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* device_ctx, void* workspace_ptr) {
   if (tensor.dtype != target_dtype) {
     llm_kernels::utils::ATBOperationExecutor atb_cast_op_executor;
     llm_kernels::ascend::CastParam cast_param;
@@ -55,7 +55,7 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
 }
 
 Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<size_t>& permutation, Stream& stream,
-               void* workspace_ptr) {
+               void* device_ctx, void* workspace_ptr) {
   std::vector<size_t> input_shape = input_tensor.shape;
   std::vector<size_t> output_shape = input_tensor.shape;
   atb::infer::TransposeParam param;
@@ -121,7 +121,7 @@ template class ArgMaxATBExecutor<float>;
 
 template <typename T>
 Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
-              void* buffer_ptr) {
+              void* device_ctx, void* buffer_ptr) {
   if (std::is_same<T, float>::value) {
     int32_t rank;
     GetDevice(&rank);
@@ -135,7 +135,7 @@ Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size
 
 #define INSTANTIATE_ARG_MAX(T)                                                                                    \
   template Status ArgMax<T>(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, \
-                            Stream& stream, void* buffer_ptr);
+                            Stream& stream, void* device_ctx, void* buffer_ptr);
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(float16);

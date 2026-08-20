@@ -2,8 +2,10 @@
 
 ==============================================================================*/
 #include "connector/communicator/communicator_manager.h"
-#include "connector/communicator/nvida/nccl_communicator.h"
-#include "connector/communicator/nvida/nccl_ipc_proxy.h"
+#ifdef ENABLE_CUDA
+#  include "connector/communicator/nvida/nccl_communicator.h"
+#  include "connector/communicator/nvida/nccl_ipc_proxy.h"
+#endif
 #include "connector/communicator/zmq/zmq_communicator.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "utils/logger.h"

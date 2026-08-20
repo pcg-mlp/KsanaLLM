@@ -32,6 +32,16 @@
 
 #include <gtest/gtest.h>
 
+// CUDA-only: this test includes <cuda_runtime.h> and exercises real
+// CUDA-runtime semantics (cudaPointerGetAttributes, cross-device cudaMemcpy,
+// cudaSetDevice to a second GPU). On non-CUDA backends (e.g. Kunlun) those
+// premises do not hold — the CUDA shim reports >= 2 devices but rejects
+// cudaSetDevice(1) with cudaErrorNotSupported (801) — so the whole translation
+// unit is compiled out there. The build system also only registers this test
+// under WITH_CUDA (see CMakeLists.txt); this guard is defense-in-depth so the
+// file degrades to a no-op if it is ever compiled without ENABLE_CUDA.
+#ifdef ENABLE_CUDA
+
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <vector>
@@ -125,3 +135,5 @@ TEST(CrossDeviceCopyContract, SyncCopyAfterSetDeviceLandsBytes) {
 
   cudaFree(dev1_buf);
 }
+
+#endif  // ENABLE_CUDA

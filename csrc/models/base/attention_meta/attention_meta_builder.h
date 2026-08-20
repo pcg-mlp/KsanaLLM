@@ -40,6 +40,8 @@ struct AttentionBuilderConfig {
   Event& kvcache_offset_event;
   Event& rotary_embedding_event;
   RunMode run_mode = RunMode::kMain;
+  bool xpu_graph_mode = false;
+  Tensor* graph_rotary_pos_buf_ptr = nullptr;
 };
 
 // Empty base class for all shared attention meta objects.
@@ -84,6 +86,11 @@ struct StandardSharedAttentionMeta : public SharedAttentionMeta {
   Tensor dp_flexible_offset_uint64_tensor;
 
   std::vector<int> input_length_host;
+
+  // KUNLUN: persistent decode rotary staging buffers (avoid per-step allocation +
+  // keep source alive past async H2D since KUNLUN drops the host sync in decode path).
+  std::vector<int64_t> decode_rotary_pos_host;
+  std::vector<int64_t> decode_rotary_mask_ones;
 
   StandardSharedAttentionMeta* GetStandard() override { return this; }
   const StandardSharedAttentionMeta* GetStandard() const override { return this; }

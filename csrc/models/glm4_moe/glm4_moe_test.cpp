@@ -199,7 +199,7 @@ class Glm4MoeTest : public testing::Test {
 
     // ContextDecode forward
     auto forward = std::make_unique<ForwardRequest>();
-    std::vector<int> input_ids = {233, 1203};
+    std::vector<int> input_ids = {233, 1203, 111, 534, 566, 885, 234, 123, 234, 456, 567, 678, 789};
     forward->block_allocator_manager = executor_block_manager;
     forward->forwarding_tokens = std::make_shared<std::vector<int>>(input_ids);
     std::vector<FlexibleCachedCopyTask> flexible_cached_copy_tasks;
@@ -295,7 +295,7 @@ class Glm4MoeTest : public testing::Test {
     // Verify step 1 tokens (multiple valid values due to GPU differences)
     ASSERT_EQ(generated_tokens0.size(), 1u);
     ASSERT_EQ(generated_tokens1.size(), 1u);
-    std::vector<int> valid_step1_tokens = {24923, 5595};
+    std::vector<int> valid_step1_tokens = {367};
     EXPECT_TRUE(std::find(valid_step1_tokens.begin(), valid_step1_tokens.end(), generated_tokens0[0]) !=
                 valid_step1_tokens.end())
         << "step1 generated_tokens0[0] = " << generated_tokens0[0] << " not in valid set";
@@ -321,7 +321,7 @@ class Glm4MoeTest : public testing::Test {
     // Verify step 2 tokens
     ASSERT_EQ(generated_tokens0.size(), 1u);
     ASSERT_EQ(generated_tokens1.size(), 1u);
-    std::vector<int> valid_step2_tokens = {4281, 7919};
+    std::vector<int> valid_step2_tokens = {5431};
     EXPECT_TRUE(std::find(valid_step2_tokens.begin(), valid_step2_tokens.end(), generated_tokens0[0]) !=
                 valid_step2_tokens.end())
         << "step2 generated_tokens0[0] = " << generated_tokens0[0] << " not in valid set";

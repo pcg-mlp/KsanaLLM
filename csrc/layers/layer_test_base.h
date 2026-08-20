@@ -27,6 +27,10 @@
 #  include "kernels/nvidia/kernel_wrapper.h"
 #endif
 
+#ifdef ENABLE_KUNLUN
+#  include "device/kunlun/bkcl_utils.h"
+#endif
+
 namespace ksana_llm {
 
 class LayerTest : public testing::Test {
@@ -78,9 +82,16 @@ class LayerTest : public testing::Test {
     context_->global.reset(new GlobalContext(1, 1, 1, env));
     context_->global->InitDistributedConfig();
 
-    ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
     context_->device = std::make_shared<DeviceContext>(1);
+#ifdef ENABLE_CUDA
+    ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
     context_->device->ext->InitNcclParam(nccl_uid);
+#elif defined(ENABLE_KUNLUN)
+    // Single-card test: mirror production's single-card path. GenerateBKCLUniqueID() is
+    // intentionally skipped because bkcl_get_unique_id() blocks on RDMA rendezvous; InitBkcl
+    // no-ops the actual bkcl_init_rank when world_size <= 1, so a communicator is not created.
+    context_->device->ext->InitBkcl(context_->device->GetDeviceId(), /*world_size=*/1);
+#endif
   }
 
   void TearDown() override {}

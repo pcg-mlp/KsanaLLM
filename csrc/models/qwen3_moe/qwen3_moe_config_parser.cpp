@@ -84,6 +84,12 @@ Status Qwen3MoeConfigParser::ParseMoeConfig(const nlohmann::json &config_json,
     qwen3_moe_config->moe_config.use_vllm_moe = true;
   }
 #endif
+#ifdef ENABLE_KUNLUN
+  // Kunlun: xblas moe_fc_fusion + infer_ops::swiglu (turn=true) expects [gate|up] layout
+  // (aligned with xsglang w13 = [gate_proj | up_proj]). use_vllm_moe=true selects this layout
+  // in qwen3_moe_weight_loader's process_experts_proj.
+  qwen3_moe_config->moe_config.use_vllm_moe = true;
+#endif
 
   KLLM_LOG_INFO << fmt::format(
       "MoE Config: num_experts={}, num_experts_per_tok={}, moe_intermediate_size={}, "

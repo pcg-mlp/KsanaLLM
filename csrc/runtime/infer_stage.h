@@ -3,6 +3,8 @@
 ==============================================================================*/
 #pragma once
 
+#include <cstdint>
+
 namespace ksana_llm {
 
 enum class InferStage {

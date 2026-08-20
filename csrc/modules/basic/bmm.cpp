@@ -27,6 +27,15 @@ Status Bmm::Forward(const Tensor& input, Tensor& output) {
   if (input.shape[1] == weight_.shape[0] && input.shape[2] == weight_.shape[1]) {
     return bmm_layer_->Forward(&input, &weight_, &output);
   }
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun: weight is stored as [B, N, K] (trans_b=true for xblas::fc_batch).
+  // Check: input[B] == weight[B] && input[K] == weight[K(dim2)]
+  if (input.shape[1] == weight_.shape[0] && input.shape[2] == weight_.shape[2]) {
+    return bmm_layer_->Forward(&input, &weight_, &output);
+  }
+#endif
+
   KLLM_THROW("The input shapes: " + Vector2Str(std::vector<size_t>(input.shape)) + " and weight shapes: " +
              Vector2Str(std::vector<size_t>(weight_.shape)) + " of bmm that have not been implemented yet.");
   return Status();

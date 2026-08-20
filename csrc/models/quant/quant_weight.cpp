@@ -776,7 +776,8 @@ Status QuantWeight<T>::ConvertGroupTensor() {
     tensor_manager_->CreateTensorWithSameShape("lm_head.weight", "empty_lm_head_tensor");
     Tensor& lm_head_tensor = weights_map_["lm_head.weight"];
     Tensor& lm_head_transpose_tensor = weights_map_["empty_lm_head_tensor"];
-    Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, context_->device->GetMemoryManageStream());
+    auto& stream = context_->device->GetMemoryManageStream();
+    Permute(lm_head_tensor, lm_head_transpose_tensor, {1, 0}, stream, GetDeviceCtxPtr(context_->device.get(), stream));
     Tensor t = lm_head_transpose_tensor;
     lm_head_transpose_tensor = lm_head_tensor;
     t.shape = {size_t(lm_head_tensor.shape[1]), size_t(lm_head_tensor.shape[0])};
@@ -840,7 +841,8 @@ Status QuantWeight<T>::ConvertFp8E4m3Tensor(const std::string& weight_name, Data
   weight_tensor.shape.insert(weight_tensor.shape.begin(), 1);
   trans_tensor.shape.insert(trans_tensor.shape.begin(), 1);
   // Permute only support 3D trans
-  Permute(weight_tensor, trans_tensor, {0, 2, 1}, context_->device->GetMemoryManageStream());
+  auto& perm_stream = context_->device->GetMemoryManageStream();
+  Permute(weight_tensor, trans_tensor, {0, 2, 1}, perm_stream, GetDeviceCtxPtr(context_->device.get(), perm_stream));
   weight_tensor.shape.erase(weight_tensor.shape.begin());
   trans_tensor.shape.erase(trans_tensor.shape.begin());
 

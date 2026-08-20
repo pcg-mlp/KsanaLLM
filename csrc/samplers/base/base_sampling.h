@@ -34,6 +34,8 @@ struct SamplingDeviceParameter {
   int bs = 0;
   // The max number of input tokens logprobs of reqs.
   int max_input_top_logprobs_num = 0;
+  // Platform-specific kernel context (e.g. xdnn::Context* on Kunlun, nullptr otherwise).
+  void* device_ctx = nullptr;
 };
 
 class BaseSampling {

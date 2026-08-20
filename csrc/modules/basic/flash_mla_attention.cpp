@@ -25,7 +25,7 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
   uint32_t v_head_dim = attn_config.model_config.mla_config.v_head_dim;
 
   // NOTE(karlluo): acsends's image g++ is 9.4.0, it do not support convert
-  // from ‘<brace-enclosed initializer list>’ to ‘std::vector<std::any>’ so
+  // from '<brace-enclosed initializer list>' to 'std::vector<std::any>' so
   // we use push back to make it work.
   std::vector<std::any> attention_param;
   attention_param.push_back(attn_config.model_config.quant_config.method);  // for quant method
@@ -92,6 +92,18 @@ FlashMlaAttention::FlashMlaAttention(const size_t layer_idx, bool is_neox, const
       fmt::format("model.layers.{}.self_attn.kv_b_nope_proj.weight", layer_idx));
   v_head_proj_weight_ = creation_context.base_weight->GetModelWeights(
       fmt::format("model.layers.{}.self_attn.v_head_proj.weight", layer_idx));
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun optimization: use a combined weight that concatenates kv_b_nope_proj and v_head_proj
+  // so that a single matmul produces kv [tokens, heads, qk_nope_head_dim + v_head_dim]
+  // which is the exact input format for dpsk_prefill_rotary_embedding
+  kv_b_proj_combined_ =
+      std::make_shared<Linear>(fmt::format("model.layers.{}.self_attn.kv_b_combined_proj.weight", layer_idx),
+                               creation_context, attn_config.model_config.quant_config.backend);
+  kv_b_proj_combined_weight_ = creation_context.base_weight->GetModelWeights(
+      fmt::format("model.layers.{}.self_attn.kv_b_combined_proj.weight", layer_idx));
+  kv_b_proj_output_dim_ = attn_config.head_num_per_tp * (qk_nope_head_dim + v_head_dim);
+#endif
 }
 
 Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input,
@@ -125,11 +137,39 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
     return Status();
   } else {
     // When prefix cache hits, the following proj must be applied after fetching the prefix from kv cache
-    if (/*dp_total_prefix_tokens*/ attn_ctx.forward_shape.shape[11] == 0) {
+#ifdef ENABLE_KUNLUN
+    const size_t dp_total_prefix_tokens = attn_ctx.forward_shape.shape[11];
+    // Kunlun: always execute kv_b_proj_combined for new tokens here.
+    // Prefix tokens' kv_b_proj will be done inside the layer after gather_cache.
+    //
+    // Buffer placement depends on whether prefix cache is active:
+    //   - With prefix: kv_b_proj output → k_buffer (hidden_buffer_1)
+    //     Step1 reads kv from hidden_buffer_1, writes new k to hidden_buffer_0 (output),
+    //     o_new/o_prefix to hidden_buffer_1, final merge output to hidden_buffer_0.
+    //   - Without prefix: kv_b_proj output → output_tensors (hidden_buffer_0)
+    //     Step1 reads kv from hidden_buffer_0, writes new k to hidden_buffer_1 (k_buffer),
+    //     attention output directly to hidden_buffer_0 (output).
+    //     Constraint: kv input (hidden_buffer_0) ≠ k/v output (hidden_buffer_1/v_buffer) ✓
+    //                 k/v input (hidden_buffer_1/v_buffer) ≠ output (hidden_buffer_0) ✓
+    if (dp_total_prefix_tokens > 0) {
+      k_buffer[0].shape = {k_buffer[0].shape[0], kv_b_proj_output_dim_};
+      STATUS_CHECK_RETURN(kv_b_proj_combined_->Forward(kv_buffer_tensor, k_buffer));
+    } else {
+      output_tensors[0].shape = {output_tensors[0].shape[0], kv_b_proj_output_dim_};
+      STATUS_CHECK_RETURN(kv_b_proj_combined_->Forward(kv_buffer_tensor, output_tensors));
+    }
+#else
+    const size_t dp_total_prefix_tokens = attn_ctx.forward_shape.shape[11];
+#endif
+    if (dp_total_prefix_tokens == 0) {
+#ifdef ENABLE_KUNLUN
+      // Already handled above — no-op for Kunlun in this branch
+#else
       // The quantized result of kv_buffer is stored in the workspace_buffer shared across layers,
       // and immediately required by v_head_proj, so no layer operations can be inserted between them
       STATUS_CHECK_RETURN(kv_b_nope_proj_->Forward(kv_buffer_tensor, output_tensors));
       STATUS_CHECK_RETURN(v_head_proj_->Forward(kv_buffer_tensor, v_buffer));
+#endif
     }
 
     FlashMlaAttentionInputs mla_inputs{
@@ -161,6 +201,20 @@ Status FlashMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
         .v_head_proj_weight = &v_head_proj_weight_,
         .k_buffer = &k_buffer[0],
         .v_buffer = &v_buffer[0],
+#ifdef ENABLE_KUNLUN
+        .dp_input_offset_int32 = &model_input->dp_input_offset_int32_tensor,
+        .dp_prefill_q_offset_int32 = &model_input->dp_prefill_q_offset_int32_tensor,
+        .layer_kv_cache = &standard_shared.layer_kv_cache_ptr,
+        .block_table = &model_input->flash_meta->block_table,
+        .prefix_kv_buffer = &kv_buffer_tensor,
+        .qlod_host_tensor = &model_input->dp_prefill_q_offset_int32_host_tensor,
+        .kvlod_host_tensor = &model_input->dp_input_offset_int32_host_tensor,
+        .layers_slot_mapping = &model_input->layers_slot_mapping,
+        .atb_attention_attr = &model_input->atb_attention_attr,
+        .prefix_kvlod_host_tensor = &model_input->dp_input_prefix_int32_host_tensor,
+        .prefix_kvlod_dev_tensor = &model_input->dp_input_prefix_int32_tensor,
+        .kv_b_proj_combined_weight = &kv_b_proj_combined_weight_,
+#endif
     };
     return flash_mla_attention_layer_->Forward(mla_inputs, &output_tensors[0]);
   }

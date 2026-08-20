@@ -51,6 +51,10 @@ class CommonModelWeightLoaderTest : public testing::Test {
     context_->device = std::make_shared<DeviceContext>(1);
     context_->device->ext->InitNcclParam(nccl_uid);
 #endif
+
+#ifdef ENABLE_KUNLUN
+    context_->device = std::make_shared<DeviceContext>(1);
+#endif
   }
 
   void TearDown() override {}
@@ -886,6 +890,262 @@ TEST_F(CommonModelWeightLoaderTest, AutoMergeWeightTest) {
     EXPECT_TRUE(dev_weights_map.find("single_weight") == dev_weights_map.end());
   }
 
+#endif
+}
+
+// 测试 Host侧预切分 + 整块H2D 优化路径的正确性
+// 验证方法: 对比优化路径（HostTensorParallelSlice2D + MemcpyAsync）与原始路径（Memcpy2DAsync）的结果一致性
+TEST_F(CommonModelWeightLoaderTest, HostTensorParallelSlice2DConsistencyTest) {
+#ifdef ENABLE_KUNLUN
+  constexpr int kDeviceRank0 = 0;
+  constexpr int kDeviceRank1 = 1;
+  constexpr size_t kParaSize = 2;
+
+  CommonModelWeightLoader weight_loader(model_config_, env_, context_);
+
+  // ==================== 测试用例1: RowPara (dim=0切分) ====================
+  // RowPara切分后数据连续，优化路径使用零拷贝指针偏移
+  {
+    const size_t rows = 128;
+    const size_t cols = 64;
+
+    // 创建host tensor并填充确定性数据
+    Tensor host_tensor(MemoryLocation::LOCATION_HOST, TYPE_FP32, {rows, cols});
+    float* host_data = host_tensor.GetPtr<float>();
+    for (size_t i = 0; i < rows * cols; ++i) {
+      host_data[i] = static_cast<float>(i);  // 使用索引作为值，方便验证
+    }
+
+    // 路径A: 使用优化后的 TensorParallelSplit2D（内部走 HostTensorParallelSlice2D + 整块H2D）
+    Tensor dev_tensor_rank0 =
+        weight_loader.TensorParallelSplit2D(host_tensor, kDeviceRank0, kParaSize, TensorParallelMode::RowPara);
+    Tensor dev_tensor_rank1 =
+        weight_loader.TensorParallelSplit2D(host_tensor, kDeviceRank1, kParaSize, TensorParallelMode::RowPara);
+    StreamSynchronize(context_->device->GetMemoryManageStream());
+
+    // 验证shape
+    EXPECT_EQ(dev_tensor_rank0.shape[0], rows / kParaSize);
+    EXPECT_EQ(dev_tensor_rank0.shape[1], cols);
+    EXPECT_EQ(dev_tensor_rank1.shape[0], rows / kParaSize);
+    EXPECT_EQ(dev_tensor_rank1.shape[1], cols);
+
+    // 将device数据拷回host验证
+    const size_t slice_rows = rows / kParaSize;
+    std::vector<float> result_rank0(slice_rows * cols);
+    std::vector<float> result_rank1(slice_rows * cols);
+    MemcpyAsync(result_rank0.data(), dev_tensor_rank0.GetPtr<void>(), dev_tensor_rank0.GetTotalBytes(),
+                MEMCPY_DEVICE_TO_HOST, context_->device->GetMemoryManageStream());
+    MemcpyAsync(result_rank1.data(), dev_tensor_rank1.GetPtr<void>(), dev_tensor_rank1.GetTotalBytes(),
+                MEMCPY_DEVICE_TO_HOST, context_->device->GetMemoryManageStream());
+    StreamSynchronize(context_->device->GetMemoryManageStream());
+
+    // 路径B: 手动计算期望结果（模拟原始Memcpy2D逻辑）
+    // RowPara rank0: 取前 slice_rows 行
+    for (size_t i = 0; i < slice_rows; ++i) {
+      for (size_t j = 0; j < cols; ++j) {
+        float expected = static_cast<float>(i * cols + j);
+        EXPECT_EQ(result_rank0[i * cols + j], expected) << "RowPara rank0 mismatch at [" << i << "," << j << "]";
+      }
+    }
+    // RowPara rank1: 取后 slice_rows 行
+    for (size_t i = 0; i < slice_rows; ++i) {
+      for (size_t j = 0; j < cols; ++j) {
+        float expected = static_cast<float>((i + slice_rows) * cols + j);
+        EXPECT_EQ(result_rank1[i * cols + j], expected) << "RowPara rank1 mismatch at [" << i << "," << j << "]";
+      }
+    }
+  }
+
+  // ==================== 测试用例2: ColPara (dim=1切分) ====================
+  // ColPara切分后数据不连续，优化路径在host侧gather到连续buffer
+  {
+    const size_t rows = 64;
+    const size_t cols = 128;
+
+    // 创建host tensor并填充确定性数据
+    Tensor host_tensor(MemoryLocation::LOCATION_HOST, TYPE_FP32, {rows, cols});
+    float* host_data = host_tensor.GetPtr<float>();
+    for (size_t i = 0; i < rows * cols; ++i) {
+      host_data[i] = static_cast<float>(i);
+    }
+
+    // 使用优化后的 TensorParallelSplit2D
+    Tensor dev_tensor_rank0 =
+        weight_loader.TensorParallelSplit2D(host_tensor, kDeviceRank0, kParaSize, TensorParallelMode::ColPara);
+    Tensor dev_tensor_rank1 =
+        weight_loader.TensorParallelSplit2D(host_tensor, kDeviceRank1, kParaSize, TensorParallelMode::ColPara);
+    StreamSynchronize(context_->device->GetMemoryManageStream());
+
+    // 验证shape
+    const size_t slice_cols = cols / kParaSize;
+    EXPECT_EQ(dev_tensor_rank0.shape[0], rows);
+    EXPECT_EQ(dev_tensor_rank0.shape[1], slice_cols);
+    EXPECT_EQ(dev_tensor_rank1.shape[0], rows);
+    EXPECT_EQ(dev_tensor_rank1.shape[1], slice_cols);
+
+    // 将device数据拷回host验证
+    std::vector<float> result_rank0(rows * slice_cols);
+    std::vector<float> result_rank1(rows * slice_cols);
+    MemcpyAsync(result_rank0.data(), dev_tensor_rank0.GetPtr<void>(), dev_tensor_rank0.GetTotalBytes(),
+                MEMCPY_DEVICE_TO_HOST, context_->device->GetMemoryManageStream());
+    MemcpyAsync(result_rank1.data(), dev_tensor_rank1.GetPtr<void>(), dev_tensor_rank1.GetTotalBytes(),
+                MEMCPY_DEVICE_TO_HOST, context_->device->GetMemoryManageStream());
+    StreamSynchronize(context_->device->GetMemoryManageStream());
+
+    // 验证: ColPara rank0取每行的前 slice_cols 列
+    for (size_t i = 0; i < rows; ++i) {
+      for (size_t j = 0; j < slice_cols; ++j) {
+        float expected = static_cast<float>(i * cols + j);
+        EXPECT_EQ(result_rank0[i * slice_cols + j], expected) << "ColPara rank0 mismatch at [" << i << "," << j << "]";
+      }
+    }
+    // 验证: ColPara rank1取每行的后 slice_cols 列
+    for (size_t i = 0; i < rows; ++i) {
+      for (size_t j = 0; j < slice_cols; ++j) {
+        float expected = static_cast<float>(i * cols + (j + slice_cols));
+        EXPECT_EQ(result_rank1[i * slice_cols + j], expected) << "ColPara rank1 mismatch at [" << i << "," << j << "]";
+      }
+    }
+  }
+
+  // ==================== 测试用例3: ColPara 大tensor (模拟真实权重) ====================
+  // 模拟 Qwen MoE down_proj [4096, 2048] TP=4
+  {
+    const size_t rows = 4096;
+    const size_t cols = 2048;
+    const size_t para_size = 4;
+
+    Tensor host_tensor(MemoryLocation::LOCATION_HOST, TYPE_FP16, {rows, cols});
+    uint16_t* host_data = host_tensor.GetPtr<uint16_t>();
+    // 用低16位填充确定性模式
+    for (size_t i = 0; i < rows * cols; ++i) {
+      host_data[i] = static_cast<uint16_t>(i & 0xFFFF);
+    }
+
+    // 对每个rank做切分
+    const size_t slice_cols = cols / para_size;
+    for (size_t rank = 0; rank < para_size; ++rank) {
+      Tensor dev_tensor = weight_loader.TensorParallelSplit2D(host_tensor, static_cast<int>(rank), para_size,
+                                                              TensorParallelMode::ColPara);
+      StreamSynchronize(context_->device->GetMemoryManageStream());
+
+      EXPECT_EQ(dev_tensor.shape[0], rows);
+      EXPECT_EQ(dev_tensor.shape[1], slice_cols);
+
+      // 拷回验证
+      std::vector<uint16_t> result(rows * slice_cols);
+      MemcpyAsync(result.data(), dev_tensor.GetPtr<void>(), dev_tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
+                  context_->device->GetMemoryManageStream());
+      StreamSynchronize(context_->device->GetMemoryManageStream());
+
+      // 抽样验证（全量验证太慢）
+      const size_t col_offset = slice_cols * rank;
+      for (size_t i = 0; i < rows; i += 256) {         // 每256行验证一次
+        for (size_t j = 0; j < slice_cols; j += 64) {  // 每64列验证一次
+          size_t src_idx = i * cols + (j + col_offset);
+          uint16_t expected = static_cast<uint16_t>(src_idx & 0xFFFF);
+          EXPECT_EQ(result[i * slice_cols + j], expected)
+              << "Large ColPara rank" << rank << " mismatch at [" << i << "," << j << "]";
+        }
+      }
+    }
+  }
+
+  // ==================== 测试用例4: RowPara 大tensor TP=4 ====================
+  {
+    const size_t rows = 4096;
+    const size_t cols = 2048;
+    const size_t para_size = 4;
+
+    Tensor host_tensor(MemoryLocation::LOCATION_HOST, TYPE_FP16, {rows, cols});
+    uint16_t* host_data = host_tensor.GetPtr<uint16_t>();
+    for (size_t i = 0; i < rows * cols; ++i) {
+      host_data[i] = static_cast<uint16_t>(i & 0xFFFF);
+    }
+
+    const size_t slice_rows = rows / para_size;
+    for (size_t rank = 0; rank < para_size; ++rank) {
+      Tensor dev_tensor = weight_loader.TensorParallelSplit2D(host_tensor, static_cast<int>(rank), para_size,
+                                                              TensorParallelMode::RowPara);
+      StreamSynchronize(context_->device->GetMemoryManageStream());
+
+      EXPECT_EQ(dev_tensor.shape[0], slice_rows);
+      EXPECT_EQ(dev_tensor.shape[1], cols);
+
+      // 拷回验证
+      std::vector<uint16_t> result(slice_rows * cols);
+      MemcpyAsync(result.data(), dev_tensor.GetPtr<void>(), dev_tensor.GetTotalBytes(), MEMCPY_DEVICE_TO_HOST,
+                  context_->device->GetMemoryManageStream());
+      StreamSynchronize(context_->device->GetMemoryManageStream());
+
+      // 抽样验证
+      const size_t row_offset = slice_rows * rank;
+      for (size_t i = 0; i < slice_rows; i += 256) {
+        for (size_t j = 0; j < cols; j += 256) {
+          size_t src_idx = (i + row_offset) * cols + j;
+          uint16_t expected = static_cast<uint16_t>(src_idx & 0xFFFF);
+          EXPECT_EQ(result[i * cols + j], expected)
+              << "Large RowPara rank" << rank << " mismatch at [" << i << "," << j << "]";
+        }
+      }
+    }
+  }
+
+  // ==================== 测试用例5: HostTensorParallelSlice2D 直接验证 ====================
+  // 直接验证host侧切分结果的数据正确性（不经过device）
+  {
+    const size_t rows = 8;
+    const size_t cols = 16;
+
+    Tensor host_tensor(MemoryLocation::LOCATION_HOST, TYPE_FP32, {rows, cols});
+    float* host_data = host_tensor.GetPtr<float>();
+    for (size_t i = 0; i < rows * cols; ++i) {
+      host_data[i] = static_cast<float>(i);
+    }
+
+    // RowPara: 验证零拷贝指针正确性
+    {
+      Tensor slice = weight_loader.HostTensorParallelSlice2D(host_tensor, 0, 2, TensorParallelMode::RowPara);
+      EXPECT_EQ(slice.shape[0], rows / 2);
+      EXPECT_EQ(slice.shape[1], cols);
+      // 零拷贝: 指针应该指向原始tensor偏移处
+      EXPECT_EQ(slice.GetPtr<float>(), host_data);
+
+      Tensor slice1 = weight_loader.HostTensorParallelSlice2D(host_tensor, 1, 2, TensorParallelMode::RowPara);
+      EXPECT_EQ(slice1.GetPtr<float>(), host_data + (rows / 2) * cols);
+    }
+
+    // ColPara: 验证gather结果
+    {
+      Tensor slice = weight_loader.HostTensorParallelSlice2D(host_tensor, 0, 2, TensorParallelMode::ColPara);
+      EXPECT_EQ(slice.shape[0], rows);
+      EXPECT_EQ(slice.shape[1], cols / 2);
+      // ColPara分配了新buffer，指针不同
+      EXPECT_NE(static_cast<void*>(slice.GetPtr<float>()), static_cast<void*>(host_data));
+
+      // 验证数据: rank0取每行前半列
+      const size_t slice_cols = cols / 2;
+      const float* slice_data = slice.GetPtr<float>();
+      for (size_t i = 0; i < rows; ++i) {
+        for (size_t j = 0; j < slice_cols; ++j) {
+          float expected = static_cast<float>(i * cols + j);
+          EXPECT_EQ(slice_data[i * slice_cols + j], expected)
+              << "Direct ColPara rank0 mismatch at [" << i << "," << j << "]";
+        }
+      }
+
+      // rank1取每行后半列
+      Tensor slice1 = weight_loader.HostTensorParallelSlice2D(host_tensor, 1, 2, TensorParallelMode::ColPara);
+      const float* slice1_data = slice1.GetPtr<float>();
+      for (size_t i = 0; i < rows; ++i) {
+        for (size_t j = 0; j < slice_cols; ++j) {
+          float expected = static_cast<float>(i * cols + j + slice_cols);
+          EXPECT_EQ(slice1_data[i * slice_cols + j], expected)
+              << "Direct ColPara rank1 mismatch at [" << i << "," << j << "]";
+        }
+      }
+    }
+  }
 #endif
 }
 

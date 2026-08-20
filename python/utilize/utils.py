@@ -52,6 +52,37 @@ def partial_json_loads(input_str: str, flags: Allow) -> tuple[Any, int]:
         raise
 
 
+def sync_visible_devices():
+    """Force-sync XPU_VISIBLE_DEVICES and CUDA_VISIBLE_DEVICES.
+
+    On Kunlun P800, torch_xmlir rewrites torch.cuda.* to XPU hardware, but
+    torch.cuda.device_count() reads CUDA_VISIBLE_DEVICES while the C++ XPU
+    runtime reads XPU_VISIBLE_DEVICES.  This function forces both into sync.
+
+    Strategy (XPU takes priority):
+      1. XPU_VISIBLE_DEVICES set -> force CUDA_VISIBLE_DEVICES to match.
+      2. Only CUDA_VISIBLE_DEVICES set -> copy to XPU_VISIBLE_DEVICES.
+      3. Neither set -> no-op.
+
+    Must be called BEFORE `import torch`.
+    """
+    xpu_val = os.environ.get("XPU_VISIBLE_DEVICES")
+    cuda_val = os.environ.get("CUDA_VISIBLE_DEVICES")
+
+    if xpu_val is not None:
+        if cuda_val is not None and cuda_val != xpu_val:
+            print(
+                f"[WARNING] CUDA_VISIBLE_DEVICES={cuda_val!r} conflicts with "
+                f"XPU_VISIBLE_DEVICES={xpu_val!r}. "
+                f"Forcing CUDA_VISIBLE_DEVICES={xpu_val!r} (XPU takes priority).",
+                file=sys.stderr,
+                flush=True,
+            )
+        os.environ["CUDA_VISIBLE_DEVICES"] = xpu_val
+    elif cuda_val is not None:
+        os.environ["XPU_VISIBLE_DEVICES"] = cuda_val
+
+
 def random_uuid() -> str:
     return str(uuid4().hex)
 

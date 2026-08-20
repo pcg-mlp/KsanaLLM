@@ -98,9 +98,18 @@ class CommonModelWeightLoader {
   // 2D张量并行切分：根据tp_mode沿指定维度将2D张量均匀切分为para_size份，返回第dev_rank份的设备张量
   // - RowPara模式：沿第0维切分
   // - ColPara模式：沿第1维切分
-  // 使用Memcpy2D实现高效的二维切片拷贝
+  // 当源tensor在HOST上且编译为KUNLUN后端时，使用Host侧预切分+整块H2D优化路径
   // 由TensorParallelSplit自动调用
   Tensor TensorParallelSplit2D(const Tensor& input_tensor, int dev_rank, size_t para_size, TensorParallelMode tp_mode);
+
+#ifdef ENABLE_KUNLUN
+  // Host侧张量并行切分（仅Kunlun后端）：在CPU上完成切分，返回连续内存的host tensor
+  // RowPara: 零拷贝（返回指向原始内存的shared buffer tensor）
+  // ColPara: 分配新host buffer + 逐行gather到连续内存
+  // 目的：规避昆仑XPU Runtime无原生2D memcpy导致的逐行API调用开销
+  Tensor HostTensorParallelSlice2D(const Tensor& input_tensor, int dev_rank, size_t para_size,
+                                   TensorParallelMode tp_mode);
+#endif
 
   std::shared_ptr<BaseModelConfig> model_config_;
   std::shared_ptr<Environment> env_;

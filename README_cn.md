@@ -42,6 +42,7 @@
 
  - Nvidia GPUs: A10, A100, L40, L20, H20
  - Huawei Ascend NPUs: 910B2C
+ - Kunlunxin XPU: P800
 
 ## 使用
 
@@ -138,6 +139,37 @@ pip install torch_npu-2.1.0.post6-cp310-cp310-manylinux_2_17_x86_64.manylinux201
 pip install -r requirements.txt
 ```
 
+#### 1.5 昆仑芯 XPU
+
+**镜像地址：**
+
+| 镜像地址 | 版本 |
+| - | - |
+| [http://mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1](http://mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1) | 0.1.1 |
+
+容器创建示例：
+```bash
+CONT_NAME="cont_name"
+CONT_IMAGE="mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1"
+PATH_MAPPING="-v /data1:/data1"
+sudo docker run -d -it \
+       --net="host" \
+       --user="root" \
+       --name="$CONT_NAME" \
+       --shm-size=10g \
+       --ulimit memlock=-1 \
+       --ulimit stack=67108864 \
+       --privileged=true \
+       --cap-add=ALL \
+       $(for i in $(seq 0 7); do echo -n "--device=/dev/xpu${i}:/dev/xpu${i} "; done) \
+       --device=/dev/xpuctrl:/dev/xpuctrl \
+       --security-opt seccomp:unconfined \
+       --security-opt label=disable \
+       $PATH_MAPPING \
+       $CONT_IMAGE \
+       /bin/bash
+```
+
 ### 2. 下载源码
 
 ```bash
@@ -167,13 +199,19 @@ cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 ```
 
-#### 3.3 如果需要使用腾讯内部的依赖库，例如北极星名字服务，需要开启以下选项:
+#### 3.3 昆仑芯 XPU
+
+```bash
+cmake -DWITH_KUNLUN=ON -DWITH_TESTING=OFF -DWITH_STANDALONE_TEST=OFF -DCMAKE_BUILD_TYPE=Release .. && make -j
+```
+
+#### 3.4 如果需要使用腾讯内部的依赖库，例如北极星名字服务，需要开启以下选项:
 
 ```bash
 cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
 ```
 
-#### 3.4 启用 Global Cache Connector（Mooncake Store 后端）
+#### 3.5 启用 Global Cache Connector（Mooncake Store 后端）
 
 Global Cache Connector 使用 [Mooncake Store](https://github.com/kvcache-ai/Mooncake) 作为存储后端，基于 RDMA 实现 KV cache 全局存取。
 
@@ -245,6 +283,9 @@ git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
 # ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml's tensor_para_size equal the GPUs/NPUs number
 export CUDA_VISIBLE_DEVICES=xx
+
+# 昆仑芯 XPU 可使用 CUDA_VISIBLE_DEVICES 或 XPU_VISIBLE_DEVICES 控制卡数，两者任选其一设置
+# export XPU_VISIBLE_DEVICES=0
 
 # launch server
 python serving_server.py \

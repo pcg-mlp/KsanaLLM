@@ -53,7 +53,7 @@ void EventCreateT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event) {
 }
 
 template <>
-void EventCreateWithFlagsT(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags) {
+void EventCreateWithFlagsT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags) {
   unsigned int acl_flags = ACL_EVENT_TIME_LINE;
   if (flags & EVENT_DISABLE_TIMING) {
     acl_flags = acl_flags ^ ACL_EVENT_TIME_LINE;

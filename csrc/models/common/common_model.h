@@ -3,8 +3,15 @@
 ==============================================================================*/
 #pragma once
 
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#ifdef ENABLE_KUNLUN
+#  include <cuda_runtime.h>
+#endif
 
 #include "cache_manager/cache_layout/base_cache_layout.h"
 #include "configure/context.h"
@@ -83,6 +90,9 @@ class CommonModel : public BaseModel, public ModelDelegate {
 
   // refer
   // github huggingface/transformers main/src/transformers/models/llama/modeling_llama.py#L942
+  // prev_ring_dev: build-ahead (Phase 1) previous-step sampler ring [1 + 2*max_bs] int64
+  // ([count, (req_id, token)*]); nullptr disables the device-side placeholder backfill. Passed
+  // by the executor from Sampler::GetRing(); consumed by XpuReplaceLastToken before emb lookup.
   Status Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight, std::vector<ForwardRequest>& forward_reqs,
                  HiddenUnitDeviceBuffer* hidden_unit, RunMode run_mode = RunMode::kMain, size_t model_input_slot = 0,
                  const int64_t* prev_ring_dev = nullptr, bool gpu_input_already_prepared = false) override;
@@ -128,6 +138,9 @@ class CommonModel : public BaseModel, public ModelDelegate {
   // Execute the forward of specific layers.
   virtual Status LayerForward(ForwardingContext& forwarding_context, const RunMode run_mode = RunMode::kMain) = 0;
 
+  // XPU Graph wrapper: handles capture/replay, then falls through to LayerForward.
+  Status LayerForwardWithGraph(ForwardingContext& forwarding_context, const RunMode run_mode);
+
   // Execute the lm head, and generate the logits.
   virtual Status LmHead(ForwardingContext& forwarding_context, std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                         std::vector<ForwardRequest>& forward_reqs, RunMode run_mode);
@@ -136,6 +149,19 @@ class CommonModel : public BaseModel, public ModelDelegate {
   // Get tensors hidden buffer.
   std::vector<Tensor>& GetHiddenUnitBufferTensors(ForwardingContext& forwarding_context) override;
   void SetHiddenUnitBufferTensors(HiddenUnitDeviceBuffer* const hidden_unit) override;
+
+#ifdef ENABLE_KUNLUN
+  // XPU Graph state — shared across all models, initialized from runtime_config_.
+  bool xpu_graph_enabled_{false};
+  // 流级失败（BeginCapture/EndCapture）才置位：此时 capture 机制本身不可用，全局降级为 eager。
+  bool graph_replay_disabled_{false};
+  // 单图失败（Instantiate）只禁用对应 batch size，其余 bs 仍可正常捕获/回放。
+  std::unordered_set<int> graph_disabled_bs_;
+  std::vector<int> cuda_graph_bs_;
+  std::unordered_map<int, int> warmup_counts_;
+  std::unordered_map<int, void*> decode_graph_execs_;
+  static constexpr int kXpuGraphWarmupSteps = 3;
+#endif
 
  public:
   using BaseModel::context_;

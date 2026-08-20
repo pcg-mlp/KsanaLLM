@@ -39,7 +39,7 @@ void PrepareKVCacheBlocks(StandardAttentionMeta& meta, StandardSharedAttentionMe
   shared_meta.kv_cache_offset.shape[0] += meta.kv_cache_offset.GetElementNumber();
   MemcpyAsync(meta.kv_cache_offset.GetPtr<void>(), kv_cache_offset_host.data(),
               kv_cache_offset_host.size() * sizeof(decltype(kv_cache_offset_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-              config.context->device->GetD2HStream());
+              config.context->device->GetH2DStream());
 
   const int total_block_num = kv_cache_offset_host.back();
   const bool host_fill_all_layers =
@@ -82,20 +82,20 @@ void PrepareKVCacheBlocks(StandardAttentionMeta& meta, StandardSharedAttentionMe
     current_kv_list->shape[0] += current_info_kv_list->GetElementNumber();
     MemcpyAsync(current_info_kv_list->GetPtr<void>(), kv_list_host.data(),
                 kv_list_host.size() * sizeof(decltype(kv_list_host)::value_type), MEMCPY_HOST_TO_DEVICE,
-                config.context->device->GetD2HStream());
+                config.context->device->GetH2DStream());
 
 #ifdef ENABLE_CUDA
     if (!host_fill_all_layers && total_block_num > 0 && config.layer_num_on_node > 1) {
       InvokeProcessKvList(current_info_kv_list->GetPtr<void*>(), config.layer_num_on_node, total_block_num * 2,
-                          config.block_size, config.context->device->GetD2HStream().Get());
+                          config.block_size, config.context->device->GetH2DStream().Get());
     }
 #endif
   }
 
-#ifdef ENABLE_ACL
-  StreamSynchronize(config.context->device->GetD2HStream());
+#if defined(ENABLE_ACL)
+  StreamSynchronize(config.context->device->GetH2DStream());
 #endif
-  EventRecord(config.kvcache_offset_event, config.context->device->GetD2HStream());
+  EventRecord(config.kvcache_offset_event, config.context->device->GetH2DStream());
 }
 
 void PrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttentionMeta& shared_meta,
@@ -158,10 +158,13 @@ void PrepareKVCacheBlockTable(StandardAttentionMeta& meta, StandardSharedAttenti
               block_table_host.size() * sizeof(decltype(block_table_host)::value_type), MEMCPY_HOST_TO_DEVICE,
               config.context->device->GetH2DStream());
 
-#ifdef ENABLE_ACL
-  StreamSynchronize(config.context->device->GetD2HStream());
+#if defined(ENABLE_ACL)
+  StreamSynchronize(config.context->device->GetH2DStream());
 #endif
-  EventRecord(config.kvcache_offset_event, config.context->device->GetD2HStream());
+  // Event must live on H2DStream (where block_table's MemcpyAsync above ran),
+  // not D2HStream — otherwise StreamWaitEvent on the compute stream returns
+  // instantly and compute may read block_table before the copy completes.
+  EventRecord(config.kvcache_offset_event, config.context->device->GetH2DStream());
 }
 
 }  // namespace attention_meta_builder_detail

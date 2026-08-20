@@ -350,7 +350,6 @@ static Status SerializeInferRequests(
 
     // kv_cached_token_num
     SerializePod<int>(snap ? snap->kv_cached_token_num : req->kv_cached_token_num, ptr, offset);
-
     // kv_from_remote (pd_v2). Mirrors the patch path; see SerializeInferRequestPatches.
     // Without this, the FIRST-time send of a PD request lands on the
     // Executor with kv_from_remote=false, which routes ForwardRequest::GetType

@@ -81,7 +81,7 @@ class ModelInput {
   void PrepareCudagraphParams(const std::vector<ForwardRequest>& forward_reqs);
 #endif
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
   void PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward);
 #endif
 
@@ -114,6 +114,9 @@ class ModelInput {
 
   // The total dp prefix length.
   size_t dp_total_prefix_len = 0;
+
+  // The max prefix length among all dp requests (for prefix cross-attention max_kv_tokens).
+  size_t dp_max_prefix_per_req = 0;
 
   // current request batchsize matches cudagraph catpure range
   bool is_cudagraph_batchsize_matched = false;
@@ -155,6 +158,20 @@ class ModelInput {
 
   Tensor dp_prefill_q_offset_uint64_host;
   Tensor dp_prefill_q_offset_uint64_tensor;
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun-specific int32 tensors for xfa VectorParam (qlod/kvlod/prefix_kvlod).
+  // device tensors are packed into input_pack_device_ (see BindInputPackDeviceViews).
+  // host tensors are standalone LOCATION_HOST (directly consumed by layer ForwardT).
+  Tensor dp_prefill_q_offset_int32_tensor;   // device: qlod
+  Tensor dp_prefill_q_offset_int32_host_tensor;  // host: qlod
+
+  Tensor dp_input_offset_int32_tensor;        // device: kvlod
+  Tensor dp_input_offset_int32_host_tensor;       // host: kvlod
+
+  Tensor dp_input_prefix_int32_tensor;           // device: prefix_kvlod (packed into input_pack_device_)
+  Tensor dp_input_prefix_int32_host_tensor;      // host: prefix_kvlod [0, prefix_len_0, ...]
+#endif
 
   // The 3-dimentional index position for multimodal rotarty embedding.
   Tensor dp_mrotary_embedding_pos;
@@ -205,10 +222,18 @@ class ModelInput {
   Event kvcache_offset_event;
   Event rotary_embedding_event;
   Event input_ids_event;
+#if defined(ENABLE_KUNLUN)
+  // Signaled when all H2D copies in PrepareATBKVCache complete.
+  // compute stream waits on this before first attention layer instead of
+  // blocking the host with StreamSynchronize(H2DStream).
+  Event h2d_atb_event;
+#endif
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
   // record all reqs token number on host, shape: [batch_size]
   Tensor seq_len_host;
+  // device mirror of seq_len_host, prepared once per batch in PrepareATBKVCache
+  Tensor context_len_device;
   // Tensor to save kv cache base. detail doc please refer:
   // docs/Technology/kvcache-relationship-between-ascend-atb-and-ksana.md shape: [total_k/v_blocks, block_token_num,
   // kv_head_num, head_dim]
@@ -225,6 +250,25 @@ class ModelInput {
   std::vector<int32_t> layers_block_table_host;
   Tensor layers_block_table;
 
+  // Cache signature for the P2 block-table skip-if-unchanged optimization. Captures batch_size and each
+  // selected request's block-id vector; when unchanged across steps we skip the host triple-loop construction
+  // and the H2D copy. Not updated under xpu_graph_mode_ (graph capture/replay must always see the fresh table).
+  std::vector<int32_t> block_table_cache_sig_;
+
+  // Reusable all-ones host buffer for PrepareDecodeRotary's rotary mask (P3). The decode mask is always all
+  // ones and never mutated; we reuse this buffer across steps to avoid the per-step vector allocation + fill(1).
+  // The H2D is still performed each step because PrepareFlashRotary (prefill) writes non-ones into the same
+  // device buffer, so a skip would read stale prefill data.
+  std::vector<int64_t> decode_rotary_mask_ones_;
+
+  // Reusable host staging buffer for PrepareDecodeRotary's rotary positions. On KUNLUN that path no longer
+  // does a host-side StreamSynchronize after the H2D (it publishes rotary_embedding_event and lets the
+  // consumer StreamWaitEvent on it instead), so the copy's *source* must outlive the enqueue: a function
+  // local vector would be freed the instant PrepareDecodeRotary returns, while the DMA may still be in
+  // flight. Keeping it as a member also removes a per-step allocation. Safe to overwrite on the next step
+  // because the intervening forward has already waited on rotary_embedding_event.
+  std::vector<int64_t> decode_rotary_pos_host_;
+
   // since layer's forward only support Tensor as input (nothing to do with karlluo), such crappy design ignore runtime
   // attribute, so we need a tensor to be attribute.
   // shape: [2]; 0: layers_slot_mapping_dim_1; 1: max_num_blocks_per_query
@@ -235,6 +279,13 @@ class ModelInput {
 
   std::vector<void*> kv_cache_ptrs;
   Tensor kv_cache_ptrs_tensor;
+
+  // XPU Graph mode: fixed-address device buffers for decode graph capture/replay.
+  // Activated by KSANA_DECODE_GRAPH=1 env var.
+  bool xpu_graph_mode_{false};
+  size_t graph_fixed_max_blocks_per_query_{0};
+  Tensor graph_rotary_pos_buf;
+  Tensor graph_seq_len_buf;
 #endif
   // Shared attention tensors, flexible-cache tensors, and lazy-initialized kv-cache pointer state.
   std::unique_ptr<SharedAttentionMeta> shared_attention_meta;
@@ -306,6 +357,12 @@ class ModelInput {
     size_t cur_batch_pairs_bytes = 0;
     size_t logits_idx_bytes = 0;
     size_t batch_offset_bytes = 0;  // (max_batch + 1) * sizeof(uint64_t)
+#ifdef ENABLE_KUNLUN
+    size_t off_dp_prefill_q_offset_int32 = 0;
+    size_t off_dp_input_offset_int32 = 0;
+    size_t off_dp_input_prefix_int32 = 0;
+    size_t int32_offset_bytes = 0;  // (max_batch + 1) * sizeof(int32_t)
+#endif
   };
   InputPackLayout input_pack_layout_;
   Tensor input_pack_host_;

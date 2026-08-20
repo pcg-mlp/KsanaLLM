@@ -58,17 +58,27 @@ void StandardPagedAttentionMetaBuilder::PrepareDecodeRotary(PagedAttentionMeta& 
     total_input_len += req->forwarding_tokens->size() - req->kv_cached_token_num;
   }
 
-  // prepare mask
-  std::vector<int64_t> rotary_mask_host(total_input_len, 1);
+  // prepare mask. The decode mask is always all ones; reuse a persistent host buffer to avoid the per-step
+  // vector allocation + fill(1). The H2D is still required each step: PrepareFlashRotary (prefill) writes
+  // non-ones into the same device buffer, so skipping would read stale prefill data.
+  if (standard_shared.decode_rotary_mask_ones.size() < total_input_len) {
+    standard_shared.decode_rotary_mask_ones.assign(total_input_len, 1);
+  }
   meta.rotary_embedding_mask = standard_shared.rotary_embedding_mask.GetView(
-      {rotary_mask_host.size()}, standard_shared.rotary_embedding_mask.shape[0]);
+      {total_input_len}, standard_shared.rotary_embedding_mask.shape[0]);
   standard_shared.rotary_embedding_mask.shape[0] += meta.rotary_embedding_mask.GetElementNumber();
-  MemcpyAsync(meta.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
-              sizeof(decltype(rotary_mask_host)::value_type) * rotary_mask_host.size(), MEMCPY_HOST_TO_DEVICE,
-              config_.context->device->GetD2HStream());
+  MemcpyAsync(meta.rotary_embedding_mask.GetPtr<void>(), standard_shared.decode_rotary_mask_ones.data(),
+              sizeof(int64_t) * total_input_len, MEMCPY_HOST_TO_DEVICE,
+              config_.context->device->GetH2DStream());
 
-  // prepare pos
-  std::vector<int64_t> rotary_pos_host(total_input_len, 1);
+  // prepare pos. Backed by the persistent decode_rotary_pos_host buffer rather than a function local
+  // vector: on KUNLUN this function no longer host-syncs after the H2D below, so the copy source has to
+  // stay alive past the enqueue. The buffer may be larger than this step needs, so every consumer below
+  // is sized by total_input_len instead of by size().
+  std::vector<int64_t>& rotary_pos_host = standard_shared.decode_rotary_pos_host;
+  if (rotary_pos_host.size() < total_input_len) {
+    rotary_pos_host.resize(total_input_len, 1);
+  }
   size_t rotary_data_offset = 0;
   for (const auto& req : meta.dp_reqs) {
     const size_t input_len = req->forwarding_tokens->size() - req->kv_cached_token_num;
@@ -79,17 +89,22 @@ void StandardPagedAttentionMetaBuilder::PrepareDecodeRotary(PagedAttentionMeta& 
               req->kv_cached_token_num + pos_offset);
     rotary_data_offset += input_len;
   }
-  KLLM_LOG_DEBUG << "rotary_pos_host " << rotary_pos_host;
-  meta.rotary_embedding_pos = standard_shared.rotary_embedding_pos.GetView(
-      {rotary_pos_host.size()}, standard_shared.rotary_embedding_pos.shape[0]);
-  standard_shared.rotary_embedding_pos.shape[0] += meta.rotary_embedding_pos.GetElementNumber();
+  KLLM_LOG_DEBUG << "rotary_pos_host (first " << total_input_len << " entries in use) " << rotary_pos_host;
+  if (config_.xpu_graph_mode) {
+    meta.rotary_embedding_pos = config_.graph_rotary_pos_buf_ptr->GetView({total_input_len}, 0);
+  } else {
+    meta.rotary_embedding_pos = standard_shared.rotary_embedding_pos.GetView(
+        {total_input_len}, standard_shared.rotary_embedding_pos.shape[0]);
+    standard_shared.rotary_embedding_pos.shape[0] += meta.rotary_embedding_pos.GetElementNumber();
+  }
   MemcpyAsync(meta.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
-              sizeof(decltype(rotary_pos_host)::value_type) * rotary_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
-              config_.context->device->GetD2HStream());
+              sizeof(int64_t) * total_input_len, MEMCPY_HOST_TO_DEVICE,
+              config_.context->device->GetH2DStream());
 
-  EventRecord(config_.rotary_embedding_event, config_.context->device->GetD2HStream());
-#ifdef ENABLE_ACL
-  StreamSynchronize(config_.context->device->GetD2HStream());
+  EventRecord(config_.rotary_embedding_event, config_.context->device->GetH2DStream());
+#if defined(ENABLE_ACL)
+  // ACL needs host-side sync; KUNLUN uses StreamWaitEvent in common_attention instead.
+  StreamSynchronize(config_.context->device->GetH2DStream());
 #endif
 }
 

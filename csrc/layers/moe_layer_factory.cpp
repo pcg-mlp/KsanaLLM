@@ -18,6 +18,10 @@
 #include "layers/matmul_layer.h"
 #include "layers/moe_layer.h"
 
+#ifdef ENABLE_KUNLUN
+#include "layers/kunlun_moe_layer.h"
+#endif
+
 namespace ksana_llm {
 
 MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
@@ -106,6 +110,18 @@ MoeLayerFactory::MoeLayerFactory(const ModelConfig& model_config, const RuntimeC
       &MoeLayerFactory::BuildLayer<HummingFusedWfp4Afp8MoeLayer>;
 #  endif
 #endif
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun XPU MoE layer (supports fp16/bf16, no quantization)
+  builder_map_[{TYPE_FP16, TYPE_FP16, TYPE_FP16, MOE_QUANT_NONE, DEFAULT_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<KunlunMoeLayer>;
+  builder_map_[{TYPE_BF16, TYPE_BF16, TYPE_BF16, MOE_QUANT_NONE, DEFAULT_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<KunlunMoeLayer>;
+  // W4A8_KLX quantized MoE (INT4 packed as INT8 storage, dispatched as TYPE_INT4x2 to align with CUDA)
+  // TODO(zhongzhicao): Replace with KunlunQuantMoeLayer once inference kernels are implemented
+  builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, MOE_QUANT_NONE, DEFAULT_MOE_BACKEND}] =
+      &MoeLayerFactory::BuildLayer<KunlunMoeLayer>;
+#endif
 }
 
 std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_ptr<BaseWeight> base_weight,
@@ -133,6 +149,11 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
   bool enable_moe_int4 = false;
   if (model_config_.quant_config.method == QUANT_GPTQ && model_config_.quant_config.bits == 4) {
     enable_moe_int4 = true;
+#ifdef ENABLE_KUNLUN
+  } else if (model_config_.quant_config.method == QUANT_W4A8_KLX) {
+    // W4A8_KLX: expert weights are INT4 packed into INT8 (pack_factor=2)
+    enable_moe_int4 = true;
+#endif
   } else if (model_config_.quant_config.method != QUANT_GPTQ && model_config_.sub_quant_configs.size() > 0) {
     // Check for mixed quantization with W4A8_AWQ or GPTQ for experts
     for (const auto& sub_config : model_config_.sub_quant_configs) {
@@ -281,8 +302,12 @@ std::shared_ptr<BaseMoeLayer> MoeLayerFactory::AutoCreateMoeLayer(std::shared_pt
     return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_FP8_E4M3,
                        DEFAULT_MOE_BACKEND);
   }
-  // INT4 MoE layer creation
+  // INT4 MoE layer creation (NVIDIA/Ascend backends only; Kunlun W4A8_KLX uses default MoE path)
+#ifdef ENABLE_KUNLUN
+  if (enable_moe_int4 && model_config_.quant_config.method != QUANT_W4A8_KLX) {
+#else
   if (enable_moe_int4) {
+#endif
     if (weight_type == TYPE_UINT8 || runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::GroupTriton ||
         runtime_config_.w4afp8_moe_backend == W4AFP8_MOE_BACKEND::TensorTriton) {
       return CreateLayer(weight_type, input_type, output_type, moe_matmul_param, MOE_QUANT_GPTQ, TRITON_MOE_BACKEND);

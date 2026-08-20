@@ -142,6 +142,29 @@ void EnvModelConfigParser::ParseModelQuantConfig(const nlohmann::json &config_js
       KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
     }
   }
+#ifdef ENABLE_KUNLUN
+  // Kunlun W4A8 auto-detection: when no quantization_config is found anywhere, detect by checking
+  // safetensors index for the ".weight_scale" pattern (Kimi-K2.6-klx-w4a8-gptq format).
+  if (!model_config.is_quant) {
+    nlohmann::json safetensors_index = ReadJsonFromFile(model_config.path + "/model.safetensors.index.json");
+    if (!safetensors_index.empty() && safetensors_index.contains("weight_map")) {
+      auto &weight_map = safetensors_index["weight_map"];
+      bool has_int8_with_scale = false;
+      for (auto it = weight_map.begin(); it != weight_map.end(); ++it) {
+        const std::string &name = it.key();
+        if (name.find(".weight_scale") != std::string::npos && name.find("norm") == std::string::npos) {
+          has_int8_with_scale = true;
+          break;
+        }
+      }
+      if (has_int8_with_scale) {
+        model_config.is_quant = true;
+        ParseW4A8KlxQuantConfig(model_config.quant_config);
+      }
+    }
+  }
+#endif  // ENABLE_KUNLUN
+
   // Force ds v32/v4 to use ue8m0 scale for accuracy
   if (model_config.is_quant && (model_config.type == "deepseek_v32" || model_config.type == "deepseek_v4")) {
     model_config.quant_config.scale_fmt = "ue8m0";
@@ -608,6 +631,11 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
 
     ParseModelMaxLength(config_json, model_config);
     ParseModelQuantConfig(config_json, model_config, weight_quant_method_, gptq_backend_);
+
+    // 支持从 config.json 显式指定 use_qk_norm (e.g. InternLM2)
+    if (config_json.contains("use_qk_norm")) {
+      model_config.use_qk_norm = config_json.value("use_qk_norm", false);
+    }
 
     UpdateEndIdFromGeneration(model_dir, model_config);
 

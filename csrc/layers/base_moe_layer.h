@@ -85,7 +85,7 @@ struct MoeLayerParameters : public BaseLayerParameters {
   }
 };
 
-#ifdef ENABLE_CUDA
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
 // Abstract base class for all MoE layer implementations.
 // Provides a unified typed Forward interface so callers can invoke it without
 // knowing the concrete subtype.

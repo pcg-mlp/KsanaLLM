@@ -12,8 +12,14 @@
 #  include "kernels/nvidia/kernel_wrapper.h"
 #  include "layers/nvidia/replace_last_token.h"
 #endif
+#ifdef ENABLE_KUNLUN
+#  include "kernels/kunlun/basic_kernel_wrapper.h"
+#endif
+
+#include <algorithm>
 
 #include "device/common_device.h"
+#include "device/device_context.h"
 #include "device/device_utils.h"
 #include "profiler/profile_event.h"
 #include "runtime/fast_path_controller.h"
@@ -47,6 +53,34 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
   aligned_memory_queue.Add(device_repetition_processor_, batch_schedule_config_.max_vocab_size);
   aligned_memory_queue.Add(device_prob_, max_logits_num);
   aligned_memory_queue.Add(device_prob_ptrs_, max_logits_num);
+#ifdef ENABLE_KUNLUN
+  aligned_memory_queue.Add(device_identity_slot_map_, max_logits_num);  // build-ahead identity slot_map (ring use)
+  // Build-ahead (Phase 1) ring, [1 + 2*max_batch_size] int64. Allocated only when build-ahead
+  // passed the startup gate; otherwise it stays nullptr and every ring path (WriteRing /
+  // GetRingSlot) is a no-op. This is a SINGLE persistent buffer: both logical "slots" alias one
+  // allocation (device_ring_slot1_ = device_ring_slot0_ below). The earlier dual-slot ping-pong was
+  // meant to isolate the read (prev step) from the write (this step), but all ring ops
+  // (ReplaceLastToken read, then WriteRing) run eagerly on the one primary compute stream in program
+  // order, so there is no read/write hazard to isolate. Worse, ping-pong rebuilt the *other* slot
+  // from a carry-forward copy each step, which dropped entries under async batch churn (a decode
+  // req's -1 placeholder went un-backfilled -> embedding OOB -> XPU -714). A single in-place ring
+  // removes the carry-forward entirely: a req added at prefill persists until it is evicted.
+  const bool build_ahead_enabled = FastPathController::GetInstance().IsEnabledAtStartup();
+  // The ring is a PERSISTENT per-req union (not a per-step snapshot): it holds every currently-active
+  // req's latest sampled token so a decode step backfills reqs whose previous forward was several
+  // steps back (continuous batching + build-ahead interleave batches of different composition). Size
+  // the entry capacity at 2*max_batch_size so the union comfortably exceeds the active set even while
+  // finished reqs await eviction (they are dropped the step they appear in finish_req_ids).
+  const size_t ring_entry_capacity = 2 * batch_scheduler_config.max_batch_size;
+  const size_t ring_elems = 1 + 2 * ring_entry_capacity;
+  if (build_ahead_enabled) {
+    device_ring_capacity_ = ring_elems;
+    device_ring_entry_capacity_ = ring_entry_capacity;
+    aligned_memory_queue.Add(device_ring_slot0_, ring_elems);
+    aligned_memory_queue.Add(device_evict_ids_, ring_entry_capacity);
+    aligned_memory_queue.Add(device_write_pairs_, 2 * ring_entry_capacity);
+  }
+#endif
 
   // vocab mask buffer
   // TODO(ethanyczeng): if(!grammar_backend_)
@@ -62,6 +96,15 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
 
   aligned_memory_queue.AllocateAndAlign();
 
+#ifdef ENABLE_KUNLUN
+  // Single persistent ring: alias the second logical slot onto the one allocation so every
+  // GetRingSlot(slot) (both this step's write target and next step's read source) and WriteRing's
+  // prev_ring == ring. The write_ring_kernel carry-forward is in-place safe (it only writes entry
+  // dst <= j while reading entry j, so it never clobbers an unread source entry).
+  if (device_ring_slot0_ != nullptr) {
+    device_ring_slot1_ = device_ring_slot0_;
+  }
+#endif
   repetition_penalties_.resize(batch_schedule_config_.max_vocab_size);
   norepeat_ngrams_.resize(batch_schedule_config_.max_vocab_size);
 
@@ -71,6 +114,25 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
               sizeof(decltype(output_tokens_ptrs_host)::value_type) * output_tokens_ptrs_host.size(),
               MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
 
+#ifdef ENABLE_KUNLUN
+  // fill the identity slot_map [0,1,...,max_logits_num) once for ring use
+  std::vector<int64_t> identity_slot_map_host(max_logits_num);
+  std::iota(identity_slot_map_host.begin(), identity_slot_map_host.end(), static_cast<int64_t>(0));
+  MemcpyAsync(device_identity_slot_map_, identity_slot_map_host.data(), sizeof(int64_t) * max_logits_num,
+              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+
+  // Build-ahead (Phase 1): zero both ring slots so the first step's XpuReplaceLastToken sees
+  // count==0 (cold start, vacuous scan / natural no-op) before any WriteRing has run.
+  // MemsetAsync throws on Kunlun, so zero via H2D like the identity slot_map above.
+  if (device_ring_slot0_ != nullptr && device_ring_slot1_ != nullptr) {
+    const std::vector<int64_t> ring_zero_host(ring_elems, static_cast<int64_t>(0));
+    MemcpyAsync(device_ring_slot0_, ring_zero_host.data(), sizeof(int64_t) * ring_elems, MEMCPY_HOST_TO_DEVICE,
+                context_->device->GetH2DStream());
+    MemcpyAsync(device_ring_slot1_, ring_zero_host.data(), sizeof(int64_t) * ring_elems, MEMCPY_HOST_TO_DEVICE,
+                context_->device->GetH2DStream());
+  }
+#endif
+
   host_topKs_.resize(max_logits_num);
   host_topPs_.resize(max_logits_num);
   host_temperatures_.resize(max_logits_num);
@@ -78,6 +140,11 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
 
   topk_sampling_ = new TopkSampling(max_logits_num, batch_scheduler_config.max_vocab_size, device_curandstates_);
 
+#ifdef ENABLE_KUNLUN
+  // C2 sampler-overlap events: allocated unconditionally for stable class layout.
+  EventCreateWithFlags(&sampling_tokens_ready_event_, EVENT_DISABLE_TIMING);
+  EventCreateWithFlags(&sampling_d2h_done_event_, EVENT_DISABLE_TIMING);
+#else
   // build-ahead slot 1 buffer：仅 FastPathController 启动期 gate 通过时预分配。
   if (FastPathController::GetInstance().IsEnabledAtStartup()) {
     AlignedMemoryQueue slot1_queue(kCudaMemAlignmentSize, [this](const size_t size) {
@@ -109,6 +176,7 @@ Sampler::Sampler(const BatchSchedulerConfig& batch_scheduler_config, const int r
     KLLM_LOG_INFO << "Sampler rank=" << rank_ << " allocated fast-path pair ring (cap=" << device_ring_capacity_
                   << " int64 each slot).";
   }
+#endif
 }
 
 Sampler::~Sampler() {
@@ -121,6 +189,10 @@ Sampler::~Sampler() {
     Free(device_buffer_);
     device_buffer_ = nullptr;
   }
+#ifdef ENABLE_KUNLUN
+  EventDestroy(sampling_tokens_ready_event_);
+  EventDestroy(sampling_d2h_done_event_);
+#else
   // 释放 build-ahead slot 1 buffer（仅总开关打开时分配）。
   if (device_buffer_slot1_ != nullptr) {
     Free(device_buffer_slot1_);
@@ -135,6 +207,7 @@ Sampler::~Sampler() {
     Free(device_ring_slot1_);
     device_ring_slot1_ = nullptr;
   }
+#endif
 }
 
 void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_tokens,
@@ -158,6 +231,11 @@ void Sampler::ApplyRepetitionPenalty(float* logits, std::vector<int>* input_toke
 #ifdef ENABLE_CUDA
   llm_kernels::nvidia::InvokeRepetitionPenalty<float>(logits, device_repetition_processor_, logits, vocab_size,
                                                       stream.Get());
+#elif defined(ENABLE_KUNLUN)
+  {
+    auto* xpuctx = static_cast<xpytorch::xpu::api::Context*>(GetXpuKernelCtxPtr(context_->device.get(), stream));
+    XpuMulTensor<float>(xpuctx, logits, device_repetition_processor_, logits, {static_cast<int64_t>(vocab_size)});
+  }
 #endif
 }
 
@@ -202,6 +280,11 @@ void Sampler::BanRepeatTokens(float* logits, const int ngram_size, const int cur
                 MEMCPY_HOST_TO_DEVICE, stream);
 #ifdef ENABLE_CUDA
     InvokeAddBiasResidual<float>(logits, device_repetition_processor_, nullptr, 1, vocab_size, logits, stream.Get());
+#elif defined(ENABLE_KUNLUN)
+    {
+      auto* xpuctx = static_cast<xpytorch::xpu::api::Context*>(GetXpuKernelCtxPtr(context_->device.get(), stream));
+      XpuAdd<float>(xpuctx, logits, device_repetition_processor_, logits, static_cast<int64_t>(vocab_size));
+    }
 #endif
   }
 }
@@ -268,6 +351,9 @@ void Sampler::DecoderNoRepeatNgramProcessor(float* logits, const int ngram_size,
   BanRepeatTokens(logits, ngram_size, cur_output_size, output_tokens, ngram_dict, vocab_size, stream);
 }
 
+#ifndef ENABLE_KUNLUN
+// CUDA/ACL build-ahead WriteRing (cur_pairs device ptr signature). Kunlun uses the persistent-ring
+// vector-signature overload defined below under #ifdef ENABLE_KUNLUN.
 void Sampler::WriteRing(size_t slot, const int64_t* cur_pairs, int batch_size, Stream& stream) {
   // 调用方 (ModelRunner::WriteBuildAheadRingAfterSampling) 仅在 build-ahead 启用时进入此函数。
   // ring slot / device_output_tokens_slot1_ 必须已在构造函数按相同条件分配——任一缺失即配置不一致, hard fail.
@@ -288,6 +374,7 @@ void Sampler::WriteRing(size_t slot, const int64_t* cur_pairs, int batch_size, S
   LaunchWriteRingKernel(ring, cur_pairs, sampled_tokens, batch_size, stream.Get());
 #endif
 }
+#endif
 
 void Sampler::BroadcastRingSlot(size_t slot, Stream& stream) {
   if (device_ring_capacity_ == 0) {
@@ -312,10 +399,17 @@ void Sampler::CopyProbsOutputToRequests(std::vector<SamplingRequest>& sampling_r
                                         std::vector<std::vector<float>>& probs_output, Stream& stream, size_t slot) {
   PROFILE_EVENT_SCOPE(sampler_copy_probs_total, "Exec.Sampler.CopyProbsOutputToRequests.Total");
   auto copy_probs_after_synchronize = CopyProbsOutput(sampling_reqs, stream, probs_output);
+#ifdef ENABLE_KUNLUN
+  // Only block the host until the sampled-token D2H (on the dedicated D2H stream) completes, instead of
+  // synchronizing the whole compute stream. On XPU the probs D2H is not enqueued on the compute stream, so
+  // this does not affect probs correctness.
+  EventSynchronize(sampling_d2h_done_event_);
+#else
   {
     PROFILE_EVENT_SCOPE(sampler_stream_sync, "Exec.Sampler.CopyProbsOutputToRequests.StreamSync");
     StreamSynchronize(stream);
   }
+#endif
   copy_probs_after_synchronize();
   // 根据 slot 选用对应的 host_output_tokens (slot 1 未分配时回落 slot 0).
   std::vector<int>& host_out_tokens = GetHostOutputTokens(slot);
@@ -438,26 +532,46 @@ std::function<void()> Sampler::CopyProbsOutput(std::vector<SamplingRequest>& sam
   };
 }
 
-// Transfer sampling parameters to the device
+// Transfer sampling parameters to the device.
+//
+// Perf note: at concurrency=1 the caller refills host_topKs_ / host_topPs_ /
+// host_temperatures_ from the same SamplingConfig every step, so most steps
+// upload byte-identical values. Skipping the redundant uploads shaves 3 H2D
+// calls / step off the sampler critical path (see optimization_roadmap.md
+// P1 sampler param merge). Compare-and-skip is O(bs) on host and safe:
+// sampling configs are set at request creation and rarely change mid-stream.
 void Sampler::SamplingParameterToDevice(bool use_top_k, bool use_top_p, bool use_temperature,
                                         SamplingDeviceParameter& sampling_device_parameter, Stream& stream,
                                         size_t slot) {
+  const size_t bs = sampling_device_parameter.bs;
+  auto same = [](const auto& a, const auto& b, size_t n) {
+    return a.size() >= n && b.size() >= n && std::equal(a.begin(), a.begin() + n, b.begin());
+  };
   if (use_top_k) {
-    MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
-                stream);
+    if (topKs_dirty_ || !same(host_topKs_, last_uploaded_topKs_, bs)) {
+      MemcpyAsync(device_topKs_, host_topKs_.data(), sizeof(int) * bs, MEMCPY_HOST_TO_DEVICE, stream);
+      last_uploaded_topKs_.assign(host_topKs_.begin(), host_topKs_.begin() + bs);
+      topKs_dirty_ = false;
+    }
     sampling_device_parameter.device_topKs = device_topKs_;
     // 根据 slot 选用 device_output_tokens_ptrs (slot 1 未分配时回落 slot 0).
     sampling_device_parameter.device_output_tokens_ptrs = GetDeviceOutputTokensPtrs(slot);
     sampling_device_parameter.device_curandstates = device_curandstates_;
   }
   if (use_top_p) {
-    MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * sampling_device_parameter.bs, MEMCPY_HOST_TO_DEVICE,
-                stream);
+    if (topPs_dirty_ || !same(host_topPs_, last_uploaded_topPs_, bs)) {
+      MemcpyAsync(device_topPs_, host_topPs_.data(), sizeof(float) * bs, MEMCPY_HOST_TO_DEVICE, stream);
+      last_uploaded_topPs_.assign(host_topPs_.begin(), host_topPs_.begin() + bs);
+      topPs_dirty_ = false;
+    }
     sampling_device_parameter.device_topPs = device_topPs_;
   }
   if (use_temperature) {
-    MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * sampling_device_parameter.bs,
-                MEMCPY_HOST_TO_DEVICE, stream);
+    if (temperatures_dirty_ || !same(host_temperatures_, last_uploaded_temperatures_, bs)) {
+      MemcpyAsync(device_temperatures_, host_temperatures_.data(), sizeof(float) * bs, MEMCPY_HOST_TO_DEVICE, stream);
+      last_uploaded_temperatures_.assign(host_temperatures_.begin(), host_temperatures_.begin() + bs);
+      temperatures_dirty_ = false;
+    }
     sampling_device_parameter.device_temperatures = device_temperatures_;
   }
 }
@@ -549,6 +663,11 @@ Status Sampler::PrepareDeviceLogitsAndParameter(std::vector<SamplingRequest>& sa
 void Sampler::SelectTopkTokens(const SamplingDeviceParameter& sampling_device_parameter, float* const device_logits,
                                Stream& stream, size_t slot) {
   if (!sampling_device_parameter.do_sampling) {
+#ifdef ENABLE_KUNLUN
+    // No D2H this step; signal the done event so CopyProbsOutputToRequests' wait is a no-op (avoids
+    // synchronizing on an event that was never recorded).
+    EventRecord(sampling_d2h_done_event_, context_->device->GetD2HStream());
+#endif
     return;
   }
 
@@ -569,9 +688,22 @@ void Sampler::SelectTopkTokens(const SamplingDeviceParameter& sampling_device_pa
     }
 #endif
 
-    // D2H 在 PrimaryComputeStream 上异步完成; host 可读由 CopyProbsOutputToRequests 内 StreamSynchronize 保证.
-    MemcpyAsync(host_out_tokens.data(), dev_out_tokens, sizeof(uint32_t) * sampling_device_parameter.bs,
-                MEMCPY_DEVICE_TO_HOST, stream);
+#ifdef ENABLE_KUNLUN
+  // Overlap the token D2H with compute: signal a ready event on the compute stream, then copy on the shared D2H
+  // stream so the compute stream stays free for the next forward. CopyProbsOutputToRequests waits on
+  // sampling_d2h_done_event_ instead of blocking the whole compute stream. WriteRing still consumes
+  // device_output_tokens_ directly when build-ahead rings are present.
+  EventRecord(sampling_tokens_ready_event_, stream);
+  Stream& d2h_stream = context_->device->GetD2HStream();
+  StreamWaitEvent(d2h_stream, sampling_tokens_ready_event_);
+  MemcpyAsync(host_out_tokens.data(), dev_out_tokens, sizeof(uint32_t) * sampling_device_parameter.bs,
+              MEMCPY_DEVICE_TO_HOST, d2h_stream);
+  EventRecord(sampling_d2h_done_event_, d2h_stream);
+#else
+  // D2H 在 PrimaryComputeStream 上异步完成; host 可读由 CopyProbsOutputToRequests 内 StreamSynchronize 保证.
+  MemcpyAsync(host_out_tokens.data(), dev_out_tokens, sizeof(uint32_t) * sampling_device_parameter.bs,
+              MEMCPY_DEVICE_TO_HOST, stream);
+#endif
   };
 
   if (FastPathController::GetInstance().IsEnabledAtStartup()) {
@@ -582,10 +714,55 @@ void Sampler::SelectTopkTokens(const SamplingDeviceParameter& sampling_device_pa
   }
 }
 
+#ifdef ENABLE_KUNLUN
+void Sampler::WriteRing(size_t slot, const std::vector<int64_t>& cur_req_ids_host,
+                        const std::vector<int64_t>& evict_ids_host, Stream& stream) {
+  // Build-ahead (Phase 1): rebuild ring `slot` as the persistent per-req union — carry forward the
+  // OTHER slot's union (dropping this step's finished reqs so it stays bounded), then upsert this
+  // step's tokens — so the next step's XpuReplaceLastToken (reading `slot`) backfills the -1
+  // placeholder for EVERY active req, not just those in the immediately-preceding batch. No-op
+  // unless the rings were allocated at startup (build-ahead gate) and there is a batch.
+  // device_output_tokens_ was written by SelectTopkTokens on this same `stream`; enqueuing
+  // XpuWriteRing on it keeps the write ordered after the sampling write (compute-stream FIFO).
+  int64_t* ring = GetRingSlot(slot);
+  int64_t* prev_ring = GetRingSlot(slot ^ 1u);  // source union (the other ping-pong slot)
+  const int64_t ring_capacity = static_cast<int64_t>(device_ring_entry_capacity_);
+  const int64_t batch_size = std::min(static_cast<int64_t>(cur_req_ids_host.size()), ring_capacity);
+  if (ring == nullptr || prev_ring == nullptr || batch_size <= 0 || device_write_pairs_ == nullptr) {
+    return;
+  }
+  auto* ctx = static_cast<xpytorch::xpu::api::Context*>(GetXpuKernelCtxPtr(context_->device.get(), stream));
+
+  // Stage this step's sampled req_ids as (req_id, 0) stride-2 pairs (the write kernel reads only the
+  // req_id half). This is the sampled batch's own req_ids (device_output_tokens_ order), NOT the
+  // shared ModelInput cur_batch_pairs which is unsafe under multi-forward-per-step. Synchronous H2D
+  // of a handful of int64 — off the transformer-layer fast path.
+  std::vector<int64_t> write_pairs_host(2 * batch_size, 0);
+  for (int64_t i = 0; i < batch_size; ++i) write_pairs_host[2 * i] = cur_req_ids_host[i];
+  Memcpy(device_write_pairs_, write_pairs_host.data(), sizeof(int64_t) * 2 * batch_size, MEMCPY_HOST_TO_DEVICE);
+
+  // Stage this step's finished req_ids into device_evict_ids_ so the kernel can drop them from the
+  // carried-forward union. Clamp to capacity (defensive; a single step never finishes more reqs than
+  // the active set). Synchronous H2D — evictions are infrequent (only on steps where reqs stop).
+  int64_t evict_count = 0;
+  const int64_t* evict_dev = nullptr;
+  if (!evict_ids_host.empty() && device_evict_ids_ != nullptr) {
+    evict_count = std::min(static_cast<int64_t>(evict_ids_host.size()), ring_capacity);
+    Memcpy(device_evict_ids_, evict_ids_host.data(), sizeof(int64_t) * evict_count, MEMCPY_HOST_TO_DEVICE);
+    evict_dev = device_evict_ids_;
+  }
+
+  XpuWriteRing(ctx, ring, prev_ring, device_write_pairs_, device_output_tokens_, evict_dev, evict_count, batch_size,
+               ring_capacity);
+}
+#endif
+
 Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& stream, size_t slot) {
   PROFILE_EVENT_SCOPE(Sampling_, fmt::format("Sampling_{}", rank_), rank_);
   float* device_logits = nullptr;
   SamplingDeviceParameter sampling_device_parameter;
+  auto& compute_stream = context_->device->GetPrimaryComputeStream();
+  sampling_device_parameter.device_ctx = GetXpuKernelCtxPtr(context_->device.get(), compute_stream);
   STATUS_CHECK_RETURN(
       PrepareDeviceLogitsAndParameter(sampling_reqs, sampling_device_parameter, device_logits, stream, slot));
 
@@ -601,6 +778,13 @@ Status Sampler::Sampling(std::vector<SamplingRequest>& sampling_reqs, Stream& st
         device_logits, nullptr, sampling_device_parameter.device_temperatures, nullptr, nullptr, nullptr, nullptr,
         sampling_device_parameter.bs, 0, 1, sampling_device_parameter.vocab_size_padded,
         sampling_device_parameter.vocab_size_padded, false, true, stream.Get()));
+#elif defined(ENABLE_KUNLUN)
+    {
+      auto* xpuctx = static_cast<xpytorch::xpu::api::Context*>(GetXpuKernelCtxPtr(context_->device.get(), stream));
+      int64_t bs = static_cast<int64_t>(sampling_device_parameter.bs);
+      int64_t vocab = static_cast<int64_t>(sampling_device_parameter.vocab_size_padded);
+      XpuSoftmax<float>(xpuctx, device_logits, device_logits, {bs, vocab}, /*axis=*/1);
+    }
 #else
     KLLM_THROW("Softmax is not supported on NPU.");
 #endif

@@ -181,6 +181,9 @@ class ForwardingContext {
 
   inline const PipelineConfig& GetPipelineConfig() { return pipeline_config_; }
 
+  inline bool IsGraphCapturing() const { return is_graph_capturing_; }
+  inline void SetGraphCapturing(bool capturing) { is_graph_capturing_ = capturing; }
+
  private:
   // Rank of current inference device
   int rank_;
@@ -231,5 +234,8 @@ class ForwardingContext {
 
   // Inflight resource manager reference, set once before forward loops begin.
   InflightResourceManager* inflight_resource_mgr_ = nullptr;
+
+  // XPU Graph: true during cudaStreamBeginCapture → EndCapture
+  bool is_graph_capturing_ = false;
 };
 }  // namespace ksana_llm

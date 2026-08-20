@@ -40,6 +40,7 @@ KsanaLLM is a high performance and easy-to-use engine for LLM inference and serv
 
  - Nvidia GPUs: A10, A100, L40, L20, H20
  - Huawei Ascend NPUs: 910B2C
+ - Kunlunxin XPU: P800
 
 ## Usage
 
@@ -147,6 +148,37 @@ pip install torch_npu-2.1.0.post6-cp310-cp310-manylinux_2_17_x86_64.manylinux201
 pip install -r requirements.txt
 ```
 
+#### 1.5 For Kunlunxin XPU
+
+**Image:**
+
+| Image | Version |
+| - | - |
+| [http://mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1](http://mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1) | 0.1.1 |
+
+Container creation example:
+```bash
+CONT_NAME="cont_name"
+CONT_IMAGE="mirrors.tencent.com/todacc/venus-ksanallm-dev-tlinux4_kunlun:0.1.1"
+PATH_MAPPING="-v /data1:/data1"
+sudo docker run -d -it \
+       --net="host" \
+       --user="root" \
+       --name="$CONT_NAME" \
+       --shm-size=10g \
+       --ulimit memlock=-1 \
+       --ulimit stack=67108864 \
+       --privileged=true \
+       --cap-add=ALL \
+       $(for i in $(seq 0 7); do echo -n "--device=/dev/xpu${i}:/dev/xpu${i} "; done) \
+       --device=/dev/xpuctrl:/dev/xpuctrl \
+       --security-opt seccomp:unconfined \
+       --security-opt label=disable \
+       $PATH_MAPPING \
+       $CONT_IMAGE \
+       /bin/bash
+```
+
 ### 2. Clone source code
 
 ```bash
@@ -176,13 +208,19 @@ cmake -DSM=86 -DWITH_TESTING=ON .. && make -j32
 cmake -DWITH_TESTING=ON -DWITH_CUDA=OFF -DWITH_ACL=ON .. && make -j32
 ```
 
-#### 3.3 Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
+#### 3.3 For Kunlunxin XPU
+
+```bash
+cmake -DWITH_KUNLUN=ON -DWITH_TESTING=OFF -DWITH_STANDALONE_TEST=OFF -DCMAKE_BUILD_TYPE=Release .. && make -j
+```
+
+#### 3.4 Enable use of Tencent internal libraries, for example, Tencent nameserver Polaris
 
 ```bash
 cmake -DSM=86 -DWITH_TESTING=ON -DWITH_INTERNAL_LIBRARIES=ON .. && make -j32
 ```
 
-#### 3.4 Enable Global Cache Connector (Mooncake Store Backend)
+#### 3.5 Enable Global Cache Connector (Mooncake Store Backend)
 
 Global Cache Connector enables RDMA-based global KV cache access using [Mooncake Store](https://github.com/kvcache-ai/Mooncake) as the storage backend.
 
@@ -255,6 +293,9 @@ git clone https://huggingface.co/NousResearch/Llama-2-7b-hf
 
 # ${GIT_PROJECT_REPO_ROOT}/examples/ksana_llm2-7b.yaml's tensor_para_size equal the GPUs/NPUs number
 export CUDA_VISIBLE_DEVICES=xx
+
+# For Kunlunxin XPU, use either CUDA_VISIBLE_DEVICES or XPU_VISIBLE_DEVICES to control the number of cards
+# export XPU_VISIBLE_DEVICES=0
 
 # launch server
 python serving_server.py \

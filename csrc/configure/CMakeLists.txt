@@ -9,8 +9,14 @@ message(STATUS "configure_SRCS: ${configure_SRCS}")
 
 add_library(configure STATIC ${configure_SRCS})
 add_dependencies(configure fmt gflags)
+# NOTE(fangtang, kunlun-adapt): Boost::dll is gated by WITH_BOOST so that
+# configure-only runs (without boost downloaded) can still complete.
+set(_configure_boost_libs "")
+if(WITH_BOOST)
+  set(_configure_boost_libs Boost::dll)
+endif()
 target_link_libraries(configure PUBLIC
-  -lpthread -ldl gflags loguru yaml-cpp profiler absl::base absl::strings re2 Boost::dll xgrammar
+  -lpthread -ldl gflags loguru yaml-cpp profiler absl::base absl::strings re2 ${_configure_boost_libs} xgrammar
 )
 
 # for test

@@ -10,8 +10,13 @@
 #include "cache_manager/prefix_cache_manager.h"
 #include "helpers/block_cache_layout_helper.h"
 #include "helpers/model_test_helper.h"
-#include "kernels/nvidia/kernel_wrapper.h"
-#include "layers/cast_layer.h"
+#ifdef ENABLE_CUDA
+#  include "kernels/nvidia/kernel_wrapper.h"
+#  include "layers/cast_layer.h"
+#endif
+#ifdef ENABLE_KUNLUN
+#  include "layers/kunlun/host_fp_helpers.h"
+#endif
 #include "models/base/model_weight.h"
 #include "models/deepseek_v3/attention_meta/deepseek_v3_attention_meta_creator.h"
 #include "modules/attention/multihead_latent_attention.h"
@@ -34,8 +39,9 @@ DataType GetKsanaDataType();
   }
 GET_KSANA_DATA_TYPE(int32_t, TYPE_INT32);
 GET_KSANA_DATA_TYPE(float, TYPE_FP32);
-GET_KSANA_DATA_TYPE(half, TYPE_FP16);
-GET_KSANA_DATA_TYPE(__nv_bfloat16, TYPE_BF16);
+// float16/bfloat16 是各平台的可移植 typedef(CUDA: half/__nv_bfloat16,昆仑芯: int16_t/uint16_t)。
+GET_KSANA_DATA_TYPE(float16, TYPE_FP16);
+GET_KSANA_DATA_TYPE(bfloat16, TYPE_BF16);
 #undef GET_KSANA_DATA_TYPE
 
 size_t schedule_id = 0;
@@ -90,6 +96,36 @@ Status CastDeviceTensorType(Tensor& input_tensor, DataType new_dtype, int dev_ra
         input_tensor.GetPtr<void>(), input_tensor.GetElementNumber(), context->device->GetMemoryManageStream().Get()));
   } else {
     KLLM_THROW(fmt::format("Unsupported tensor cast from type {} to {}", input_tensor.dtype, new_dtype));
+  }
+#endif
+#ifdef ENABLE_KUNLUN
+  // 昆仑芯无对应的 device 端 cast kernel,与真机权重加载一致走 host 端转换:
+  // 把 fp32 数据拷回 host,用 CPU 转成 fp16/bf16 的 uint16 位模式后再拷回 device。
+  if (input_tensor.dtype == DataType::TYPE_FP32 &&
+      (new_dtype == DataType::TYPE_FP16 || new_dtype == DataType::TYPE_BF16)) {
+    const size_t element_num = input_tensor.GetElementNumber();
+    // 等待此前对该 tensor 的写入(AssignFromVector / AddMlaWeight 都用 manage stream)。
+    StreamSynchronize(context->device->GetMemoryManageStream());
+    std::vector<float> host_fp32(element_num);
+    MemcpyAsync(host_fp32.data(), input_tensor.GetPtr<void>(), element_num * sizeof(float), MEMCPY_DEVICE_TO_HOST,
+                context->device->GetMemoryManageStream());
+    StreamSynchronize(context->device->GetMemoryManageStream());
+
+    std::vector<uint16_t> host_cast(element_num);
+    if (new_dtype == DataType::TYPE_FP16) {
+      for (size_t i = 0; i < element_num; i++) host_cast[i] = kunlun_host::Fp32ToHalf<float16>(host_fp32[i]);
+    } else {
+      for (size_t i = 0; i < element_num; i++) host_cast[i] = kunlun_host::Fp32ToHalf<bfloat16>(host_fp32[i]);
+    }
+
+    Tensor new_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, new_dtype, input_tensor.shape, nullptr,
+                               &(context->device->GetMemoryManageStream()));
+    MemcpyAsync(new_tensor.GetPtr<void>(), host_cast.data(), element_num * sizeof(uint16_t), MEMCPY_HOST_TO_DEVICE,
+                context->device->GetMemoryManageStream());
+    StreamSynchronize(context->device->GetMemoryManageStream());
+    input_tensor = new_tensor;
+  } else {
+    KLLM_THROW(fmt::format("Unsupported tensor cast from type {} to {} on Kunlun", input_tensor.dtype, new_dtype));
   }
 #endif
   return Status();
@@ -165,12 +201,13 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     auto& mi = forwarding_context_->GetModelInput();
     mi->ParseFromRequests(forward_reqs);
 
-    // create forward shape tensor
+    // create forward shape tensor (CUDA 13D + Kunlun [13])
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {
         mi->multi_token_request_num,     mi->multi_token_request_max_tokens,     mi->context_kv_cache_block_num,
         mi->single_token_request_num,    mi->single_token_request_max_tokens,    mi->decode_kv_cache_block_num,
         mi->dp_max_forwarding_tokens,    mi->dp_multi_token_request_num,         mi->dp_multi_token_request_max_tokens,
-        mi->dp_single_token_request_num, mi->dp_single_token_request_max_tokens, mi->dp_total_prefix_len};
+        mi->dp_single_token_request_num, mi->dp_single_token_request_max_tokens, mi->dp_total_prefix_len,
+        mi->dp_decode_tokens,            mi->dp_max_prefix_per_req};
 
     CREATE_BUFFER_SCOPE(hidden_buffer_tensors_0, forwarding_context_->buffers_->hidden_buffer_0);
     CREATE_BUFFER_SCOPE(reduce_buffer_tensors, forwarding_context_->buffers_->shared_buffer);
@@ -194,18 +231,59 @@ class MultiHeadLatentAttentionTestModel : public CommonModel {
     AssignFromVector(hidden_buffer_tensors_0[0], input_data, context_);
     Status status = mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, nullptr, is_multi_token_forward,
                                   *forwarding_context_);
-    hidden_buffer_tensors_0[0].dtype = model_config_.weight_data_type;
+    // MultiHeadLatentAttention::Forward routes its final output by whether a ModelCommunicator
+    // exists (created iff tensor_para_size > 1), NOT by backend. With a communicator (the Kunlun
+    // test runs tp=2) the real MLA output is placed in reduce_buffer_tensors[0] for the caller's
+    // AllReduce, while hidden_buffer_tensors_0 only holds intermediate scratch after the module's
+    // internal double-buffer swap. Without a communicator (tp==1, e.g. the CUDA deepseekv2 test)
+    // the output stays in hidden_buffer_tensors_0[0]. Pick the output buffer by comm presence.
+    std::vector<Tensor>& output_tensors =
+        forwarding_context_->GetModelCommunicator() ? reduce_buffer_tensors : hidden_buffer_tensors_0;
+    output_tensors[0].dtype = model_config_.weight_data_type;
     forwarding_context_->GetAttentionForwardContext().forward_shape.shape = {0, 1, 1};
     {
       CREATE_BUFFER_SCOPE(hidden_buffer_tensors_1, forwarding_context_->buffers_->hidden_buffer_1);
       STATUS_CHECK_RETURN(static_cast<CastLayer*>(cast_layer_.get())
-                              ->Forward(&hidden_buffer_tensors_0[0], 0, 1, 1, &hidden_buffer_tensors_1[0]));
+                              ->Forward(&output_tensors[0], 0, 1, 1, &hidden_buffer_tensors_1[0]));
       StreamSynchronize(context_->device->GetPrimaryComputeStream());
       Memcpy(input_data.data(), hidden_buffer_tensors_1[0].template GetPtr<void>(),
-             sizeof(float) * hidden_buffer_tensors_0[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
+             sizeof(float) * output_tensors[0].GetElementNumber(), MEMCPY_DEVICE_TO_HOST);
       // Reset dtype
       hidden_buffer_tensors_1[0].dtype = model_config_.weight_data_type;
     }
+#ifdef ENABLE_KUNLUN
+    // 昆仑芯 W4A8(int8 权重 + fp32 scale)MLA 前向的期望输出。三种前向由
+    // (is_multi_token_forward, dp_total_prefix_len) 区分:prefill(无 prefix)/prefill(带 prefix cache)/decode。
+    // 输入与权重均为确定性构造,故可硬编码逐元素对比。这里的值取自模块的真实输出 buffer
+    // (上方 output_tensors:tp>1 时为 reduce_buffer_tensors[0],即 o_proj 结果),而非内部
+    // 中间 scratch。若需重新采集,把 KUNLUN_MLA_DUMP=1 传入环境即可打印实际 output[0:6]。
+    if (std::getenv("KUNLUN_MLA_DUMP") != nullptr) {
+      std::cout << "[Kunlun MLA] is_multi_token_forward=" << is_multi_token_forward
+                << ", dp_total_prefix_len=" << forwarding_context_->GetModelInput()->dp_total_prefix_len
+                << ", kv_cache_dtype=" << static_cast<int>(runtime_config_.attn_backend_config.kv_cache_dtype)
+                << ", output[0:6]={";
+      for (size_t i = 0; i < 6 && i < input_data.size(); i++) {
+        std::cout << input_data[i] << (i + 1 < 6 ? ", " : "");
+      }
+      std::cout << "}" << std::endl;
+    }
+    std::vector<float> kunlun_expected;
+    if (is_multi_token_forward) {
+      if (forwarding_context_->GetModelInput()->dp_total_prefix_len == 0) {
+        kunlun_expected = {-0.0152435f, -0.00582123f, 0.0150986f, 0.00939941f, -0.0230865f, -0.007267f};
+      } else {
+        kunlun_expected = {-0.0125275f, -0.00996399f, 0.0114136f, 0.0125504f, -0.0190735f, -0.0125504f};
+      }
+    } else {
+      kunlun_expected = {-0.0143967f, 0.00323296f, 0.0186462f, -0.00833893f, -0.0189362f, 0.00421143f};
+    }
+    for (size_t i = 0; i < kunlun_expected.size(); i++) {
+      // 数值很小且经 fp16 + int8 动态量化,近零值用相对+绝对混合容差避免相对误差发散。
+      const float tol = std::fabs(kunlun_expected[i]) * 0.05f + 2e-5f;
+      EXPECT_NEAR(input_data[i], kunlun_expected[i], tol);
+    }
+    return status;
+#endif
     std::vector<float> output;
     if (is_multi_token_forward) {
       if (model_config_.use_dsa && std::getenv("CONTEXT_DSA_THRESHOLD") != nullptr) {
@@ -283,6 +361,122 @@ class TestWeight : public BaseWeight {
   }
 
   void AddMlaWeight(int device_id = 0) {
+#ifdef ENABLE_KUNLUN
+    // Kunlun/Kimi-K2.6:昆仑芯 MLA 只实现了 W4A8(int8 权重 + fp32 per-channel scale)路径,
+    // 非量化 fp16 GEMM 根本没实现;因此 GEMM/BMM 权重必须是 TYPE_INT8 且带 weight_scale,
+    // 只有 norm/layernorm 权重与激活用 fp16(真机用 bf16,测试放宽为 fp16 即可)。
+    //
+    // 权重形状取自真机 tp8/ep8 dump(trans_b=true,2D GEMM 布局 {out=n, in=k};
+    // BMM w_uk_t/w_uv 布局 {B, N, K}),从真实 model_config 推导。
+    // 参考目录:ksana_vs_xsglang_dump_weights/Kimi-K2.6-klx-w4a8-gptq-trans_b_true/0
+    //
+    // scale 约定见 kunlun_w4a8_layer_test.cpp:564——weight_scale 已被预乘 127
+    // (kernel 内部再除 127);此处只需给出量级合理的正数即可,数值待真机 dump 后硬编码。
+    // scale 形状:2D GEMM 为 per-channel [n];BMM 为 [B, N]。绑定方式见同文件 547 行:
+    // int8 权重张量的 weight_scales 指针指向对应 scale 张量。
+    //
+    // 昆仑 MLA 走 fused_lora_a_proj + rmsnorm_split_col 融合路径(见
+    // multihead_latent_attention.cpp:66),因此这里造 fused_lora_a_proj 而非未融合的
+    // q_a_proj/kv_a_lora_proj/kv_a_rope_proj 三件套。
+    const size_t hidden = model_config_.hidden_units;
+    const size_t head_num = model_config_.head_num;
+    // head_per_tp 必须与 forwarding_context.cpp:48 用同一公式、同一 attn_tensor_parallel_size,
+    // 否则前向缓冲区(head_num_per_tp)与权重(o_proj/q_b 等)维度对不上。
+    const size_t attn_tp = runtime_config_.parallel_basic_config.attn_tensor_parallel_size;
+    const size_t head_per_tp = head_num / attn_tp;
+    const size_t q_lora = model_config_.mla_config.q_lora_rank;
+    const size_t kv_lora = model_config_.mla_config.kv_lora_rank;
+    const size_t nope = model_config_.mla_config.qk_nope_head_dim;
+    const size_t rope = model_config_.mla_config.qk_rope_head_dim;
+    const size_t v_head = model_config_.mla_config.v_head_dim;
+    // 测试只创建 layer 0(见 MultiHeadLatentAttentionTestModel::CreateLayers),Kimi 权重维度很大
+    // (hidden=7168),只造 layer 0 即可,避免为 61 层造巨量无用权重。
+    const int layer_num = 1;
+
+    auto& stream = context_->device->GetMemoryManageStream();
+    const DataType act_type = GetKsanaDataType<T>();  // fp16:激活/norm dtype
+
+    // fp16 norm/layernorm 权重:fp32 host 填充后 cast 到激活 dtype(与真机 host 端加载一致)。
+    auto add_norm = [&](const std::string& name, const std::vector<size_t>& shape) {
+      weights_map_[name] = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, shape, nullptr, &stream);
+      Tensor& t = weights_map_.at(name);
+      std::vector<float> data(t.GetElementNumber());
+      for (size_t j = 0; j < data.size(); j++) data[j] = 1.0f / (j % 97 * 0.1f + 1.0f) * pow(-1, (j % 7));
+      MemcpyAsync(t.template GetPtr<void>(), data.data(), t.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, stream);
+      CastDeviceTensorType(t, act_type, device_id, context_);
+    };
+
+    // int8 权重 + fp32 scale。weight_shape 首维为 n(输出通道),scale 形状 scale_shape。
+    // 先建张量,scale 绑定放到后面统一做(避免依赖插入顺序)。
+    auto add_int8 = [&](const std::string& wname, const std::vector<size_t>& weight_shape,
+                        const std::vector<size_t>& scale_shape) {
+      weights_map_[wname] =
+          Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_INT8, weight_shape, nullptr, &stream);
+      Tensor& w = weights_map_.at(wname);
+      std::vector<int8_t> wdata(w.GetElementNumber());
+      for (size_t j = 0; j < wdata.size(); j++) wdata[j] = static_cast<int8_t>(static_cast<int>(j % 127) - 64);
+      MemcpyAsync(w.template GetPtr<void>(), wdata.data(), wdata.size() * sizeof(int8_t), MEMCPY_HOST_TO_DEVICE,
+                  stream);
+
+      const std::string sname = wname + "_scale";  // 仅用于在 weights_map_ 中持有,MLA 通过指针取用
+      weights_map_[sname] = Tensor(MemoryLocation::LOCATION_DEVICE, DataType::TYPE_FP32, scale_shape, nullptr, &stream);
+      Tensor& s = weights_map_.at(sname);
+      std::vector<float> sdata(s.GetElementNumber());
+      for (size_t j = 0; j < sdata.size(); j++) sdata[j] = 0.01f + (j % 13) * 0.001f;
+      MemcpyAsync(s.template GetPtr<void>(), sdata.data(), sdata.size() * sizeof(float), MEMCPY_HOST_TO_DEVICE, stream);
+    };
+
+    std::vector<std::pair<std::string, std::string>> scale_bindings;  // {weight_name, scale_name}
+    for (int i = 0; i < layer_num; i++) {
+      const std::string p = fmt::format("model.layers.{}", i);
+      add_norm(p + ".input_layernorm.weight", {hidden});
+      add_norm(p + ".post_attention_layernorm.weight", {hidden});
+      add_norm(p + ".self_attn.q_a_layernorm.weight", {q_lora});
+      add_norm(p + ".self_attn.kv_a_layernorm.weight", {kv_lora});
+
+      // 2D GEMM 权重 {n, k} + per-channel scale {n}
+      const std::vector<std::pair<std::string, std::vector<size_t>>> gemm = {
+          {p + ".self_attn.fused_lora_a_proj.weight",
+           { q_lora + kv_lora + rope,
+             hidden }},
+          {p + ".self_attn.q_b_nope_rope_proj.weight",
+           { head_per_tp * (nope + rope),
+             q_lora }},
+          {p + ".self_attn.kv_b_nope_proj.weight",
+           { head_per_tp * nope,
+             kv_lora }},
+          {p + ".self_attn.kv_b_combined_proj.weight",
+           { head_per_tp * (nope + v_head),
+             kv_lora }},
+          {p + ".self_attn.v_head_proj.weight",
+           { head_per_tp * v_head,
+             kv_lora }},
+          {p + ".self_attn.o_proj.weight",
+           { hidden,
+             head_per_tp * v_head }},
+      };
+      for (const auto& [name, shape] : gemm) {
+        add_int8(name, shape, {shape[0]});
+        scale_bindings.emplace_back(name, name + "_scale");
+      }
+
+      // BMM 权重 {B, N, K} + scale {B, N}
+      const std::string uk = p + ".self_attn.w_uk_t.weight";  // {head_per_tp, kv_lora, nope}
+      const std::string uv = p + ".self_attn.w_uv.weight";    // {head_per_tp, nope, kv_lora}
+      add_int8(uk, {head_per_tp, kv_lora, nope}, {head_per_tp, kv_lora});
+      add_int8(uv, {head_per_tp, nope, kv_lora}, {head_per_tp, nope});
+      scale_bindings.emplace_back(uk, uk + "_scale");
+      scale_bindings.emplace_back(uv, uv + "_scale");
+    }
+
+    // 统一绑定 weight_scales。weights_map_(std::unordered_map)对元素的指针/引用在
+    // 插入/rehash 后保持稳定,因此这里存 &weights_map_.at(sname) 安全。
+    for (const auto& [wname, sname] : scale_bindings) {
+      weights_map_.at(wname).weight_scales = &weights_map_.at(sname);
+    }
+    StreamSynchronize(stream);
+    return;
+#else
     std::unordered_map<std::string, std::vector<size_t>> add_tensor_map;
     const int layer_num = 4;
     for (int i = 0; i < layer_num; i++) {
@@ -319,6 +513,7 @@ class TestWeight : public BaseWeight {
                   MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
       CastDeviceTensorType(tensor, weight_type, device_id, context_);
     }
+#endif
   }
 };
 
@@ -332,10 +527,18 @@ class MlaTest : public testing::Test {
     const auto* test_info = ::testing::UnitTest::GetInstance()->current_test_info();
     test_name = test_info->name();
 
+    // Kunlun 平台复用与 CUDA 相同的 MLA 前向流程,由 Kimi-K2.6 的配置驱动。这里使用
+    // 专用的单卡 light 配置 ksana_llm_kimi_k26_kunlun_light.yaml(tensor_para_size=1),
+    // 与 CUDA 侧 deepseekv2 的做法一致:让测试可以用 XPU_VISIBLE_DEVICES 钉在单卡运行,
+    // 而不会被生产用 8卡 yaml 的 tensor_para_size=8 卡在 ParseConfig 的 device_num 守卫。
+    const bool is_kunlun_test = test_name.find("Kunlun") != std::string::npos;
+
     // 解析 config.json,初始化 ModelConfig 以及 BlockManager
     std::filesystem::path current_path = __FILE__;
     std::filesystem::path parent_path = current_path.parent_path();
-    std::filesystem::path config_path_relate = parent_path / "../../../examples/ksana_llm_deepseekv2.yaml";
+    std::filesystem::path config_path_relate =
+        parent_path / (is_kunlun_test ? "../../../examples/ksana_llm_kimi_k26_kunlun_light.yaml"
+                                      : "../../../examples/ksana_llm_deepseekv2.yaml");
     std::string config_path = std::filesystem::absolute(config_path_relate).string();
 
     AttentionBackendManager::GetInstance()->Initialize();
@@ -344,11 +547,28 @@ class MlaTest : public testing::Test {
     context->global.reset(new GlobalContext(1, 1, 1, env));
     context->global->InitDistributedConfig();
 
-    ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
     context->device = std::make_shared<DeviceContext>(1);
+#ifdef ENABLE_CUDA
+    // NCCL 仅在 NVIDIA 平台需要;昆仑芯单卡(GlobalContext tp=1)跑 MLA 不涉及跨卡通信。
+    ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
     context->device->ext->InitNcclParam(nccl_uid);
+#endif
 
-    env->ParseConfig(config_path, std::filesystem::absolute(config_path_relate.parent_path() / "deepseekv2").string());
+    if (is_kunlun_test) {
+      // light yaml 里 model_dir 已指向真实 Kimi-K2.6 模型目录,无需 override。
+      env->ParseConfig(config_path);
+      // 复用同一套流程,但按昆仑芯 2 卡分片场景把并行度设成 tp=2 / ep=2。
+      env->SetTensorParallelSize(2);
+      env->SetExpertParallelSize(2);
+      // light yaml 的 tensor_para_size=1 会让 ParseConfig 把 attn_tensor_parallel_size 算成 1
+      // (attn_dp=1),而 SetTensorParallelSize 不会重算它。MLA 权重形状与下面硬编码的期望值
+      // 是在 attn_tensor_parallel_size=8(head_per_tp=64/8=8,即真实 8卡部署的单卡分片)下抓取的,
+      // 因此这里显式钉成 8,使单卡 light 配置下的分片形状与期望值保持一致。
+      env->schedule_config_parser_.runtime_config_.parallel_basic_config.attn_tensor_parallel_size = 8;
+    } else {
+      env->ParseConfig(config_path,
+                       std::filesystem::absolute(config_path_relate.parent_path() / "deepseekv2").string());
+    }
     env->GetModelConfig(model_config);
     InitPipelineConfigForTest(env, model_config);
 
@@ -604,3 +824,25 @@ TEST_F(MlaTest, ForwardWithFlashDsaFP8Test) {
   unsetenv("CONTEXT_DSA_THRESHOLD");
   return;
 }
+
+#ifdef ENABLE_KUNLUN
+// 昆仑芯 P800 上复用与 CUDA 相同的 MLA 前向流程:
+// SetUp 会识别测试名中的 "Kunlun",改用 ksana_llm_kimi_k26_kunlun.yaml,
+// 并把 tp_size / ep_size 覆盖为 2。
+//
+// 这是 Kimi-K2.6 MLA 模型,昆仑芯上要跑的就是 W4A8:GEMM/BMM 权重是 int8 + fp32
+// per-channel scale,非量化 fp16 GEMM 根本没实现。因此这里保持 quant_config.method
+// = QUANT_W4A8_KLX(matmul_layer_factory 据此 + 权重实际 dtype=INT8 路由到
+// KunlunInt8MatMulLayer),权重由 AddMlaWeight 造成 int8+scale;激活/norm 仍用 fp16。
+TEST_F(MlaTest, ForwardWithKunlunMlaTest) {
+  model_config.is_quant = true;
+  model_config.weight_data_type = TYPE_FP16;  // 激活/norm dtype;GEMM 权重是 int8
+  model_config.quant_config.method = QUANT_W4A8_KLX;
+  runtime_config.inter_data_type = model_config.weight_data_type;
+  const auto& env = Singleton<Environment>::GetInstance();
+  env->schedule_config_parser_.runtime_config_.inter_data_type = model_config.weight_data_type;
+  std::cout << "Test Kunlun W4A8_KLX (int8 weight + fp32 scale) MLA forward." << std::endl;
+  TestMlaForward<float16>();
+  return;
+}
+#endif

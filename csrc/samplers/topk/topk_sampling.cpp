@@ -44,6 +44,8 @@ TopkSampling::TopkSampling(size_t max_batch_size, size_t max_vocab_size, RandSta
   GetDevice(&rank);
   atb_executor_.Init(rank, max_batch_size);
   atb_executors_ptr_ = &atb_executor_;
+#elif defined(ENABLE_KUNLUN)
+  Malloc(&argmax_int64_buffer_, sizeof(int64_t) * max_batch_size);
 #endif
 }
 
@@ -51,6 +53,11 @@ TopkSampling::~TopkSampling() {
   if (workspace_size_ > 0) {
     Free(workspace_);
   }
+#ifdef ENABLE_KUNLUN
+  if (argmax_int64_buffer_) {
+    Free(argmax_int64_buffer_);
+  }
+#endif
 }
 
 Status TopkSampling::RunSampling(float* logits, uint32_t* output_token, const SamplingConfig* sampling_config,
@@ -61,7 +68,12 @@ Status TopkSampling::RunSampling(float* logits, uint32_t* output_token, const Sa
     ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream);
 #elif defined(ENABLE_ACL)
     ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream,
-           atb_executors_ptr_);
+           nullptr, atb_executors_ptr_);
+#elif defined(ENABLE_KUNLUN)
+    ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream,
+           sampling_device_parameter.device_ctx, argmax_int64_buffer_);
+#else
+    ArgMax(logits, sampling_device_parameter.bs, sampling_device_parameter.vocab_size_padded, output_token, stream);
 #endif
   } else {
 #ifdef ENABLE_CUDA

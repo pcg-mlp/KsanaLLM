@@ -3,8 +3,16 @@
 ==============================================================================*/
 #include "models/common/common_model.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
+
+#ifdef ENABLE_KUNLUN
+#  include <cuda_runtime.h>
+#  include "device/device_context.h"
+#  include "kernels/kunlun/basic_kernel_wrapper.h"
+#  include "runtime/fast_path_controller.h"
+#endif
 
 #include "device/common_device.h"
 #include "device/device_types.h"
@@ -42,12 +50,32 @@ CommonModel::CommonModel(const ModelConfig& model_config, const RuntimeConfig& r
                  << ", is_distributed_master:" << context_->global->IsDistributedMaster();
 }
 
-CommonModel::~CommonModel() {}
+CommonModel::~CommonModel() {
+#ifdef ENABLE_KUNLUN
+  for (auto& kv : decode_graph_execs_) {
+    if (kv.second) cudaGraphExecDestroy(static_cast<cudaGraphExec_t>(kv.second));
+  }
+  decode_graph_execs_.clear();
+#endif
+}
 
 void CommonModel::InitRunConfig(const ModelRunConfig& model_run_config, std::shared_ptr<BaseWeight> base_weight,
                                 std::shared_ptr<BaseModelCacheLayout> block_cache_layout) {
   prefix_caching_enabled_ = runtime_config_.enable_prefix_caching;
   speculative_decoding_enabled_ = runtime_config_.enable_speculative_decoding;
+
+#ifdef ENABLE_KUNLUN
+  xpu_graph_enabled_ = runtime_config_.enable_cuda_graph;
+  cuda_graph_bs_ = runtime_config_.cuda_graph_bs;
+  if (xpu_graph_enabled_) {
+    std::string bs_str;
+    for (size_t i = 0; i < cuda_graph_bs_.size(); ++i) {
+      bs_str += std::to_string(cuda_graph_bs_[i]);
+      if (i + 1 < cuda_graph_bs_.size()) bs_str += ",";
+    }
+    KLLM_LOG_INFO << "[XPU Graph] enabled, bs=[" << bs_str << "]";
+  }
+#endif
 
   size_t free_device_mem_before_init, free_device_mem_after_init, total_device_mem;
   MemGetInfo(&free_device_mem_before_init, &total_device_mem);
@@ -454,6 +482,114 @@ void CommonModel::GetCurBatchPairs(size_t model_input_slot, const int64_t** out_
   }
 }
 
+Status CommonModel::LayerForwardWithGraph(ForwardingContext& forwarding_context, const RunMode run_mode) {
+// CUDA/XPU Graph capture strategy (Kunlun): graphs are built ON THE FLY during normal decode,
+// not in a separate warmup pass. For each wanted batch size the first kXpuGraphWarmupSteps decode
+// steps run eager (just counting); once past that, the next step captures the graph inline — the
+// LayerForward invoked inside cudaStreamBeginCapture becomes the graph body — and immediately
+// replays it. This avoids a dedicated warmup phase and keeps capture in lock-step with real
+// traffic, at the cost that the first steps of each new bs pay eager latency. See the
+// wait_prepare_events note below for why cross-stream deps are re-added at launch time.
+#ifdef ENABLE_KUNLUN
+  const bool is_multi_token_forward = forwarding_context.GetModelInput()->multi_token_request_num > 0;
+  if (!is_multi_token_forward && xpu_graph_enabled_ && !graph_replay_disabled_) {
+    const int cur_bs = static_cast<int>(forwarding_context.GetModelInput()->batch_size);
+    const bool bs_wanted = std::find(cuda_graph_bs_.begin(), cuda_graph_bs_.end(), cur_bs) != cuda_graph_bs_.end() &&
+                           graph_disabled_bs_.count(cur_bs) == 0;
+
+    if (bs_wanted) {
+      cudaStream_t xpu_stream =
+          static_cast<cudaStream_t>(forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
+
+      // 补回 graph 模式下缺失的跨流依赖。
+      //
+      // eager 路径由 CommonAttention::Forward (layer 0) 里的 StreamWaitEvent 保证
+      // 「H2D / rotary / kvcache-offset 这些别的流上的准备工作先于 attention 完成」，
+      // 但那段 wait 在 graph 模式下两头都落空：
+      //   - capture 时被 `!IsGraphCapturing()` 显式跳过（跨流 event 会破坏 capture）；
+      //   - replay 时压根不执行 LayerForward，只有 cudaGraphLaunch。
+      // 而 capture 前的 StreamSynchronize 只同步了 compute stream，且只发生一次。
+      // 结果是每次 replay 都可能在 H2D 落地前就跑 attention（buffer 小、通常侥幸不炸，
+      // 属于换机器/加压才现形的竞态）。这里在 launch 前显式等一次：纯 stream 侧等待，
+      // 不阻塞 host，与 eager 路径语义一致。
+      auto wait_prepare_events = [&forwarding_context]() {
+        auto compute_stream = forwarding_context.GetContext()->device->GetPrimaryComputeStream();
+        auto model_input = forwarding_context.GetModelInput();
+        StreamWaitEvent(compute_stream, model_input->kvcache_offset_event);
+        StreamWaitEvent(compute_stream, model_input->rotary_embedding_event);
+        StreamWaitEvent(compute_stream, model_input->h2d_atb_event);
+      };
+
+      auto exec_it = decode_graph_execs_.find(cur_bs);
+      if (exec_it != decode_graph_execs_.end()) {
+        wait_prepare_events();
+        cudaGraphLaunch(static_cast<cudaGraphExec_t>(exec_it->second), xpu_stream);
+        return Status();
+      }
+
+      int& warmup = warmup_counts_[cur_bs];
+      if (warmup < kXpuGraphWarmupSteps) {
+        warmup++;
+        KLLM_LOG_DEBUG << "[XPU Graph] bs=" << cur_bs << " warmup " << warmup << "/" << kXpuGraphWarmupSteps;
+      } else {
+        KLLM_LOG_INFO << "[XPU Graph] capturing decode graph for bs=" << cur_bs << "...";
+
+        // Sync all streams before capture so no pending ops bleed into the graph.
+        StreamSynchronize(forwarding_context.GetContext()->device->GetPrimaryComputeStream());
+        forwarding_context.SetGraphCapturing(true);
+
+        cudaGraph_t graph = nullptr;
+        // Use ModeRelaxed: only capture ops on compute stream, don't bake in
+        // cross-stream event dependencies. 这些依赖不会进图，因此由上面的
+        // wait_prepare_events() 在每次 launch 前于 stream 上补齐
+        // （注意 PrepareATBKVCache 只 EventRecord、并不 StreamSynchronize）。
+        cudaError_t err = cudaStreamBeginCapture(xpu_stream, cudaStreamCaptureModeRelaxed);
+        if (err != cudaSuccess) {
+          KLLM_LOG_WARNING << "[XPU Graph] cudaStreamBeginCapture failed for bs=" << cur_bs << " ("
+                           << cudaGetErrorString(err) << "), disabling graph permanently.";
+          forwarding_context.SetGraphCapturing(false);
+          graph_replay_disabled_ = true;
+        } else {
+          LayerForward(forwarding_context, run_mode);
+
+          err = cudaStreamEndCapture(xpu_stream, &graph);
+          forwarding_context.SetGraphCapturing(false);
+
+          if (err != cudaSuccess || graph == nullptr) {
+            KLLM_LOG_WARNING << "[XPU Graph] cudaStreamEndCapture failed for bs=" << cur_bs << " ("
+                             << cudaGetErrorString(err) << "), disabling graph permanently.";
+            graph_replay_disabled_ = true;
+          } else {
+            cudaGraphExec_t exec = nullptr;
+            err = cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0);
+            cudaGraphDestroy(graph);
+
+            if (err != cudaSuccess || exec == nullptr) {
+              // 实例化失败是「这张图」的问题（例如图太大/资源不足），不代表 capture 机制坏掉，
+              // 因此只禁用该 batch size；其余 bs 仍可继续捕获，避免一次偶发失败让整个进程
+              // 永久退回 eager。BeginCapture/EndCapture 失败才是流级故障，那两处仍全局禁用。
+              KLLM_LOG_WARNING << "[XPU Graph] cudaGraphInstantiate failed for bs=" << cur_bs << " ("
+                               << cudaGetErrorString(err) << "), disabling graph for this batch size only.";
+              graph_disabled_bs_.insert(cur_bs);
+            } else {
+              decode_graph_execs_[cur_bs] = static_cast<void*>(exec);
+              KLLM_LOG_INFO << "[XPU Graph] captured bs=" << cur_bs << ", total_captured=" << decode_graph_execs_.size()
+                            << "/" << cuda_graph_bs_.size() << ", launching first replay";
+              // capture 期间 LayerForward 的 kernel 只进图未执行，这次 launch 才是本 step 的
+              // 真正计算，同样需要先等准备流。
+              wait_prepare_events();
+              cudaGraphLaunch(exec, xpu_stream);
+              return Status();
+            }
+          }
+        }
+      }
+    }
+  }
+#endif
+  return LayerForward(forwarding_context, run_mode);
+}
+
 Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
                             std::vector<ForwardRequest>& forward_reqs, HiddenUnitDeviceBuffer* hidden_unit,
                             RunMode run_mode, size_t model_input_slot, const int64_t* prev_ring_dev,
@@ -467,7 +603,6 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   // host vectors are issued synchronously w.r.t. the host (pageable memory is staged inside
   // cudaMemcpyAsync before return), so the lock does not need to span StreamSynchronize.
   std::lock_guard<std::mutex> forward_lock(forward_mutex_);
-
   SetHiddenUnitBufferTensors(hidden_unit);
 
   time_t start_time_ms = ProfileTimer::GetCurrentTimeInMs();
@@ -500,6 +635,30 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
   }
 #endif
 
+#ifdef ENABLE_KUNLUN
+  // Build-ahead (Phase 1): before the embedding reads input_ids, backfill the -1 placeholder in
+  // the last slot with the previous step's sampled token (published in prev_ring). Enqueued on the
+  // primary compute stream after waiting on input_ids_event, so it runs after this step's input_ids
+  // + cur_batch_pairs H2D completed and before emb_lookup reads input_ids (same stream, FIFO). No-op
+  // unless build-ahead passed the startup gate and prev_ring is set; the kernel self-guards on
+  // placeholder (only -1 slots) and ring count (cold start count==0 => vacuous), so it is idempotent.
+  if (FastPathController::GetInstance().IsEnabledAtStartup() && prev_ring_dev != nullptr &&
+      (!context_->global->IsDistributedWorker() ||
+       (run_mode == RunMode::kNextN && context_->global->IsSamplingNode()))) {
+    auto& model_input = forwarding_context_->GetModelInput();
+    const int64_t batch_size = static_cast<int64_t>(forward_reqs.size());
+    if (batch_size > 0 && model_input->input_ids.shape[0] > 0) {
+      StreamWaitEvent(context_->device->GetPrimaryComputeStream(), model_input->input_ids_event);
+      auto* xpu_ctx = static_cast<xpytorch::xpu::api::Context*>(
+          GetXpuKernelCtxPtr(context_->device.get(), context_->device->GetPrimaryComputeStream()));
+      const int64_t ids_len = static_cast<int64_t>(model_input->input_ids.shape[0]);
+      XpuReplaceLastToken(xpu_ctx, model_input->input_ids.template GetPtr<int32_t>(false),
+                          model_input->cur_batch_pairs_tensor.template GetPtr<int64_t>(false), prev_ring_dev,
+                          batch_size, ids_len);
+    }
+  }
+#endif
+
   if (!context_->global->IsDistributedWorker() || (run_mode != RunMode::kMain && context_->global->IsSamplingNode())) {
     RecordRequestSchedEventWithFContext(*forwarding_context_, "EmbLookup", RequestEventPhase::Begin);
     LookupEmbedding(*forwarding_context_, base_weight, forward_reqs, run_mode);
@@ -508,11 +667,11 @@ Status CommonModel::Forward(std::shared_ptr<ksana_llm::BaseWeight>& base_weight,
 
   forwarding_context_->SetIsForwardingLayers(true);
   if (!runtime_config_.is_profile_mode) {
-    LayerForward(*forwarding_context_, run_mode);
+    LayerForwardWithGraph(*forwarding_context_, run_mode);
   } else {
     // Used for layer forwarding performance profile
     for (size_t idx = 0; idx < g_profile_layer_forwarding_round; idx++) {
-      LayerForward(*forwarding_context_, run_mode);
+      LayerForwardWithGraph(*forwarding_context_, run_mode);
     }
   }
   forwarding_context_->SetIsForwardingLayers(false);
@@ -609,6 +768,12 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get())
                             ->Forward(&residual_buffer[0], &forwarding_context.GetModelInput()->last_token_index_tensor,
                                       &hidden_buffer_tensors_0[0]));
+#else
+    // Kunlun / other backends: same as CUDA path (typed pointer-param style)
+    auto* typed = static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get());
+    STATUS_CHECK_RETURN(typed->Forward(&residual_buffer[0],
+                                       &forwarding_context.GetModelInput()->logits_idx_uint64_tensor,
+                                       &hidden_buffer_tensors_0[0]));
 #endif
   }
 
@@ -673,6 +838,12 @@ Status CommonModel::LmHead(ForwardingContext& forwarding_context, std::shared_pt
     STATUS_CHECK_RETURN(static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get())
                             ->Forward(&residual_buffer[0], &forwarding_context.GetModelInput()->last_token_index_tensor,
                                       &hidden_buffer_tensors_0[0]));
+#else
+    // Kunlun / other backends: same as CUDA path (typed pointer-param style)
+    auto* typed = static_cast<AssembleTokensHiddenLayer*>(assemble_tokens_hidden_layer_.get());
+    STATUS_CHECK_RETURN(typed->Forward(&residual_buffer[0],
+                                       &forwarding_context.GetModelInput()->logits_idx_uint64_tensor,
+                                       &hidden_buffer_tensors_0[0]));
 #endif
   }
 

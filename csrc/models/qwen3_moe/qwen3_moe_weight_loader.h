@@ -34,7 +34,21 @@ class Qwen3MoeWeightLoader : public BaseModelWeightLoader {
   Status process_experts_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                               const std::string& weight_prefix_name, int dev_rank);
 
+  // EP-aware per-expert loaders for the BF16 (non-quant) path. Under expert parallelism each rank keeps
+  // only its local experts and splits the intermediate dim by moe_tensor_para_size (not tensor_parallel_size).
+  // These override CommonMethod::load_mlp_gate_up_proj / load_mlp_down_proj for qwen3_moe experts.
+  Status load_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                               const std::string& weight_name, const Tensor& weight_tensor, int dev_rank);
+  Status load_mlp_down_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                            const std::string& weight_name, const Tensor& weight_tensor, int dev_rank);
+
  private:
+  // Compute this rank's expert-parallel partition (mirrors csrc/models/quant/quant_weight.cpp).
+  // Returns the local expert range [expert_start, expert_end), the moe tensor-parallel group size and
+  // this rank's index within that group.
+  void ComputeExpertPartition(int dev_rank, size_t num_experts, size_t& num_experts_per_rank, size_t& expert_start,
+                              size_t& expert_end, size_t& moe_tp_size, size_t& tp_rank) const;
+
   PipelineConfig pipeline_config_;
   RuntimeConfig runtime_config_;
   std::shared_ptr<CommonModelWeightLoader> common_weight_loader_;

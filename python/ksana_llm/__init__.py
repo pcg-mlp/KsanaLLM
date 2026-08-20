@@ -68,10 +68,16 @@ if os.path.isdir(os.path.join(_pkg_kernel_dir, "triton_kernel_files")):
 _old_flags = sys.getdlopenflags()
 sys.setdlopenflags(_old_flags | os.RTLD_GLOBAL)
 try:
-    from ksana_llm import openaiapi, utilize, libtorch_serving, ksana_encoder
+    from ksana_llm import libtorch_serving
+    sys.modules['libtorch_serving'] = libtorch_serving
+except ImportError:
+    import libtorch_serving  # fallback: find via PYTHONPATH / sys.path
+
+# Optional submodules (may not be present in all deployments)
+try:
+    from ksana_llm import openaiapi, utilize, ksana_encoder
     sys.modules['openaiapi'] = openaiapi
     sys.modules['utilize'] = utilize
-    sys.modules['libtorch_serving'] = libtorch_serving
     sys.modules['ksana_encoder'] = ksana_encoder
 except ImportError:
     try:

@@ -223,7 +223,7 @@ Status QwenEmbeddingModel::LmHead(ForwardingContext& forwarding_context,
   }
 #else
   KLLM_LOG_ERROR << "QwenEmbeddingModel::LmHead requires CUDA support";
-  return Status(RetCode::RET_RUNTIME, "QwenEmbeddingModel requires CUDA support");
+  return Status(RetCode::RET_RUNTIME_FAILED, "QwenEmbeddingModel requires CUDA support");
 #endif
 
   // hidden_buffer_tensors_0[0] now has shape [num_seqs, hidden_size]

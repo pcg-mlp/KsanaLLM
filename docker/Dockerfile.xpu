@@ -1,0 +1,195 @@
+# Copyright 2026 Tencent Inc.  All rights reserved.
+#
+# =============================================================================
+# Dockerfile.xpu — KsanaLLM Kunlun XPU build/dev image
+#
+# Base: venus kunlun-base (TencentOS, conda+python3.10/env-3.10, XRE/XHPC/XCCL,
+#       cmake/gcc). Build layers in order:
+#   1. openssl-devel          (system, yum)
+#   2. git safe.directory     (ceph/nfs uid workaround)
+#   3. cu118 torch            (metadata stub for xpytorch.run)
+#   4. XPU runtime            (xsglang tarball — xpytorch + ops + triton)
+#   5. XTDK compiler          (xpu-clang + kernel headers)
+#   6. KsanaLLM requirements  (pin overrides after SDK install)
+#   7. conda env switch       (env-3.6.8 → env-3.10)
+#
+# Build (from KsanaLLM repo root):
+#   sudo docker build \
+#       --build-arg HTTP_PROXY="$HTTP_PROXY" \
+#       --build-arg HTTPS_PROXY="$HTTPS_PROXY" \
+#       --build-arg NO_PROXY="$NO_PROXY" \
+#       -f docker/Dockerfile.xpu -t ksana-llm:xpu-fangtang . \
+#       2>&1 | tee /tmp/ksana-xpu-build.log
+#
+# Pre-req: build host must reach mirrors.tencent.com (internal).
+# Override xsglang package with --build-arg XSGLANG_PKG=... if needed.
+# =============================================================================
+
+FROM mirrors.tencent.com/todacc/venus-trpc-python3.10-kunlun-base:0.1.7
+
+LABEL MAINTAINER="ksana-llm-developer"
+LABEL backend="kunlun-xpu"
+
+# -----------------------------------------------------------------------------
+# [STEP 1] openssl-devel
+#
+# `env -i bash -c "..."` strips conda from the entire RUN command. Without it,
+# `env -i cmd1 && cmd2` only sanitizes cmd1 — yum clean still inherits conda's
+# env where libpython hijacks /usr/bin/python3, causing "No module named 'dnf'".
+#
+# --disablerepo='*' + explicit BaseOS/AppStream avoids Qcloud el7_9 shipping
+# openssl-1.0.2k that conflicts with the system openssl-3.0.12.
+# -----------------------------------------------------------------------------
+RUN env -i PATH=/usr/bin:/usr/sbin:/bin:/sbin HOME=/root bash -c "\
+    yum install -y \
+        --disablerepo='*' \
+        --enablerepo='BaseOS' --enablerepo='AppStream' \
+        openssl-devel \
+    && yum clean all"
+
+# -----------------------------------------------------------------------------
+# [STEP 2] git safe.directory
+#
+# On ceph/nfs mounts the source tree owner uid differs from container root (0).
+# Git refuses with "fatal: detected dubious ownership", which breaks cmake
+# FetchContent / ExternalProject_Add / submodule update mid-configure.
+# -----------------------------------------------------------------------------
+RUN git config --system --add safe.directory '*'
+
+# -----------------------------------------------------------------------------
+# Build-time proxy (needed for STEP 3 — download.pytorch.org).
+# Cleared at the end so the image doesn't carry it.
+# -----------------------------------------------------------------------------
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=$HTTP_PROXY HTTPS_PROXY=$HTTPS_PROXY NO_PROXY=$NO_PROXY \
+    http_proxy=$HTTP_PROXY https_proxy=$HTTPS_PROXY no_proxy=$NO_PROXY \
+    PIP_TRUSTED_HOST="pypi.org files.pythonhosted.org download.pytorch.org"
+
+# -----------------------------------------------------------------------------
+# [STEP 3] cu118 torch (metadata stub)
+#
+# xpytorch.run calls importlib.metadata.version("torch") during install, so a
+# torch package entry must exist before STEP 4. cu118 is irrelevant on XPU;
+# the wheel just provides the `torch` namespace that torch_xmlir later patches.
+# -----------------------------------------------------------------------------
+RUN source ~/.bashrc \
+    && pip3 install --no-cache-dir \
+        torch==2.5.1 torchaudio==2.5.1 torchvision==0.20.1 \
+        --index-url https://download.pytorch.org/whl/cu118
+
+# -----------------------------------------------------------------------------
+# [STEP 4] XPU runtime via xsglang tarball
+#
+# wget tarball from internal mirror, install only the runtime parts:
+#   a. hyperparameter==0.5.6 + colorama  (xpytorch implicit deps, must precede)
+#   b. xpytorch.run                      (1.6 GB self-extract → torch_xmlir)
+#   c. xtorch_ops + xflashinfer_ops + triton wheels  (--force-reinstall --no-deps)
+#   d. xpu-smi + libxpunvidia-ml*        (copy to /usr/local/bin)
+#   e. ld.lld + lld + clang              (copy to torch_xmlir/ — XMLIR build fix)
+#
+# The sglang application stack inside the tarball is intentionally dropped
+# (sglang / sgl_kernel / sglang_router / mooncake / flash_mla / deep_ep /
+#  deep_gemm / hydrax / xsglang server) — KsanaLLM has its own.
+# Override XSGLANG_PKG via --build-arg if a newer release is needed.
+# -----------------------------------------------------------------------------
+ARG XSGLANG_PKG="xsglang_ubuntu2204_x86_64.tar.gz"
+ARG XSGLANG_URL_BASE="https://klx-sdk-release-public.su.bcebos.com/xsglang/daily/latest"
+# BOS is blocked by corporate vproxy; use the xsglang dev proxy to reach it.
+# Pass --build-arg XSGLANG_PROXY="" to disable if your build host can reach BOS directly.
+ARG XSGLANG_PROXY="http://9.141.161.68:11113"
+
+RUN source ~/.bashrc && cd /data_dev \
+    && wget ${XSGLANG_PROXY:+-e "https_proxy=${XSGLANG_PROXY}"} "${XSGLANG_URL_BASE}/${XSGLANG_PKG}" \
+    && tar -zxf "${XSGLANG_PKG}" \
+    && cd "${XSGLANG_PKG%.tar.gz}" \
+    && pip3 install --no-cache-dir hyperparameter==0.5.6 colorama \
+    && bash xpytorch*.run --quiet --accept --noprogress --nox11 \
+    && pip3 install --force-reinstall --no-deps xtorch_ops*.whl \
+    && pip3 install --force-reinstall --no-deps xflashinfer_ops*.whl \
+    && pip3 install --force-reinstall --no-deps triton*.whl \
+    && cp -rf ${CONDA_PREFIX}/lib/python3.10/site-packages/torch_xmlir/xre/bin/xpu-smi /usr/local/bin/ \
+    && cp -rf ${CONDA_PREFIX}/lib/python3.10/site-packages/torch_xmlir/xre/so/libxpunvidia-ml* /usr/local/bin/ \
+    && XMLIR=${CONDA_PREFIX}/lib/python3.10/site-packages/torch_xmlir \
+    && cp -rf $XMLIR/xhpc/xblas/dependency_so/ld.lld $XMLIR/ \
+    && cp -rf $XMLIR/xhpc/xblas/dependency_so/lld    $XMLIR/ \
+    && cp -rf $XMLIR/xhpc/xblas/dependency_so/clang  $XMLIR/ \
+    && cd /data_dev && rm -rf "${XSGLANG_PKG%.tar.gz}" "${XSGLANG_PKG}"
+
+# -----------------------------------------------------------------------------
+# [STEP 5] XTDK — xpu-clang compiler + device kernel headers
+#
+# Required to compile .xpu device kernels (same toolchain as libapiinfer.so).
+# Installed to /usr/local/xtdk/:
+#   bin/clang                            — xpu-clang (LLVM 15, Kunlun XPU3)
+#   lib/libxpuhost.a                     — host-side kernel launch runtime
+#   lib/clang/15.0.7/include/xpu/kernel/ — device headers (xtdk.h, etc.)
+#
+# WARNING: *.bcebos.com is blocked by corporate vproxy. The wget here uses the
+# xsglang dev proxy (9.141.161.68:11113) which can reach Baidu public BOS.
+# -----------------------------------------------------------------------------
+ARG XTDK_URL="https://klx-sdk-release-public.su.bcebos.com/xtdk_15fusion/dev/api_tmp/20260407/xtdk-llvm15-ubuntu2004_x86_64.tar.gz"
+RUN source ~/.bashrc && cd /tmp \
+    && wget -q -e "https_proxy=http://9.141.161.68:11113" \
+       "${XTDK_URL}" -O xtdk.tar.gz \
+    && tar -xzf xtdk.tar.gz -C /usr/local/ \
+    && ln -sf /usr/local/xtdk-llvm15-ubuntu2004_x86_64 /usr/local/xtdk \
+    && rm -f /tmp/xtdk.tar.gz \
+    && /usr/local/xtdk/bin/clang --version
+ENV XTDK_DIR=/usr/local/xtdk
+ENV PATH="${XTDK_DIR}/bin:${PATH}"
+
+# -----------------------------------------------------------------------------
+# [STEP 6] KsanaLLM application deps
+#
+# Installed after SDK so these pins override any versions the XPU wheels pulled.
+# Keep in sync with <repo>/requirements.txt when updating.
+#
+# NOTE: do NOT `conda install boost`. conda boost 1.82 ships BoostConfig.cmake
+# without boost_dll-config (dll is header-only), causing find_package(Boost dll)
+# to half-succeed: Boost::headers/system/filesystem/atomic register as imported
+# targets but Boost_FOUND=FALSE. Those leftover targets collide with FetchContent
+# boost-1.88 ALIAS step. Use FetchContent (cmake/external/boost.cmake) instead.
+# -----------------------------------------------------------------------------
+RUN source ~/.bashrc \
+    && pip3 install --no-cache-dir \
+        transformers==5.2.0 \
+        sentencepiece==0.2.0 \
+        "uvicorn[standard]==0.29.0" \
+        fastapi==0.110.0 \
+        rouge_score==0.1.2 \
+        aiohttp==3.9.5 \
+        "msgpack>=1.0.8" \
+        "orjson>=3.10.7" \
+        "uvloop>=0.20.0" \
+        grpcio==1.67.1 \
+        "tritonclient[grpc]==2.41.0" \
+        blake3==1.0.5 \
+        cachetools==6.0.0 \
+        Jinja2==3.1.6 \
+        openai==1.93.3 \
+        partial_json_parser==0.2.1.1.post6 \
+        shortuuid==1.0.13 \
+        codetiming==1.4.0
+
+# -----------------------------------------------------------------------------
+# [STEP 7] Switch default conda env to env-3.10
+# Base image's custom.bashrc activates env-3.6.8 (no torch stack).
+# -----------------------------------------------------------------------------
+USER mqq
+RUN sed -i 's/conda activate env-3.6.8/conda activate env-3.10/g' ~/custom.bashrc
+USER root
+
+# -----------------------------------------------------------------------------
+# Kunlun runtime env defaults (override at `docker run -e ...` if needed)
+# -----------------------------------------------------------------------------
+ENV BKCL_TIMEOUT=300 \
+    BKCL_DEBUG_LOG_LEVEL=0
+
+# Clear build-time proxy so the image doesn't carry it.
+ENV HTTP_PROXY="" HTTPS_PROXY="" NO_PROXY="" \
+    http_proxy="" https_proxy="" no_proxy="" \
+    PIP_TRUSTED_HOST=""
+
+WORKDIR /workspace/KsanaLLM

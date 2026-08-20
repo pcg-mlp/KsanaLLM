@@ -16,6 +16,9 @@
 #include "layers/marlin_moe_layer.h"
 #include "layers/matmul_layer.h"
 #include "layers/moe_layer.h"
+#ifdef ENABLE_KUNLUN
+#  include "layers/kunlun_int8_matmul_layer.h"
+#endif
 
 namespace ksana_llm {
 
@@ -84,6 +87,14 @@ MatMulLayerFactory::MatMulLayerFactory(const ModelConfig& model_config, const Ru
       &MatMulLayerFactory::BuildLayer<BlockwiseMatMulLayer>;
 
 #endif
+
+#ifdef ENABLE_KUNLUN
+  // W4A8_KLX: INT8 per-channel quantized weights (Kunlun XPU, klx_int8_scaled_mm kernel)
+  builder_map_[{TYPE_INT8, TYPE_BF16, TYPE_BF16, QUANT_W4A8_KLX, DEFAULT_LINEAR_BACKEND}] =
+      &MatMulLayerFactory::BuildLayer<KunlunInt8MatMulLayer>;
+  builder_map_[{TYPE_INT8, TYPE_FP16, TYPE_FP16, QUANT_W4A8_KLX, DEFAULT_LINEAR_BACKEND}] =
+      &MatMulLayerFactory::BuildLayer<KunlunInt8MatMulLayer>;
+#endif
 }
 
 std::shared_ptr<MatMulBaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared_ptr<BaseWeight> base_weight,
@@ -104,6 +115,17 @@ std::shared_ptr<MatMulBaseLayer> MatMulLayerFactory::AutoCreateLayer(std::shared
                      .output_type = output_type};
     return CreateLayer(TYPE_I4_GROUP, input_type, output_type, {param}, QUANT_W4A8_AWQ, CUTLASS_LINEAR_BACKEND);
   }
+#ifdef ENABLE_KUNLUN
+  // W4A8_KLX layer (Kunlun INT8 per-channel quantization)
+  // Only route to KunlunInt8MatMulLayer if the weight is actually INT8 AND has weight_scales bound.
+  // Non-quantized weights (gate.weight, layernorm, etc.) remain BF16 and should use the default matmul.
+  if (weight_status.quant_mode == QUANT_W4A8_KLX || model_config_.quant_config.method == QUANT_W4A8_KLX) {
+    DataType actual_weight_dtype = base_weight->GetModelWeights(weight_name).dtype;
+    if (actual_weight_dtype == TYPE_INT8) {
+      return CreateLayer(TYPE_INT8, input_type, output_type, init_params, QUANT_W4A8_KLX, DEFAULT_LINEAR_BACKEND);
+    }
+  }
+#endif
   // gptq layer
   if (model_config_.is_quant &&
       (model_config_.quant_config.method == QUANT_GPTQ || model_config_.quant_config.method == QUANT_AWQ)) {

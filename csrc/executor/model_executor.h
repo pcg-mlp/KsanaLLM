@@ -13,6 +13,9 @@ namespace ksana_llm {
 
 class ModelExecutor {
  public:
+  // prev_ring_dev (build-ahead Phase 1 previous-step sampler ring) is threaded via
+  // model_input->prev_ring_dev, read inside Forward and passed down to CommonModel::Forward for the
+  // device-side placeholder backfill. nullptr on the slow path.
   Status Forward(std::shared_ptr<NewModelInput> model_input, HiddenUnitDeviceBuffer* hidden_unit,
                  std::shared_ptr<NewModelOutput> model_output);
 

@@ -828,7 +828,8 @@ void DataToFloat<__nv_bfloat16>(const void* input, const int data_size, const si
                                                              vocab_size));
 }
 
-Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
+Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* device_ctx,
+                   void* workspace_ptr) {
   if (tensor.dtype == DataType::TYPE_BF16 && target_dtype == DataType::TYPE_FP16) {
     CUDA_CHECK_LAST_ERROR(
         llm_kernels::nvidia::BFloat16ToHalf(tensor.GetPtr<void>(), tensor.GetElementNumber(), stream.Get()));
@@ -845,7 +846,7 @@ Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, 
 }
 
 Status Permute(Tensor& input_tensor, Tensor& output_tensor, const std::vector<size_t>& permutation, Stream& stream,
-               void* workspace_ptr) {
+               void* device_ctx, void* workspace_ptr) {
   if (input_tensor.dtype == TYPE_UINT8) {
     InvokePermute<uint8_t>(input_tensor.GetPtr<void>(), output_tensor.GetPtr<void>(), input_tensor.shape, permutation,
                            stream.Get());
@@ -996,8 +997,9 @@ void CalcInputLogprobs(float* logits, float* temperatures, int vocab_size, int b
 
 template <typename T>
 Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, Stream& stream,
-              void* buffer_ptr) {
+              void* device_ctx, void* buffer_ptr) {
   (void)buffer_ptr;
+  (void)device_ctx;  // NVIDIA 路径不使用 device_ctx，保留参数以统一接口
   const auto launch_argmax = [&]() {
     CUDA_CHECK_LAST_ERROR(llm_kernels::nvidia::InvokeArgMaxReduce(input, batch_size, vocab_size, result, stream.Get()));
   };
@@ -1014,7 +1016,7 @@ Status ArgMax(const T* input, const int32_t batch_size, const int32_t vocab_size
 
 #define INSTANTIATE_ARG_MAX(T)                                                                                    \
   template Status ArgMax<T>(const T* input, const int32_t batch_size, const int32_t vocab_size, uint32_t* result, \
-                            Stream& stream, void* buffer_ptr);
+                            Stream& stream, void* device_ctx, void* buffer_ptr);
 
 INSTANTIATE_ARG_MAX(float);
 INSTANTIATE_ARG_MAX(half);

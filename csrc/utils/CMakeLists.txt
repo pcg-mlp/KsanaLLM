@@ -18,9 +18,15 @@ endif()
 
 add_library(utils STATIC ${utils_SRCS} ${utils_nvidia_SRCS})
 add_dependencies(utils fmt gflags)
+# NOTE(fangtang, kunlun-adapt): Boost::dll is gated by WITH_BOOST so that
+# configure-only runs (without boost downloaded) can still complete.
+set(_utils_boost_libs "")
+if(WITH_BOOST)
+  set(_utils_boost_libs Boost::dll)
+endif()
 target_link_libraries(utils PUBLIC
   -lpthread -ldl gflags loguru yaml-cpp profiler ${utils_nvidia_LIBS}
-  absl::base absl::strings re2 Boost::dll ${TORCH_LIBRARIES} ${PYTHON_LIBRARY} xgrammar device
+  absl::base absl::strings re2 ${_utils_boost_libs} ${TORCH_LIBRARIES} ${PYTHON_LIBRARY} xgrammar device
 )
 
 # for test

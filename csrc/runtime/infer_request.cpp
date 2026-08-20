@@ -321,7 +321,6 @@ bool InferRequest::UpdateAfterInflightTaskFinished() {
     return false;
   }
   KLLM_CHECK(inflight_count_ > 0);
-
   const ScheduleTask &oldest_inflight = inflight_tasks_[0];
 
   // fast path 深度 2 下, step N 产出 EOS 后仍可能已 launch step N+1 (占位步).
@@ -528,6 +527,7 @@ void InferRequest::LaunchPlanningTask(bool use_placeholder_for_last_token) {
   }
   sampling_token_num = new_inflight.workload.sampling_token_num;
   forwarding_tokens_draft_num = new_inflight.workload.draft_token_num;
+
   ++inflight_count_;
   KLLM_LOG_SCHEDULER << ScheduleStateToStr();
   assert(new_inflight.workload.GetTokenNum() > 0);

@@ -42,6 +42,7 @@ enum QuantMode {
   QUANT_FP8_E4M3,
   QUANT_BLOCK_FP8_E4M3,
   QUANT_W4A8_AWQ,
+  QUANT_W4A8_KLX,  // Kunlun W4A8 format: INT8 per-channel (no input_scale), dynamic per-token activation quant
   MOE_QUANT_NONE,
   MOE_QUANT_BLOCK_FP8_E4M3,
   MOE_QUANT_FP8_E4M3,
@@ -56,6 +57,7 @@ __attribute__((unused)) static std::string GetQuantModeString(QuantMode quant_mo
       {QUANT_FP8_E4M3, "FP8_E4M3"},
       {QUANT_BLOCK_FP8_E4M3, "BLOCK_FP8_E4M3"},
       {QUANT_W4A8_AWQ, "W4A8_AWQ"},
+      {QUANT_W4A8_KLX, "W4A8_KLX"},
       {MOE_QUANT_NONE, "MOE_QUANT None"},
       {MOE_QUANT_BLOCK_FP8_E4M3, "MOE_QUANT BLOCK_FP8_E4M3"},
       {MOE_QUANT_FP8_E4M3, "MOE_QUANT FP8_E4M3"},

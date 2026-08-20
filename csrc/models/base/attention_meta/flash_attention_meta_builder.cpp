@@ -130,13 +130,13 @@ void StandardFlashAttentionMetaBuilder::PrepareFlashRotary(FlashAttentionMeta& m
   standard_shared.rotary_embedding_pos.shape[0] += meta.rotary_embedding_pos.GetElementNumber();
   MemcpyAsync(meta.rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
               sizeof(decltype(rotary_pos_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              config_.context->device->GetD2HStream());
+              config_.context->device->GetH2DStream());
   meta.rotary_embedding_mask = standard_shared.rotary_embedding_mask.GetView(
       {rotary_mask_host.size()}, standard_shared.rotary_embedding_mask.shape[0]);
   standard_shared.rotary_embedding_mask.shape[0] += meta.rotary_embedding_mask.GetElementNumber();
   MemcpyAsync(meta.rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
               sizeof(decltype(rotary_mask_host)::value_type) * rotary_host_idx, MEMCPY_HOST_TO_DEVICE,
-              config_.context->device->GetD2HStream());
+              config_.context->device->GetH2DStream());
 
   // For DeepSeek model, rope of flexible cached tokens and forwarding new tokens cannot be fused
   // because q&k buffers differ in total_tokens when there is prefix
@@ -168,20 +168,30 @@ void StandardFlashAttentionMetaBuilder::PrepareFlashRotary(FlashAttentionMeta& m
     }
     MemcpyAsync(standard_shared.dp_flexible_rotary_embedding_mask.GetPtr<void>(), rotary_mask_host.data(),
                 sizeof(decltype(rotary_mask_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                config_.context->device->GetD2HStream());
+                config_.context->device->GetH2DStream());
     MemcpyAsync(standard_shared.dp_src_flexible_rotary_embedding_pos.GetPtr<void>(), rotary_pos_host.data(),
                 sizeof(decltype(rotary_pos_host)::value_type) * flexible_rotary_idx, MEMCPY_HOST_TO_DEVICE,
-                config_.context->device->GetD2HStream());
+                config_.context->device->GetH2DStream());
     if (config_.model_config.use_mla) {
       MemcpyAsync(standard_shared.dp_dst_flexible_rotary_embedding_pos.GetPtr<void>(),
                   mla_dst_flexible_rotary_pos_host.data(),
                   sizeof(decltype(mla_dst_flexible_rotary_pos_host)::value_type) * flexible_rotary_idx,
-                  MEMCPY_HOST_TO_DEVICE, config_.context->device->GetD2HStream());
+                  MEMCPY_HOST_TO_DEVICE, config_.context->device->GetH2DStream());
     }
   }
-  EventRecord(config_.rotary_embedding_event, config_.context->device->GetD2HStream());
-#ifdef ENABLE_ACL
-  StreamSynchronize(config_.context->device->GetD2HStream());
+  EventRecord(config_.rotary_embedding_event, config_.context->device->GetH2DStream());
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
+  // KUNLUN deliberately keeps the host sync here even though PrepareDecodeRotary dropped it. The
+  // asymmetry is intentional, not an oversight:
+  //   - every H2D above sources from a function local vector (rotary_pos_host, rotary_mask_host,
+  //     mla_dst_flexible_rotary_pos_host). Dropping the sync would let those buffers be freed while
+  //     their DMA is still in flight, since xpu_memcpy_async gives no lifetime guarantee for pageable
+  //     host memory. The decode path only got to drop its sync after its staging buffers were made
+  //     persistent members (decode_rotary_mask_ones / decode_rotary_pos_host).
+  //   - prefill runs once per request batch and is not on the XPU-graph replay path, so the sync costs
+  //     far less here than the per-step one that was removed from decode.
+  // If this ever needs to go away, migrate the three buffers above to persistent members first.
+  StreamSynchronize(config_.context->device->GetH2DStream());
 #endif
 }
 

@@ -6,8 +6,10 @@
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
 
+#include <unistd.h>  // getpid
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <random>
 
 #ifdef ENABLE_CUDA
@@ -994,5 +996,532 @@ TEST_F(ModelInputTest, PrepareDeepstackTest) {
         std::runtime_error);
   }
 }
+
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
+
+class MockBlockAllocatorForATB : public BlockAllocatorInterface {
+ public:
+  explicit MockBlockAllocatorForATB(void* base_ptr) : base_ptr_(base_ptr) {}
+  void PreAllocateBlocks() override {}
+  void Clear() override {}
+  Status AllocateBlocks(size_t block_num, std::vector<int>& blocks) override { return Status(); }
+  Status FreeBlocks(const std::vector<int>& blocks) override { return Status(); }
+  Status GetBlockPtrs(const std::vector<int>& blocks, std::vector<void*>& addrs) override { return Status(); }
+  void* GetBlocksBasePtr() override { return base_ptr_; }
+  int GetBlocksBaseId() override { return 0; }
+  size_t GetFreeBlockNumber() override { return 0; }
+  size_t GetUsedBlockNumber() override { return 0; }
+
+ private:
+  void* base_ptr_;
+};
+
+class MockBlockAllocatorGroupForATB : public BlockAllocatorGroupInterface {
+ public:
+  MockBlockAllocatorGroupForATB(size_t device_block_num, void* base_ptr)
+      : config_({/*.devices=*/{0}, /*.device_block_num=*/device_block_num, /*.host_block_num=*/0, /*.block_size=*/0}),
+        allocator_(std::make_shared<MockBlockAllocatorForATB>(base_ptr)) {}
+
+  std::vector<int> GetBlockAllocatorDevices() const override { return config_.devices; }
+  std::shared_ptr<BlockAllocatorInterface> GetHostBlockAllocator() const override { return nullptr; }
+  std::shared_ptr<BlockAllocatorInterface> GetDeviceBlockAllocator(int index = 0) const override { return allocator_; }
+  const BlockAllocatorGroupConfig& GetBlockAllocatorGroupConfig() const override { return config_; }
+
+ private:
+  BlockAllocatorGroupConfig config_;
+  std::shared_ptr<BlockAllocatorInterface> allocator_;
+};
+
+class MockBlockAllocatorManagerForATB : public BlockAllocatorManagerInterface {
+ public:
+  MockBlockAllocatorManagerForATB(size_t device_block_num, void* base_ptr)
+      : group_(std::make_shared<MockBlockAllocatorGroupForATB>(device_block_num, base_ptr)) {}
+
+  void Initialize(const BlockAllocatorManagerConfig& config) override {}
+  std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup(int group_id) override { return group_; }
+
+ private:
+  std::shared_ptr<BlockAllocatorGroupInterface> group_;
+};
+
+// Test fixture for PrepareATBKVCache.
+//
+// Builds a throwaway yaml + config.json under the temp dir at SetUp (and removes them at TearDown),
+// modeled on examples/ksana_llm_kimi_k26_kunlun.yaml but trimmed to a single-device DeepSeek-V3 MLA
+// setup. This keeps the important knobs (tensor_para_size, block_token_num, DeepSeek-V3 model_type,
+// num_attention_heads, kv_lora_rank, ...) visible in the test itself instead of depending on a real
+// absolute model dir (e.g. /data1/klx/Kimi-K2.6-klx-w4a8-gptq) or an 8-device environment.
+// See environment_test.cpp's ConnectorConfigInitialization for the same temp-yaml pattern.
+class ATBKVCacheTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    int rank = 0;
+
+    // 1) 在临时目录下生成一个最小化的 DeepSeek-V3 config.json 和一个单卡 yaml。
+    // 路径中嵌入 PID 做隔离，避免同机并发 CI 进程互相覆盖/删除临时文件。
+    std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+    const std::string pid_suffix = std::to_string(getpid());
+    temp_yaml_path_ = (temp_dir / ("ksana_atb_kvcache_test_" + pid_suffix + ".yaml")).string();
+    temp_model_dir_ = (temp_dir / ("ksana_atb_kvcache_test_model_" + pid_suffix)).string();
+
+    if (std::filesystem::exists(temp_model_dir_)) {
+      std::filesystem::remove_all(temp_model_dir_);
+    }
+    std::filesystem::create_directory(temp_model_dir_);
+
+    // 最小化 config.json：只保留解析必需字段（architectures / model_type / torch_dtype）
+    // 以及单测断言用到的字段（num_attention_heads=64、kv_lora_rank=512）。use_mla 由
+    // deepseek_v3 分支恒置为 true。
+    {
+      std::ofstream config_json(std::filesystem::path(temp_model_dir_) / "config.json");
+      config_json << "{\n";
+      config_json << "  \"architectures\": [\"DeepseekV3ForCausalLM\"],\n";
+      config_json << "  \"model_type\": \"deepseek_v3\",\n";
+      config_json << "  \"torch_dtype\": \"bfloat16\",\n";
+      config_json << "  \"hidden_size\": 7168,\n";
+      config_json << "  \"num_attention_heads\": 64,\n";  // -> model_config.head_num == 64
+      config_json << "  \"num_hidden_layers\": 4,\n";     // 少量层即可，单测按 layer_num_on_node_ 动态取值
+      config_json << "  \"kv_lora_rank\": 512,\n";        // -> mla_config.kv_lora_rank == 512
+      config_json << "  \"max_position_embeddings\": 4096\n";
+      config_json << "}\n";
+    }
+
+    // 最小化 yaml：源自 ksana_llm_kimi_k26_kunlun.yaml，但改为单卡、关键参数直接可见。
+    {
+      std::ofstream yaml(temp_yaml_path_);
+      yaml << "setting:\n";
+      yaml << "  global:\n";
+      yaml << "    tensor_para_size: 1\n";
+      yaml << "    pipeline_para_size: 1\n";
+      yaml << "    attn_data_para_size: 1\n";
+      yaml << "    expert_para_size: 1\n";
+      yaml << "    enable_cuda_graph: true\n";
+      yaml << "  batch_scheduler:\n";
+      yaml << "    max_step_tokens: 4096\n";
+      yaml << "    max_batch_size: 32\n";
+      yaml << "    max_token_len: 4096\n";
+      yaml << "  block_manager:\n";
+      yaml << "    block_token_num: 64\n";
+      yaml << "    reserved_device_memory_ratio: 0.05\n";
+      yaml << "    block_host_memory_factor: 0.0\n";
+      yaml << "  attn_backend:\n";
+      yaml << "    enable_blocked_multi_token_forwarding_kv: false\n";
+      yaml << "model_spec:\n";
+      yaml << "  base_model:\n";
+      yaml << "    model_dir: \"" << temp_model_dir_ << "\"\n";
+    }
+
+    // 2) 解析临时 yaml 并按单卡初始化。
+    const auto& env = Singleton<Environment>::GetInstance();
+    env->ParseConfig(temp_yaml_path_);
+
+    auto context = std::make_shared<Context>();
+    context->global.reset(new GlobalContext(1, 1, 1, env));
+    context->global->InitDistributedConfig();
+    context->device = std::make_shared<DeviceContext>(1);
+
+    ModelConfig model_config;
+    env->GetModelConfig(model_config);
+
+    InitPipelineConfigForTest(env, model_config);
+    auto block_cache_layout = GetTestModelCacheLayout(env);
+    env->InitializeBlockManagerConfig(block_cache_layout);
+    BlockManagerConfig block_manager_config;
+    env->GetBlockManagerConfig(block_manager_config);
+    block_manager_config.block_host_memory_factor = 0.0;
+    block_manager_config.device_allocator_config.blocks_num = 10;
+    block_manager_config.host_allocator_config.blocks_num = block_manager_config.device_allocator_config.blocks_num;
+    env->SetBlockManagerConfig(block_manager_config);
+
+    RuntimeConfig runtime_config;
+    env->GetRuntimeConfig(runtime_config);
+
+    // Override tensor_para_size to 1 for single-device test
+    runtime_config.parallel_basic_config.attn_tensor_parallel_size = 1;
+    runtime_config.parallel_basic_config.tensor_parallel_size = 1;
+    env->schedule_config_parser_.runtime_config_ = runtime_config;
+
+    model_input = std::make_unique<ModelInput>(model_config, runtime_config, rank, context, block_cache_layout);
+  }
+
+  void TearDown() override {
+    try {
+      if (!temp_yaml_path_.empty() && std::filesystem::exists(temp_yaml_path_)) {
+        std::filesystem::remove(temp_yaml_path_);
+      }
+      if (!temp_model_dir_.empty() && std::filesystem::exists(temp_model_dir_)) {
+        std::filesystem::remove_all(temp_model_dir_);
+      }
+    } catch (const std::exception&) {
+      // best-effort cleanup
+    }
+  }
+
+ protected:
+  std::unique_ptr<ModelInput> model_input;
+  std::string temp_yaml_path_;
+  std::string temp_model_dir_;
+};
+
+// Test PrepareATBKVCache for MHA model (use_mla = false) in single-token (decode) mode
+// Uses Kimi-K2.6 config but overrides use_mla to false to simulate MHA
+TEST_F(ATBKVCacheTest, PrepareATBKVCacheMHADecodeTest) {
+  model_input->model_config_.use_mla = false;
+
+  const int layer_num = model_input->layer_num_on_node_;
+  const int block_token_num = model_input->runtime_config_.attn_backend_config.block_token_num;
+  const size_t device_block_num = 10;
+
+  char fake_base[1024];
+  void* base_ptr = static_cast<void*>(fake_base);
+  auto mock_manager = std::make_shared<MockBlockAllocatorManagerForATB>(device_block_num, base_ptr);
+
+  const int batch_size = 3;
+  std::vector<ForwardRequest> forward_reqs(batch_size);
+  std::vector<std::shared_ptr<std::vector<int>>> tokens_storage(batch_size);
+
+  // seq_lens: request 0 has 5 tokens, request 1 has 10, request 2 has 3
+  std::vector<int> seq_lens = {5, 10, 3};
+  // For MHA: kv_multiplier=2, block IDs are multiples of layer_num*2
+  std::vector<std::vector<int32_t>> block_ids = {
+      {0, static_cast<int32_t>(layer_num * 2)},
+      {0, static_cast<int32_t>(layer_num * 2), static_cast<int32_t>(layer_num * 2 * 2)},
+      {static_cast<int32_t>(layer_num * 2)}};
+
+  for (int i = 0; i < batch_size; ++i) {
+    tokens_storage[i] = std::make_shared<std::vector<int>>(seq_lens[i], 0);
+    forward_reqs[i].forwarding_tokens = tokens_storage[i];
+    forward_reqs[i].kv_cached_token_num = seq_lens[i] - 1;
+    forward_reqs[i].prefix_cache_len = 0;
+    forward_reqs[i].attn_dp_group_id = 0;
+    forward_reqs[i].block_allocator_manager =
+        std::reinterpret_pointer_cast<BlockAllocatorManager>(std::shared_ptr<BlockAllocatorManagerInterface>(
+            mock_manager, static_cast<BlockAllocatorManagerInterface*>(mock_manager.get())));
+    forward_reqs[i].atb_kv_cache_base_blk_ids = {block_ids[i]};
+    forward_reqs[i].kv_cache_ptrs.resize(block_ids[i].size(), nullptr);
+  }
+
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/false);
+
+  // Verify seq_len_host
+  for (int i = 0; i < batch_size; ++i) {
+    EXPECT_EQ(model_input->seq_len_host.GetPtr<int32_t>()[i], seq_lens[i]);
+  }
+
+  // Verify atb_attention_attr
+  size_t slot_mapping_dim_1 = model_input->atb_attention_attr.GetPtr<uint64_t>()[0];
+  size_t max_num_blocks_per_query = model_input->atb_attention_attr.GetPtr<uint64_t>()[1];
+  EXPECT_EQ(slot_mapping_dim_1, static_cast<size_t>(batch_size));
+  // In XPU graph mode (enable_cuda_graph=true) decode pins max_num_blocks_per_query to
+  // graph_fixed_max_blocks_per_query_ (= ceil(max_seq_len / block_token_num)) so graph replay reads a fixed
+  // stride; otherwise it is the block count of the longest request in the batch (max of {2, 3, 1} = 3).
+  size_t expected_max_blocks =
+      model_input->xpu_graph_mode_ ? model_input->graph_fixed_max_blocks_per_query_ : static_cast<size_t>(3);
+  EXPECT_EQ(max_num_blocks_per_query, expected_max_blocks);
+
+  // Verify layers_slot_mapping_host for single-token (decode) mode
+  // For MHA: adjusted_blk = base_blk (no division)
+  for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+    for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+      int seq_len = seq_lens[req_idx];
+      int last_token_block_idx = (seq_len - 1) / block_token_num;
+      int32_t base_blk = block_ids[req_idx][last_token_block_idx];
+      int32_t adjusted_blk = base_blk;  // MHA: no adjustment
+      int32_t expected_slot = (adjusted_blk + layer_idx) * block_token_num + ((seq_len - 1) % block_token_num);
+      EXPECT_EQ(model_input->layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + req_idx], expected_slot)
+          << "Mismatch at layer=" << layer_idx << " req=" << req_idx;
+    }
+  }
+
+  // Verify layers_block_table_host for single-token (decode) mode
+  for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+    for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+      for (size_t blk_idx = 0; blk_idx < block_ids[req_idx].size(); ++blk_idx) {
+        int32_t adjusted_blk = block_ids[req_idx][blk_idx];  // MHA: no adjustment
+        int32_t expected = adjusted_blk + layer_idx;
+        size_t idx = layer_idx * batch_size * max_num_blocks_per_query + req_idx * max_num_blocks_per_query + blk_idx;
+        EXPECT_EQ(model_input->layers_block_table_host[idx], expected)
+            << "Mismatch at layer=" << layer_idx << " req=" << req_idx << " blk=" << blk_idx;
+      }
+      // Padding blocks should be -1
+      for (size_t blk_idx = block_ids[req_idx].size(); blk_idx < max_num_blocks_per_query; ++blk_idx) {
+        size_t idx = layer_idx * batch_size * max_num_blocks_per_query + req_idx * max_num_blocks_per_query + blk_idx;
+        EXPECT_EQ(model_input->layers_block_table_host[idx], -1)
+            << "Padding not -1 at layer=" << layer_idx << " req=" << req_idx << " blk=" << blk_idx;
+      }
+    }
+  }
+}
+
+// Test PrepareATBKVCache for MLA model (use_mla = true, native Kimi-K2.6 config) in single-token (decode) mode
+TEST_F(ATBKVCacheTest, PrepareATBKVCacheMLADecodeTest) {
+  // Kimi-K2.6 is DeepSeek-V3 architecture with MLA, verify config loaded correctly
+  ASSERT_TRUE(model_input->model_config_.use_mla);
+  EXPECT_EQ(model_input->model_config_.head_num, 64);  // num_attention_heads from config.json
+  EXPECT_EQ(model_input->model_config_.mla_config.kv_lora_rank, 512);
+
+  const int layer_num = model_input->layer_num_on_node_;
+  const int block_token_num = model_input->runtime_config_.attn_backend_config.block_token_num;
+  const size_t device_block_num = 10;
+
+  char fake_base[1024];
+  void* base_ptr = static_cast<void*>(fake_base);
+  auto mock_manager = std::make_shared<MockBlockAllocatorManagerForATB>(device_block_num, base_ptr);
+
+  const int batch_size = 2;
+  std::vector<ForwardRequest> forward_reqs(batch_size);
+  std::vector<std::shared_ptr<std::vector<int>>> tokens_storage(batch_size);
+
+  std::vector<int> seq_lens = {7, 4};
+  // For MLA: BuildFlatKVCacheBlkIds bakes the ×1 K/V factor into the block id (original_id * layer_num),
+  // so the consumer uses the id directly (adjusted_blk = base_blk, no /2).
+  std::vector<std::vector<int32_t>> block_ids = {
+      {static_cast<int32_t>(layer_num * 0), static_cast<int32_t>(layer_num * 1)},
+      {static_cast<int32_t>(layer_num * 2)}};
+
+  for (int i = 0; i < batch_size; ++i) {
+    tokens_storage[i] = std::make_shared<std::vector<int>>(seq_lens[i], 0);
+    forward_reqs[i].forwarding_tokens = tokens_storage[i];
+    forward_reqs[i].kv_cached_token_num = seq_lens[i] - 1;
+    forward_reqs[i].prefix_cache_len = 0;
+    forward_reqs[i].attn_dp_group_id = 0;
+    forward_reqs[i].block_allocator_manager =
+        std::reinterpret_pointer_cast<BlockAllocatorManager>(std::shared_ptr<BlockAllocatorManagerInterface>(
+            mock_manager, static_cast<BlockAllocatorManagerInterface*>(mock_manager.get())));
+    forward_reqs[i].atb_kv_cache_base_blk_ids = {block_ids[i]};
+    forward_reqs[i].kv_cache_ptrs.resize(block_ids[i].size(), nullptr);
+  }
+
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/false);
+
+  // Verify atb_attention_attr
+  size_t slot_mapping_dim_1 = model_input->atb_attention_attr.GetPtr<uint64_t>()[0];
+  size_t max_num_blocks_per_query = model_input->atb_attention_attr.GetPtr<uint64_t>()[1];
+  EXPECT_EQ(slot_mapping_dim_1, static_cast<size_t>(batch_size));
+  // In XPU graph mode (enable_cuda_graph=true) decode pins max_num_blocks_per_query to
+  // graph_fixed_max_blocks_per_query_ (= ceil(max_seq_len / block_token_num)) so graph replay reads a fixed
+  // stride; otherwise it is the block count of the longest request in the batch (max of {2, 1} = 2).
+  size_t expected_max_blocks =
+      model_input->xpu_graph_mode_ ? model_input->graph_fixed_max_blocks_per_query_ : static_cast<size_t>(2);
+  EXPECT_EQ(max_num_blocks_per_query, expected_max_blocks);
+
+  // Verify layers_slot_mapping_host for MLA decode
+  // For MLA: K/V factor already baked into the block id by the producer, so adjusted_blk = base_blk
+  for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+    for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+      int seq_len = seq_lens[req_idx];
+      int last_token_block_idx = (seq_len - 1) / block_token_num;
+      int32_t base_blk = block_ids[req_idx][last_token_block_idx];
+      int32_t adjusted_blk = base_blk;  // MLA: factor baked in by producer, no adjustment
+      int32_t expected_slot = (adjusted_blk + layer_idx) * block_token_num + ((seq_len - 1) % block_token_num);
+      EXPECT_EQ(model_input->layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + req_idx], expected_slot)
+          << "Mismatch at layer=" << layer_idx << " req=" << req_idx;
+    }
+  }
+
+  // Verify layers_block_table_host for MLA decode
+  for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+    for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+      for (size_t blk_idx = 0; blk_idx < block_ids[req_idx].size(); ++blk_idx) {
+        int32_t adjusted_blk = block_ids[req_idx][blk_idx];  // MLA: factor baked in by producer
+        int32_t expected = adjusted_blk + layer_idx;
+        size_t idx = layer_idx * batch_size * max_num_blocks_per_query + req_idx * max_num_blocks_per_query + blk_idx;
+        EXPECT_EQ(model_input->layers_block_table_host[idx], expected)
+            << "Mismatch at layer=" << layer_idx << " req=" << req_idx << " blk=" << blk_idx;
+      }
+    }
+  }
+}
+
+// Test PrepareATBKVCache for MHA model in multi-token (prefill) mode
+TEST_F(ATBKVCacheTest, PrepareATBKVCacheMHAPrefillTest) {
+  model_input->model_config_.use_mla = false;
+
+  const int layer_num = model_input->layer_num_on_node_;
+  const int block_token_num = model_input->runtime_config_.attn_backend_config.block_token_num;
+  const size_t device_block_num = 10;
+
+  char fake_base[1024];
+  void* base_ptr = static_cast<void*>(fake_base);
+  auto mock_manager = std::make_shared<MockBlockAllocatorManagerForATB>(device_block_num, base_ptr);
+
+  const int batch_size = 2;
+  std::vector<ForwardRequest> forward_reqs(batch_size);
+  std::vector<std::shared_ptr<std::vector<int>>> tokens_storage(batch_size);
+
+  // Request 0: 6 total tokens, 2 already cached → 4 new tokens
+  // Request 1: 4 total tokens, 0 cached → 4 new tokens
+  std::vector<int> total_tokens = {6, 4};
+  std::vector<int> kv_cached = {2, 0};
+  std::vector<int> prefix_cache = {2, 0};
+
+  std::vector<std::vector<int32_t>> block_ids = {
+      {0, static_cast<int32_t>(layer_num * 2), static_cast<int32_t>(layer_num * 2 * 2)},
+      {0, static_cast<int32_t>(layer_num * 2)}};
+
+  for (int i = 0; i < batch_size; ++i) {
+    tokens_storage[i] = std::make_shared<std::vector<int>>(total_tokens[i], 0);
+    forward_reqs[i].forwarding_tokens = tokens_storage[i];
+    forward_reqs[i].kv_cached_token_num = kv_cached[i];
+    forward_reqs[i].prefix_cache_len = prefix_cache[i];
+    forward_reqs[i].attn_dp_group_id = 0;
+    forward_reqs[i].block_allocator_manager =
+        std::reinterpret_pointer_cast<BlockAllocatorManager>(std::shared_ptr<BlockAllocatorManagerInterface>(
+            mock_manager, static_cast<BlockAllocatorManagerInterface*>(mock_manager.get())));
+    forward_reqs[i].atb_kv_cache_base_blk_ids = {block_ids[i]};
+    forward_reqs[i].kv_cache_ptrs.resize(block_ids[i].size(), nullptr);
+  }
+
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/true);
+
+  // In multi-token mode, slot_mapping_dim_1 = sum of (total_tokens - skip_tokens) for all reqs
+  size_t slot_mapping_dim_1 = model_input->atb_attention_attr.GetPtr<uint64_t>()[0];
+  size_t expected_dim_1 = 0;
+  for (int i = 0; i < batch_size; ++i) {
+    size_t skip = std::max(kv_cached[i], prefix_cache[i]);
+    expected_dim_1 += total_tokens[i] - skip;
+  }
+  EXPECT_EQ(slot_mapping_dim_1, expected_dim_1);
+
+  // Verify layers_slot_mapping_host for multi-token (prefill) mode
+  size_t offset = 0;
+  for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+    size_t skip = std::max(kv_cached[req_idx], prefix_cache[req_idx]);
+    size_t new_tokens = total_tokens[req_idx] - skip;
+    for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+      for (size_t t = 0; t < new_tokens; ++t) {
+        size_t token_idx = skip + t;
+        int32_t inner_block_offset = token_idx % block_token_num;
+        int32_t base_blk = block_ids[req_idx][token_idx / block_token_num];
+        int32_t adjusted_blk = base_blk;  // MHA: no adjustment
+        int32_t expected_slot = (adjusted_blk + layer_idx) * block_token_num + inner_block_offset;
+        EXPECT_EQ(model_input->layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + offset + t], expected_slot)
+            << "Mismatch at layer=" << layer_idx << " req=" << req_idx << " token=" << t;
+      }
+    }
+    offset += new_tokens;
+  }
+
+  // Verify layers_block_table_host is empty for multi-token mode
+  EXPECT_TRUE(model_input->layers_block_table_host.empty());
+}
+
+// Test PrepareATBKVCache for MLA model (native Kimi-K2.6) in multi-token (prefill) mode
+TEST_F(ATBKVCacheTest, PrepareATBKVCacheMLAPrefillTest) {
+  ASSERT_TRUE(model_input->model_config_.use_mla);
+
+  const int layer_num = model_input->layer_num_on_node_;
+  const int block_token_num = model_input->runtime_config_.attn_backend_config.block_token_num;
+  const size_t device_block_num = 10;
+
+  char fake_base[1024];
+  void* base_ptr = static_cast<void*>(fake_base);
+  auto mock_manager = std::make_shared<MockBlockAllocatorManagerForATB>(device_block_num, base_ptr);
+
+  const int batch_size = 2;
+  std::vector<ForwardRequest> forward_reqs(batch_size);
+  std::vector<std::shared_ptr<std::vector<int>>> tokens_storage(batch_size);
+
+  std::vector<int> total_tokens = {5, 3};
+  std::vector<int> kv_cached = {1, 0};
+  std::vector<int> prefix_cache = {1, 0};
+
+  // For MLA: BuildFlatKVCacheBlkIds bakes the ×1 K/V factor into the block id (original_id * layer_num),
+  // so the consumer uses the id directly (adjusted_blk = base_blk, no /2).
+  std::vector<std::vector<int32_t>> block_ids = {
+      {static_cast<int32_t>(layer_num * 0), static_cast<int32_t>(layer_num * 1), static_cast<int32_t>(layer_num * 2)},
+      {static_cast<int32_t>(layer_num * 0), static_cast<int32_t>(layer_num * 1)}};
+
+  for (int i = 0; i < batch_size; ++i) {
+    tokens_storage[i] = std::make_shared<std::vector<int>>(total_tokens[i], 0);
+    forward_reqs[i].forwarding_tokens = tokens_storage[i];
+    forward_reqs[i].kv_cached_token_num = kv_cached[i];
+    forward_reqs[i].prefix_cache_len = prefix_cache[i];
+    forward_reqs[i].attn_dp_group_id = 0;
+    forward_reqs[i].block_allocator_manager =
+        std::reinterpret_pointer_cast<BlockAllocatorManager>(std::shared_ptr<BlockAllocatorManagerInterface>(
+            mock_manager, static_cast<BlockAllocatorManagerInterface*>(mock_manager.get())));
+    forward_reqs[i].atb_kv_cache_base_blk_ids = {block_ids[i]};
+    forward_reqs[i].kv_cache_ptrs.resize(block_ids[i].size(), nullptr);
+  }
+
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/true);
+
+  size_t slot_mapping_dim_1 = model_input->atb_attention_attr.GetPtr<uint64_t>()[0];
+  size_t expected_dim_1 = 0;
+  for (int i = 0; i < batch_size; ++i) {
+    size_t skip = std::max(kv_cached[i], prefix_cache[i]);
+    expected_dim_1 += total_tokens[i] - skip;
+  }
+  EXPECT_EQ(slot_mapping_dim_1, expected_dim_1);
+
+  // Verify layers_slot_mapping_host for MLA prefill
+  size_t offset = 0;
+  for (int req_idx = 0; req_idx < batch_size; ++req_idx) {
+    size_t skip = std::max(kv_cached[req_idx], prefix_cache[req_idx]);
+    size_t new_tokens = total_tokens[req_idx] - skip;
+    for (int layer_idx = 0; layer_idx < layer_num; ++layer_idx) {
+      for (size_t t = 0; t < new_tokens; ++t) {
+        size_t token_idx = skip + t;
+        int32_t inner_block_offset = token_idx % block_token_num;
+        int32_t base_blk = block_ids[req_idx][token_idx / block_token_num];
+        int32_t adjusted_blk = base_blk;  // MLA: factor baked in by producer, no adjustment
+        int32_t expected_slot = (adjusted_blk + layer_idx) * block_token_num + inner_block_offset;
+        EXPECT_EQ(model_input->layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + offset + t], expected_slot)
+            << "Mismatch at layer=" << layer_idx << " req=" << req_idx << " token=" << t;
+      }
+    }
+    offset += new_tokens;
+  }
+}
+
+// Test PrepareATBKVCache k_cache_blocks_base shape update for both MHA and MLA
+TEST_F(ATBKVCacheTest, PrepareATBKVCacheBlocksBaseShapeTest) {
+  const int layer_num = model_input->layer_num_on_node_;
+  const int block_token_num = model_input->runtime_config_.attn_backend_config.block_token_num;
+  const size_t device_block_num = 8;
+
+  char fake_base[1024];
+  void* base_ptr = static_cast<void*>(fake_base);
+  auto mock_manager = std::make_shared<MockBlockAllocatorManagerForATB>(device_block_num, base_ptr);
+
+  ForwardRequest forward_req;
+  std::vector<int32_t> blk_ids = {0};
+  auto tokens = std::make_shared<std::vector<int>>(std::vector<int>{1, 2, 3});
+  forward_req.forwarding_tokens = tokens;
+  forward_req.kv_cached_token_num = 2;
+  forward_req.prefix_cache_len = 0;
+  forward_req.attn_dp_group_id = 0;
+  forward_req.block_allocator_manager =
+      std::reinterpret_pointer_cast<BlockAllocatorManager>(std::shared_ptr<BlockAllocatorManagerInterface>(
+          mock_manager, static_cast<BlockAllocatorManagerInterface*>(mock_manager.get())));
+  forward_req.atb_kv_cache_base_blk_ids = {blk_ids};
+  forward_req.kv_cache_ptrs.resize(1, nullptr);
+
+  std::vector<ForwardRequest> forward_reqs = {forward_req};
+
+  // Test MHA: kv_multiplier = 2
+  model_input->model_config_.use_mla = false;
+  model_input->k_cache_blocks_base.shape[0] = 0;  // force re-computation
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/false);
+
+  size_t expected_total_blocks_mha = device_block_num * 2 * layer_num;
+  EXPECT_EQ(model_input->k_cache_blocks_base.shape[0], expected_total_blocks_mha);
+  EXPECT_EQ(model_input->k_cache_blocks_base.shape[1], static_cast<size_t>(block_token_num));
+  EXPECT_EQ(model_input->k_cache_blocks_base.shape[2], static_cast<size_t>(model_input->model_config_.head_num));
+  EXPECT_EQ(model_input->k_cache_blocks_base.shape[3], static_cast<size_t>(model_input->model_config_.size_per_head));
+  EXPECT_EQ(model_input->v_cache_blocks_base.shape[0], expected_total_blocks_mha);
+
+  // Test MLA: kv_multiplier = 1
+  model_input->model_config_.use_mla = true;
+  model_input->k_cache_blocks_base.shape[0] = 0;  // force re-computation
+  model_input->PrepareATBKVCache(forward_reqs, /*is_multi_token_forward=*/false);
+
+  size_t expected_total_blocks_mla = device_block_num * 1 * layer_num;
+  EXPECT_EQ(model_input->k_cache_blocks_base.shape[0], expected_total_blocks_mla);
+  EXPECT_EQ(model_input->v_cache_blocks_base.shape[0], expected_total_blocks_mla);
+}
+
+#endif  // defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
 
 }  // namespace ksana_llm

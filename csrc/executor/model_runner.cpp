@@ -198,6 +198,7 @@ Status ModelRunner::HandlePreprocess() {
       executor_runtime_->RebuildScheduleOutput(schedule_output);
     }
 
+
     auto generation_controller = executor_runtime_->GetGenerationController();
     if (generation_controller) {
       PROFILE_EVENT_SCOPE(preprocess_generator, "Exec.HandlePreprocess.RestoreGenerators");
@@ -495,8 +496,6 @@ void ModelRunner::WriteBuildAheadRingAfterSampling(const std::shared_ptr<NewMode
   // 供下一步 ReplaceLastTokenKernel 按 req_id 回填 placeholder.
   // 与 Sampling 同处 PrimaryComputeStream, FIFO 保证先采样后写 ring; B_cur=0 时 kernel 内 no-op.
   if (FastPathController::GetInstance().IsEnabledAtStartup()) {
-    KLLM_CHECK_WITH_INFO(model_output->cur_pairs_dev != nullptr,
-                         "build-ahead enabled but model_output->cur_pairs_dev is null in HandlePostprocess.");
     auto model_sampler = executor_runtime_->GetModelSampler();
     KLLM_CHECK_WITH_INFO(model_sampler != nullptr,
                          "build_ahead_enabled but ModelSampler is null in HandlePostprocess.");
@@ -504,8 +503,27 @@ void ModelRunner::WriteBuildAheadRingAfterSampling(const std::shared_ptr<NewMode
     KLLM_CHECK_WITH_INFO(sampler != nullptr, "build_ahead_enabled but Sampler is null in HandlePostprocess.");
     // TP 下仅 rank 0 持有有效 sampled_tokens；非 0 rank 不写 garbage，靠 BroadcastRingSlot 同步。
     if (context_->device->GetDeviceId() == 0) {
+#ifdef ENABLE_KUNLUN
+      // Kunlun: single persistent ring + carry-forward/evict. 从 executor_running_reqs 提取 req_ids
+      // (BuildSamplingRequest 按此顺序写入 device_output_tokens_), 从 finish_req_ids 提取 evict_ids.
+      // split-fuse 已回退: 不再过滤 IsPrefillChunkMidStep, 所有 running reqs 均写入 ring.
+      std::vector<int64_t> cur_req_ids_host;
+      cur_req_ids_host.reserve(model_output->schedule_output->executor_running_reqs.size());
+      for (const auto& req : model_output->schedule_output->executor_running_reqs) {
+        cur_req_ids_host.push_back(req->req_id);
+      }
+      std::vector<int64_t> evict_ids_host;
+      for (const auto& dp_finished : model_output->schedule_output->finish_req_ids) {
+        evict_ids_host.insert(evict_ids_host.end(), dp_finished.begin(), dp_finished.end());
+      }
+      sampler->WriteRing(model_output->slot_index, cur_req_ids_host, evict_ids_host,
+                         context_->device->GetPrimaryComputeStream());
+#else
+      KLLM_CHECK_WITH_INFO(model_output->cur_pairs_dev != nullptr,
+                           "build-ahead enabled but model_output->cur_pairs_dev is null in HandlePostprocess.");
       sampler->WriteRing(model_output->slot_index, model_output->cur_pairs_dev, model_output->B_cur,
                          context_->device->GetPrimaryComputeStream());
+#endif
     }
   }
 }

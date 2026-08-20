@@ -39,7 +39,7 @@ Qwen2MoeDecoderLayer::Qwen2MoeDecoderLayer(int layer_idx, TensorBuffer* moe_buff
   shared_expert_gates_ = std::make_shared<Linear>(layer_prefix + ".mlp.shared_expert_gate.weight", creation_context,
                                                   model_creation_config.attn_config.model_config.quant_config.backend);
 
-#ifdef ENABLE_CUDA
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   muls_ = std::make_shared<Mul>(creation_context);
   sigmoids_ = std::make_shared<Sigmoid>(creation_context);
 #endif
@@ -99,7 +99,7 @@ Status Qwen2MoeDecoderLayer::ForwardMlp(std::vector<Tensor>& hidden_buffer_tenso
 
   shared_mlps_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
 
-#ifdef ENABLE_CUDA
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   // Expert share gating sigmoid
   STATUS_CHECK_RETURN(sigmoids_->Forward(share_gating_buffer_tensors, share_gating_buffer_tensors));
 

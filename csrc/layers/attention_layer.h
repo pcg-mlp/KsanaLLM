@@ -20,6 +20,13 @@ namespace ksana_llm {
 // The positional encoding.
 enum PositionEncoding { LEARNED_ABSOLUTE = 0, ROPE = 1, ALIBI = 2, NO_ROPE = 3 };
 
+#ifdef ENABLE_KUNLUN
+// Frees the process-wide neox-format cos/sin caches shared by all attention layers.
+// Not needed for normal shutdown (the driver reclaims device memory on process exit);
+// provided for a future dynamic model unload path.
+void ReleaseNeoxCosSinCache();
+#endif
+
 template <typename T, template <typename, typename, llm_kernels::utils::KVCacheType> class ATTENTION_LAYER>
 std::shared_ptr<BaseLayer> CreateAttentionLayer(DataType kv_cache_dtype) {
   switch (kv_cache_dtype) {
@@ -79,6 +86,7 @@ class AttentionLayer : public BaseLayer {
   uint32_t qk_rope_head_dim_;
   uint32_t v_head_dim_;
   float attn_scale_;
+  bool attn_scale_initialized_ = false;  // Tracks whether attn_scale_ has been explicitly set
   // TODO(winminkong): the matmul op will be removed from mla attn in the subsequent steps.
   QuantMode mm_quant_mode_;
 
@@ -90,6 +98,30 @@ class AttentionLayer : public BaseLayer {
 #ifdef ENABLE_ACL
   size_t max_batch_size_;
   bool is_multi_token_forward_;
+#endif
+
+#ifdef ENABLE_KUNLUN
+  // Two layouts of the SAME RoPE table (not two different RoPE variants) — the
+  // standalone and the fused kernels require different memory layouts:
+  //   cos_sin_cache_ptr_      [max_pos, rotary_dim]     — half cos | half sin, one
+  //                                                        value per frequency. Consumed by
+  //                                                        infer_ops::rotary_embedding_neox.
+  //   cos_sin_cache_neox_ptr_ [2, 1, max_pos, rotary_dim] — separate cos/sin planes, each
+  //                                                        frequency duplicated across both
+  //                                                        halves (full-width). Required by
+  //                                                        infer_ops::split_norm_rope_neox.
+  // Both are derived from the same base_/rotary_dim, so they stay numerically consistent.
+  // The neox one is only built when a fused QK-norm path is active; it is shared across
+  // all layers via g_neox_cache_map (see attention_layer.cpp).
+  void* cos_sin_cache_ptr_ = nullptr;
+  void* cos_sin_cache_neox_ptr_ = nullptr;
+
+  // Fused split(QKV)+RoPE for models WITHOUT QK-Norm (infer_ops::split_rotary_embedding).
+  // Reads KLLM_KUNLUN_FUSE_SPLIT_ROPE once; enabled unless explicitly set to "0".
+  static bool IsSplitRopeFusionEnabled();
+  // Latched off for this layer once the kernel reports failure, so we do not
+  // pay the failed-launch cost (and log spam) on every subsequent token.
+  bool split_rope_fusion_failed_ = false;
 #endif
 
   bool no_rope_;

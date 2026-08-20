@@ -5,9 +5,11 @@
 #include "configure/schedule_config_parser.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <stdexcept>
+#include <string>
 
 #include "fmt/core.h"
 #include "gflags/gflags.h"
@@ -167,6 +169,41 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
       yaml_reader.GetScalar<size_t>(yaml_reader.GetRootNode(), "setting.global.expert_para_size", 1);
   runtime_config_.enable_full_shared_expert =
       yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_full_shared_expert", false);
+  runtime_config_.enable_cuda_graph =
+      yaml_reader.GetScalar<bool>(yaml_reader.GetRootNode(), "setting.global.enable_cuda_graph", false);
+  YAML::Node cuda_graph_bs_node = yaml_reader.GetSequence(yaml_reader.GetRootNode(), "setting.global.cuda_graph_bs");
+  if (cuda_graph_bs_node.IsSequence()) {
+    for (const auto &item : cuda_graph_bs_node) {
+      runtime_config_.cuda_graph_bs.push_back(item.as<int>());
+    }
+  }
+  if (runtime_config_.enable_cuda_graph) {
+    // Consumers are the Kunlun XMLIR / XRE runtime libraries loaded beneath us
+    // (libxmlir, libxpurt) — not KsanaLLM code. They are read once when the XPU
+    // runtime initializes, so they must be injected here at config-parse time,
+    // before the first XPU call, rather than at the capture site in common_model.cpp.
+    //   XMLIR_FORCE_USE_XPU_GRAPH   — turns on XMLIR's graph capture/replay backend.
+    //   XMLIR_DIST_SINGLETON_STREAM — pins collectives to a single stream so capture
+    //                                 sees a stable stream topology.
+    //   DIST_MULTI_STREAM           — permits compute/communication overlap.
+    //   XPU_USE_DEFAULT_CTX         — keeps one XPU context so graphs captured for one
+    //                                 layer stay replayable across the others.
+    // overwrite=0 is deliberate: an operator-provided value (e.g. a CI job pinning
+    // XMLIR_FORCE_USE_XPU_GRAPH=0) takes precedence over this default. The check below
+    // surfaces that mismatch instead of letting it fail silently.
+    setenv("XMLIR_FORCE_USE_XPU_GRAPH", "1", 0);
+    setenv("XMLIR_DIST_SINGLETON_STREAM", "true", 0);
+    setenv("DIST_MULTI_STREAM", "true", 0);
+    setenv("XPU_USE_DEFAULT_CTX", "1", 0);
+    const char *graph_env = std::getenv("XMLIR_FORCE_USE_XPU_GRAPH");
+    if (graph_env != nullptr && std::string(graph_env) != "1") {
+      KLLM_LOG_WARNING << "[XPU Graph] enable_cuda_graph=true but XMLIR_FORCE_USE_XPU_GRAPH=" << graph_env
+                       << " is preset in the environment; the XMLIR backend will NOT use XPU Graph. "
+                          "Unset it to let KsanaLLM enable graph capture.";
+    }
+    KLLM_LOG_INFO << "[XPU Graph] injected xputx env: XMLIR_FORCE_USE_XPU_GRAPH=1, "
+                     "XMLIR_DIST_SINGLETON_STREAM=true, DIST_MULTI_STREAM=true, XPU_USE_DEFAULT_CTX=1";
+  }
   if (runtime_config_.parallel_basic_config.tensor_parallel_size == 0) {
     int device_size = -1;
     GetDeviceCount(&device_size);
@@ -1100,6 +1137,17 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
                     model_config.num_key_value_heads, runtime_config_.parallel_basic_config.tensor_parallel_size));
   }
 
+  if (model_config.head_num % runtime_config_.parallel_basic_config.attn_tensor_parallel_size != 0) {
+    KLLM_THROW(fmt::format("num_attention_heads ({}) must be divisible by attn_tensor_parallel_size ({})",
+                           model_config.head_num, runtime_config_.parallel_basic_config.attn_tensor_parallel_size));
+  }
+
+  if (model_config.inter_size > 0 &&
+      model_config.inter_size % runtime_config_.parallel_basic_config.tensor_parallel_size != 0) {
+    KLLM_THROW(fmt::format("intermediate_size ({}) must be divisible by tensor_parallel_size ({})",
+                           model_config.inter_size, runtime_config_.parallel_basic_config.tensor_parallel_size));
+  }
+
   if (runtime_config_.parallel_basic_config.tensor_parallel_size <
           runtime_config_.parallel_basic_config.expert_parallel_size ||
       runtime_config_.parallel_basic_config.tensor_parallel_size %
@@ -1175,6 +1223,12 @@ Status ScheduleConfigParser::UpdateModelConfig(ModelConfig &model_config) {
   runtime_config_.inter_data_type = model_config.weight_data_type;
   // TODO(robertyuan): These members should be removed from other configs
   runtime_config_.max_batch_size = batch_scheduler_config_.max_batch_size;
+  if (runtime_config_.enable_cuda_graph && runtime_config_.cuda_graph_bs.empty()) {
+    for (int bs = 1; bs <= static_cast<int>(runtime_config_.max_batch_size); ++bs) {
+      runtime_config_.cuda_graph_bs.push_back(bs);
+    }
+    KLLM_LOG_INFO << "[XPU Graph] cuda_graph_bs defaulted to [1.." << runtime_config_.max_batch_size << "]";
+  }
   runtime_config_.max_pp_batch_num = batch_scheduler_config_.max_pp_batch_num;
   runtime_config_.max_step_token_num = batch_scheduler_config_.max_step_token_num;
   runtime_config_.max_chunked_kv_tokens = batch_scheduler_config_.max_chunked_kv_tokens;

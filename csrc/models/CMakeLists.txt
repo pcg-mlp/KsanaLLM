@@ -58,7 +58,9 @@ if(WITH_STANDALONE_TEST)
   endif()
 
   # 调用 cpp_test
-  cpp_test(fake_weight_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/fake_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  if(WITH_CUDA)
+    cpp_test(fake_weight_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/base/fake_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+  endif()
   # cpp_test(expert_para_weight_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/common_moe/common_moe_weight_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS}  LIBS ${MODELS_TEST_LIBS})
   # cpp_test(llama_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/llama/llama_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS} ${TORCH_LIBRARIES})
   # cpp_test(simple_decoder_layer_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/common/simple_decoder_layer_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

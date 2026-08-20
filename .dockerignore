@@ -1,0 +1,50 @@
+# Minimize docker build context for docker/Dockerfile.xpu.
+# Without this, `docker build .` would send ~8 GB+ of repo to the daemon,
+# which is slow and unnecessary — Dockerfile.xpu only needs:
+#   - requirements.txt
+#   - docker/ksana-xpu-sdk-*.tar.gz
+
+# Build outputs
+build/
+build_*/
+deps/
+.cache/
+__pycache__/
+*.pyc
+*.so
+*.o
+*.a
+
+# Source we don't COPY in
+src/
+csrc/
+3rdparty/
+include/
+tests/
+demo/
+benchmark/
+examples/
+tools/
+scripts/
+cmake/
+docs/
+
+# IDE / git / misc
+.git/
+.vscode/
+.idea/
+.DS_Store
+core.*
+*.log
+
+# Other docker files (don't accidentally include them)
+docker/Dockerfile.gpu
+docker/Dockerfile.npu
+docker/Dockerfile.tencentos4.gpu
+
+# Big data / models
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx

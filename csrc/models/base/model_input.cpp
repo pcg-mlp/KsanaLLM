@@ -6,14 +6,14 @@
 
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/torch.h>
-
-#include "models/base/gather_index_builder_interface.h"
+#include <cstdlib>
 
 #include "cache_manager/block_allocator/block_allocator_interface.h"
 #include "configure/environment.h"
 #include "device/device_types.h"
 #include "models/base/attention_meta/flash_attention_meta_builder.h"
 #include "models/base/attention_meta/paged_attention_meta_builder.h"
+#include "models/base/gather_index_builder_interface.h"
 #include "profiler/profile_event.h"
 #include "runtime/fast_path_controller.h"
 #include "utils/singleton.h"
@@ -45,6 +45,15 @@ void ModelInput::BindInputPackDeviceViews() {
   dp_prefill_q_offset_uint64_tensor =
       Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {max_batch_size + 1}, pack + layout.off_dp_prefill_q_offset);
   input_ids = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_token_num}, pack + layout.off_input_ids);
+#ifdef ENABLE_KUNLUN
+  // Kunlun int32 device tensors (packed for unified H2D transfer)
+  dp_prefill_q_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1},
+                                            pack + layout.off_dp_prefill_q_offset_int32);
+  dp_input_offset_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1},
+                                        pack + layout.off_dp_input_offset_int32);
+  dp_input_prefix_int32_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1},
+                                        pack + layout.off_dp_input_prefix_int32);
+#endif
 }
 
 ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& runtime_config, int rank,
@@ -70,6 +79,15 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   block_size_ = runtime_config_.attn_backend_config.block_size;
   const size_t max_batch_size = runtime_config_.max_batch_size;
   const size_t max_token_num = runtime_config.max_step_token_num;  // max step token num
+  // layers_slot_mapping is indexed as [layer_idx * slot_mapping_dim_1 + token_idx] by the attention
+  // layers, where slot_mapping_dim_1 is the number of tokens this step forwards: sum(forwarding_tokens)
+  // for a multi-token step, or batch_size for a single-token step. Both are bounded by what one forward
+  // step can hold -- the same sum that sizes input_ids and rotary_embedding_pos below -- and not by how
+  // many requests are admitted. See the layers_block_table comment for why this used to be sized on
+  // max_waiting_queue_len and why that was the wrong bound.
+  BatchSchedulerConfig batch_config;
+  env->GetBatchSchedulerConfig(batch_config);
+  const size_t max_slot_mapping_dim = std::max(max_token_num, max_batch_size * batch_config.max_decode_tokens_per_req);
   layer_num_on_node_ = pipeline_config.upper_layer_idx - pipeline_config.lower_layer_idx + 1;
   KLLM_LOG_INFO << "ModelInput upper_layer_idx:" << pipeline_config.upper_layer_idx
                 << ", lower_layer_idx:" << pipeline_config.lower_layer_idx;
@@ -100,9 +118,15 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
 
   const size_t max_seq_len = runtime_config.max_seq_len;  // max seq len for one request
 
-  size_t max_table_block_num = ((max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
-                                runtime_config.attn_backend_config.block_token_num) *
-                               max_batch_size;
+  const size_t max_blocks_per_seq = (max_seq_len + runtime_config.attn_backend_config.block_token_num - 1) /
+                                    runtime_config.attn_backend_config.block_token_num;
+  size_t max_table_block_num = max_blocks_per_seq * max_batch_size;
+  // layers_block_table is indexed as [layer_idx * batch_size * max_num_blocks_per_query + ...] by the
+  // attention layers, so it needs max_batch_size columns of max_blocks_per_seq each. In XPU graph mode
+  // max_num_blocks_per_query is pinned to graph_fixed_max_blocks_per_query_, which is exactly
+  // max_blocks_per_seq; otherwise it is the block count of the longest request in the step, which is
+  // never larger.
+  const size_t max_block_table_cols = max_blocks_per_seq * max_batch_size;
 
   BlockManagerConfig block_manager_config;
   STATUS_CHECK_FAILURE(env->GetBlockManagerConfig(block_manager_config));
@@ -120,6 +144,13 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     }
   }
   KLLM_LOG_INFO << "max_table_block_num: " << max_table_block_num;
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun host tensors (standalone LOCATION_HOST, consumed directly by layer ForwardT)
+  dp_prefill_q_offset_int32_host_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
+  dp_input_offset_int32_host_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
+  dp_input_prefix_int32_host_tensor = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
+#endif
 
   BatchSchedulerConfig batch_scheduler_config;
   env->GetBatchSchedulerConfig(batch_scheduler_config);
@@ -140,6 +171,14 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
     layout.off_dp_input_prefix = layout.off_dp_input_offset + layout.batch_offset_bytes;
     layout.off_dp_prefill_q_offset = layout.off_dp_input_prefix + layout.batch_offset_bytes;
     layout.meta_pack_bytes = layout.off_dp_prefill_q_offset + layout.batch_offset_bytes;
+#ifdef ENABLE_KUNLUN
+    // Kunlun int32 device tensors: appended after uint64 meta region
+    layout.int32_offset_bytes = (max_batch_size + 1) * sizeof(int32_t);
+    layout.off_dp_prefill_q_offset_int32 = layout.meta_pack_bytes;
+    layout.off_dp_input_offset_int32 = layout.off_dp_prefill_q_offset_int32 + layout.int32_offset_bytes;
+    layout.off_dp_input_prefix_int32 = layout.off_dp_input_offset_int32 + layout.int32_offset_bytes;
+    layout.meta_pack_bytes = layout.off_dp_input_prefix_int32 + layout.int32_offset_bytes;
+#endif
     layout.off_input_ids = layout.meta_pack_bytes;
     layout.total_pack_bytes = layout.meta_pack_bytes + max_token_num * sizeof(int32_t);
 
@@ -168,15 +207,23 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   EventCreateWithFlags(&kvcache_offset_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&rotary_embedding_event, EVENT_DISABLE_TIMING);
   EventCreateWithFlags(&input_ids_event, EVENT_DISABLE_TIMING);
+#if defined(ENABLE_KUNLUN)
+  EventCreateWithFlags(&h2d_atb_event, EVENT_DISABLE_TIMING);
+#endif
 
   builder_config_ = std::make_unique<AttentionBuilderConfig>(AttentionBuilderConfig{
       model_config_, runtime_config_, enable_blocked_multi_token_forwarding_kv_, use_flashinfer_for_decode_, rank_,
       layer_num_on_node_, block_size_, kv_cache_types_, kv_cache_layer_offsets_, attn_dp_group_id_, attn_dp_rank_id_,
-      context_, kvcache_offset_event, rotary_embedding_event});
+      context_, kvcache_offset_event, rotary_embedding_event, RunMode::kMain
+#if defined(ENABLE_KUNLUN)
+      ,
+      xpu_graph_mode_, &graph_rotary_pos_buf
+#endif  // ENABLE_KUNLUN
+  });
   flash_builder_ = attention_meta_creator_->CreateFlashBuilder(*builder_config_);
   paged_builder_ = attention_meta_creator_->CreatePagedBuilder(*builder_config_);
 
-#if defined(ENABLE_ACL)
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
   // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
@@ -208,10 +255,12 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   //    - Therefore, the block ID array for kcache/vcache is [b0 * layer_num * 2 + layer_idx, b1 * layer_num * 2 +
   //    layer_idx, b2 * layer_num * 2 + layer_idx, b3 * layer_num * 2 + layer_idx, b4 * layer_num * 2 + layer_idx].
   seq_len_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {static_cast<uint64_t>(max_batch_size)});
-  layers_slot_mapping = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-                               {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_token_num)});
+  context_len_device = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {static_cast<uint64_t>(max_batch_size)});
+  layers_slot_mapping =
+      Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
+             {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_slot_mapping_dim)});
   layers_block_table = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32,
-                              {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_table_block_num)});
+                              {static_cast<uint64_t>(layer_num_on_node_), static_cast<uint64_t>(max_block_table_cols)});
   // https://www.hiascend.com/document/detail/zh/canncommercial/80RC2/developmentguide/acce/ascendtb/ascendtb_01_0070.html
   // k/v_cache_blocks_base only support float16
   k_cache_blocks_base = Tensor(
@@ -225,6 +274,19 @@ ModelInput::ModelInput(const ModelConfig& model_config, const RuntimeConfig& run
   last_token_index_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {max_batch_size});
   kv_cache_ptrs_tensor =
       Tensor(MemoryLocation::LOCATION_HOST, TYPE_POINTER, {static_cast<uint64_t>(max_table_block_num)});
+  xpu_graph_mode_ = runtime_config.enable_cuda_graph;
+  if (xpu_graph_mode_) {
+    // Same value as the per-column count in max_block_table_cols above, deliberately shared: graph replay
+    // pins max_num_blocks_per_query to this, so layers_block_table must have exactly this many columns per
+    // request. Keep them one expression so the two cannot drift apart.
+    graph_fixed_max_blocks_per_query_ = max_blocks_per_seq;
+    graph_rotary_pos_buf = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT64, {static_cast<uint64_t>(max_batch_size)});
+    KLLM_LOG_INFO << "[XPU Graph] fixed max_num_blocks_per_query=" << graph_fixed_max_blocks_per_query_;
+  }
+  // graph_seq_len_buf is also used in non-graph decode to avoid a per-layer compute-stream H2D of seq_len
+  // (see PagedAttention::Forward / paged_attention_layer). Allocate it unconditionally so it is available in
+  // both modes.
+  graph_seq_len_buf = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {static_cast<uint64_t>(max_batch_size)});
 #endif
 }
 
@@ -240,7 +302,12 @@ void ModelInput::ReplaceAttentionMetaCreator(std::unique_ptr<AttentionMetaCreato
   builder_config_ = std::make_unique<AttentionBuilderConfig>(AttentionBuilderConfig{
       model_config_, runtime_config_, enable_blocked_multi_token_forwarding_kv_, use_flashinfer_for_decode_, rank_,
       layer_num_on_node_, block_size_, kv_cache_types_, kv_cache_layer_offsets_, attn_dp_group_id_, attn_dp_rank_id_,
-      context_, kvcache_offset_event, rotary_embedding_event});
+      context_, kvcache_offset_event, rotary_embedding_event, RunMode::kMain
+#if defined(ENABLE_KUNLUN)
+      ,
+      xpu_graph_mode_, &graph_rotary_pos_buf
+#endif  // ENABLE_KUNLUN
+  });
   flash_builder_ = attention_meta_creator_->CreateFlashBuilder(*builder_config_);
   paged_builder_ = attention_meta_creator_->CreatePagedBuilder(*builder_config_);
 }
@@ -249,6 +316,9 @@ ModelInput::~ModelInput() {
   EventDestroy(kvcache_offset_event);
   EventDestroy(rotary_embedding_event);
   EventDestroy(input_ids_event);
+#if defined(ENABLE_KUNLUN)
+  EventDestroy(h2d_atb_event);
+#endif
 }
 
 void ModelInput::CreateVLTensors() {
@@ -377,7 +447,7 @@ void ModelInput::ParseFromRequests(const std::vector<ForwardRequest>& forward_re
   PrepareCudagraphParams(forward_reqs);
 #endif
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
   // NOTE(karlluo): please keep PrepareATBKVCache at the last of prepare process
   PrepareATBKVCache(forward_reqs, multi_token_request_num > 0);
 #endif
@@ -571,7 +641,7 @@ void ModelInput::PrepareMRopePos(const std::vector<ForwardRequest>& forward_reqs
               sizeof(int64_t) * mrotary_embedding_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetD2HStream());
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL)
   StreamSynchronize(context_->device->GetD2HStream());
 #endif
 }
@@ -702,37 +772,40 @@ void ModelInput::PrepareXDRopePos(const std::vector<ForwardRequest>& forward_req
               sizeof(int64_t) * xdrotary_embedding_pos_host.size(), MEMCPY_HOST_TO_DEVICE,
               context_->device->GetD2HStream());
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL)
   StreamSynchronize(context_->device->GetD2HStream());
 #endif
 }
 
-#ifdef ENABLE_ACL
+#if defined(ENABLE_ACL) || defined(ENABLE_KUNLUN)
 void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_reqs, bool is_multi_token_forward) {
   std::shared_ptr<BlockAllocatorManager> block_allocator_manager = forward_reqs.front().block_allocator_manager;
-  std::shared_ptr<BlockAllocatorInterface> device_allocator = block_allocator_manager->GetDeviceBlockAllocator(rank_);
 
   const auto block_allocator_group = block_allocator_manager->GetBlockAllocatorGroup(attn_dp_group_id_);
+  std::shared_ptr<BlockAllocatorInterface> device_allocator = block_allocator_group->GetDeviceBlockAllocator(rank_);
   size_t device_block_num = block_allocator_group->GetBlockAllocatorGroupConfig().device_block_num;
 
   // NOTE(karlluo): block manager will change the block number in
   // ResetPreAllocatedBlocks, block_manager's allocator's blocks_num is difference from the allocator's member config,
   // so we need get it from allocator instance.
-  size_t total_block_num = device_block_num * 2 * layer_num_on_node_;
+  const size_t kv_multiplier = model_config_.use_mla ? 1 : 2;
+  size_t total_block_num = device_block_num * kv_multiplier * layer_num_on_node_;
   if (total_block_num != k_cache_blocks_base.shape[0]) {
     void* cur_rank_block_base_ptr = device_allocator->GetBlocksBasePtr();
     void* k_cache_base_ptr = cur_rank_block_base_ptr;
-    void* v_cache_base_ptr = cur_rank_block_base_ptr + block_size_ / 2;
-    k_cache_blocks_base =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-               {device_block_num * 2 * layer_num_on_node_, runtime_config_.attn_backend_config.block_token_num,
-                model_config_.head_num, model_config_.size_per_head},
-               k_cache_base_ptr);
-    v_cache_blocks_base =
-        Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
-               {device_block_num * 2 * layer_num_on_node_, runtime_config_.attn_backend_config.block_token_num,
-                model_config_.head_num, model_config_.size_per_head},
-               v_cache_base_ptr);
+    // Use uintptr_t arithmetic to avoid void* pointer arithmetic issues on some compilers
+    uintptr_t base_addr = reinterpret_cast<uintptr_t>(cur_rank_block_base_ptr);
+    void* v_cache_base_ptr = reinterpret_cast<void*>(base_addr + block_size_ / 2);
+    KLLM_LOG_INFO << "PrepareATBKVCache: base=" << cur_rank_block_base_ptr << " v_base=" << v_cache_base_ptr
+                  << " block_size_=" << block_size_;
+    k_cache_blocks_base = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+                                 {total_block_num, runtime_config_.attn_backend_config.block_token_num,
+                                  model_config_.head_num, model_config_.size_per_head},
+                                 k_cache_base_ptr);
+    v_cache_blocks_base = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_FP16,
+                                 {total_block_num, runtime_config_.attn_backend_config.block_token_num,
+                                  model_config_.head_num, model_config_.size_per_head},
+                                 v_cache_base_ptr);
   }
 
   uint32_t batch_size = forward_reqs.size();
@@ -747,18 +820,28 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   size_t all_seq_len = 0;
   size_t slot_mapping_dim_1 = is_multi_token_forward ? 0ul : batch_size;
   for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-    seq_len_host.GetPtr<int32_t>()[f_req_idx] = forward_reqs[f_req_idx].forwarding_tokens->size();
+    const auto& req = forward_reqs[f_req_idx];
+    seq_len_host.GetPtr<int32_t>()[f_req_idx] = req.forwarding_tokens->size();
     if (is_multi_token_forward) {
-      slot_mapping_dim_1 += forward_reqs[f_req_idx].forwarding_tokens->size();
-      last_token_index_host[f_req_idx] = all_seq_len + forward_reqs[f_req_idx].forwarding_tokens->size() - 1;
+      // slot_mapping only covers new tokens (skip prefix/kv_cached),
+      // because the layer's cache-write kernel only processes new tokens.
+      const size_t skip_tokens = std::max(req.kv_cached_token_num, req.prefix_cache_len);
+      slot_mapping_dim_1 += req.forwarding_tokens->size() - skip_tokens;
+      last_token_index_host[f_req_idx] = all_seq_len + req.forwarding_tokens->size() - 1;
+      max_num_blocks_per_query =
+          std::max(max_num_blocks_per_query, req.atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
     } else {
-      max_num_blocks_per_query = std::max(max_num_blocks_per_query,
-                                          forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
+      max_num_blocks_per_query =
+          std::max(max_num_blocks_per_query, req.atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size());
       last_token_index_host[f_req_idx] = f_req_idx;
     }
-    all_seq_len += forward_reqs[f_req_idx].forwarding_tokens->size();
+    all_seq_len += req.forwarding_tokens->size();
   }
   layers_slot_mapping_host.resize(layer_num_on_node_ * slot_mapping_dim_1, 0);
+  // XPU Graph: fix stride to max possible value so graph replay reads correct offsets
+  if (xpu_graph_mode_ && !is_multi_token_forward && graph_fixed_max_blocks_per_query_ > 0) {
+    max_num_blocks_per_query = graph_fixed_max_blocks_per_query_;
+  }
   // NOTE(karlluo): for ATB, all device blocks locate on a flatten plane memory space.
   // The Ksana kv cache consists of blocks, each of which is an independent storage space. The blocks are not
   // guaranteed to be contiguous in memory. Each block has a shape of [2, layer_num, block_token_num, head_num,
@@ -805,49 +888,92 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
   if (is_multi_token_forward) {
     size_t layers_slot_mapping_offset = 0;
     for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-      if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
+      const auto& req = forward_reqs[f_req_idx];
+      if (req.attn_dp_group_id == attn_dp_group_id_) {
+        // slot_mapping only covers new tokens (skip prefix/kv_cached),
+        // matching the layer's cache-write which only processes new tokens.
+        const size_t total_tokens = req.forwarding_tokens->size();
+        const size_t skip_tokens = std::max(req.kv_cached_token_num, req.prefix_cache_len);
+
+        KLLM_LOG_DEBUG << "PrepareATBKVCache req=" << f_req_idx << " forwarding_tokens=" << total_tokens
+                       << " skip_tokens=" << skip_tokens << " new_tokens=" << (total_tokens - skip_tokens)
+                       << " slot_mapping_dim_1=" << slot_mapping_dim_1;
+
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
-          for (size_t token_idx = 0; token_idx < forward_reqs[f_req_idx].forwarding_tokens->size(); ++token_idx) {
+          for (size_t token_idx = skip_tokens; token_idx < total_tokens; ++token_idx) {
             int32_t inner_block_offset = token_idx % runtime_config_.attn_backend_config.block_token_num;
-            layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset + token_idx] =
-                (forward_reqs[f_req_idx]
-                     .atb_kv_cache_base_blk_ids[attn_dp_rank_id_]
-                                               [token_idx / runtime_config_.attn_backend_config.block_token_num] +
-                 layer_idx) *
-                    runtime_config_.attn_backend_config.block_token_num +
-                inner_block_offset;
+            int32_t base_blk =
+                req.atb_kv_cache_base_blk_ids[attn_dp_rank_id_]
+                                             [token_idx / runtime_config_.attn_backend_config.block_token_num];
+            // K/V factor is already baked into the block id by BuildFlatKVCacheBlkIds
+            // (×2 for standard K+V, ×1 for MLA's single latent cache), so use it directly.
+            int32_t adjusted_blk = base_blk;
+            layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + layers_slot_mapping_offset +
+                                     (token_idx - skip_tokens)] =
+                (adjusted_blk + layer_idx) * runtime_config_.attn_backend_config.block_token_num + inner_block_offset;
           }
         }
-        layers_slot_mapping_offset += forward_reqs[f_req_idx].forwarding_tokens->size();
+
+        layers_slot_mapping_offset += total_tokens - skip_tokens;
       }
     }
   } else {
-    layers_block_table_host.resize(layer_num_on_node_ * batch_size * max_num_blocks_per_query, -1);
-    for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
-      if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
-        size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size();
-        for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
-          for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
-            layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
-                                    f_req_idx * max_num_blocks_per_query + base_block_idx] =
-                forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_][base_block_idx] + layer_idx;
+    // Signature of everything that determines layers_block_table_host content (and its batch_size-dependent
+    // stride). When unchanged across steps we skip both the host triple-loop construction and the H2D copy.
+    // Disabled under xpu_graph_mode_ because graph capture/replay reads the device buffer at capture time and
+    // must always see the freshly uploaded table.
+    bool block_table_unchanged = false;
+    if (!xpu_graph_mode_) {
+      std::vector<int32_t> sig;
+      sig.reserve(static_cast<size_t>(batch_size) + 1);
+      sig.push_back(static_cast<int32_t>(batch_size));
+      for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+        if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
+          const auto& blk_ids = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_];
+          sig.push_back(static_cast<int32_t>(blk_ids.size()));
+          sig.insert(sig.end(), blk_ids.begin(), blk_ids.end());
+        }
+      }
+      block_table_unchanged = !block_table_cache_sig_.empty() && block_table_cache_sig_ == sig;
+      block_table_cache_sig_.swap(sig);
+    }
+
+    if (!block_table_unchanged) {
+      layers_block_table_host.resize(layer_num_on_node_ * batch_size * max_num_blocks_per_query, -1);
+      for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+        if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
+          size_t cur_query_blocks_num = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_].size();
+          for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
+            for (uint32_t base_block_idx = 0; base_block_idx < cur_query_blocks_num; ++base_block_idx) {
+              int32_t base_blk = forward_reqs[f_req_idx].atb_kv_cache_base_blk_ids[attn_dp_rank_id_][base_block_idx];
+              // K/V factor already baked into the block id by BuildFlatKVCacheBlkIds; use it directly.
+              int32_t adjusted_blk = base_blk;
+              layers_block_table_host[layer_idx * batch_size * max_num_blocks_per_query +
+                                      f_req_idx * max_num_blocks_per_query + base_block_idx] = adjusted_blk + layer_idx;
+            }
           }
         }
+      }
+      if (!layers_block_table_host.empty()) {
+        MemcpyAsync(layers_block_table.GetPtr<void>(), layers_block_table_host.data(),
+                    layers_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
+                    context_->device->GetH2DStream());
+      }
+    }
+    // slot_mapping depends on seq_len which grows every decode step, so it is always rebuilt and re-uploaded.
+    for (size_t f_req_idx = 0; f_req_idx < batch_size; ++f_req_idx) {
+      if (forward_reqs[f_req_idx].attn_dp_group_id == attn_dp_group_id_) {
         for (size_t layer_idx = 0; layer_idx < layer_num_on_node_; ++layer_idx) {
           int32_t block_id =
               forward_reqs[f_req_idx]
                   .atb_kv_cache_base_blk_ids[attn_dp_rank_id_][(seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) /
                                                                runtime_config_.attn_backend_config.block_token_num];
+          int32_t adjusted_blk = block_id;  // K/V factor already baked in by BuildFlatKVCacheBlkIds.
           layers_slot_mapping_host[layer_idx * slot_mapping_dim_1 + f_req_idx] =
-              (block_id + layer_idx) * runtime_config_.attn_backend_config.block_token_num +
+              (adjusted_blk + layer_idx) * runtime_config_.attn_backend_config.block_token_num +
               ((seq_len_host.GetPtr<int32_t>()[f_req_idx] - 1) % runtime_config_.attn_backend_config.block_token_num);
         }
       }
-    }
-    if (!layers_block_table_host.empty()) {
-      MemcpyAsync(layers_block_table.GetPtr<void>(), layers_block_table_host.data(),
-                  layers_block_table_host.size() * sizeof(int32_t), MEMCPY_HOST_TO_DEVICE,
-                  context_->device->GetH2DStream());
     }
   }
   MemcpyAsync(last_token_index_tensor.GetPtr<void>(), last_token_index_host.data(), batch_size * sizeof(int64_t),
@@ -857,7 +983,18 @@ void ModelInput::PrepareATBKVCache(const std::vector<ForwardRequest>& forward_re
               context_->device->GetH2DStream());
   atb_attention_attr.GetPtr<uint64_t>()[0] = slot_mapping_dim_1;
   atb_attention_attr.GetPtr<uint64_t>()[1] = max_num_blocks_per_query;
-  StreamSynchronize(context_->device->GetH2DStream());
+  // Prepare device-side context_len (mirror of seq_len_host) once per batch,
+  // so each attention layer forward can avoid H2D copy and stream sync.
+  MemcpyAsync(context_len_device.GetPtr<void>(), seq_len_host.GetPtr<void>(), batch_size * sizeof(int32_t),
+              MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+  if (!is_multi_token_forward && batch_size > 0) {
+    graph_seq_len_buf.shape = {batch_size};
+    MemcpyAsync(graph_seq_len_buf.GetPtr<void>(), seq_len_host.GetPtr<void>(), batch_size * sizeof(int32_t),
+                MEMCPY_HOST_TO_DEVICE, context_->device->GetH2DStream());
+  }
+  // Record event instead of blocking the host — compute stream will
+  // StreamWaitEvent(h2d_atb_event) in common_attention before layer 0.
+  EventRecord(h2d_atb_event, context_->device->GetH2DStream());
 }
 #endif
 
@@ -940,6 +1077,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   dp_multi_token_request_max_tokens = 0;
   dp_single_token_request_max_tokens = 0;
   dp_max_forwarding_tokens = 0;  // used for blocked_prefill
+  dp_max_prefix_per_req = 0;     // max prefix length among dp requests
 
   std::vector<size_t> logits_idx_list(total_sampling_token_num_);
   size_t logits_idx_list_idx = 0;
@@ -982,6 +1120,7 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
         *(dp_input_offset_uint64_ptr + 1) = *dp_input_offset_uint64_ptr + input_length;
         ++dp_input_offset_uint64_ptr;
         dp_input_prefix_list_uint64.emplace_back(dp_input_prefix_list_uint64.back() + skip_token_num);
+        dp_max_prefix_per_req = std::max(dp_max_prefix_per_req, skip_token_num);
       }
     } else {
       single_token_request_max_tokens = std::max(single_token_request_max_tokens, input_length);
@@ -1051,12 +1190,59 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
 
   dp_prefill_q_offset_uint64_host.shape = {forward_reqs.size() + 1};
   dp_prefill_q_offset_uint64_tensor.shape = {dp_prefill_q_offset_uint64_host.shape[0]};
+#ifdef ENABLE_KUNLUN
+  // Prepare int32 qlod from uint64 host tensor (data upload via copy_into_pack below)
+  {
+    const size_t* src = dp_prefill_q_offset_uint64_host.GetPtr<size_t>();
+    const size_t count = dp_prefill_q_offset_uint64_host.shape[0];
+    dp_prefill_q_offset_int32_tensor.shape = {count};
+    dp_prefill_q_offset_int32_tensor.dtype = TYPE_INT32;
+    dp_prefill_q_offset_int32_host_tensor.shape = {count};
+    dp_prefill_q_offset_int32_host_tensor.dtype = TYPE_INT32;
+    int32_t* dst_host = dp_prefill_q_offset_int32_host_tensor.GetPtr<int32_t>();
+    for (size_t i = 0; i < count; ++i) {
+      dst_host[i] = static_cast<int32_t>(src[i]);
+    }
+  }
+#endif
 
   input_offset_uint64_tensor.shape = {input_offset_list_uint64.size()};
   input_offset_uint64_tensor.dtype = TYPE_UINT64;
 
   dp_input_offset_uint64_host.shape = {forward_reqs.size() + 1};
   dp_input_offset_uint64_tensor.shape = {dp_input_offset_uint64_host.shape[0]};
+#ifdef ENABLE_KUNLUN
+  // Prepare int32 kvlod from uint64 host tensor (data upload via copy_into_pack below)
+  {
+    const size_t* src = dp_input_offset_uint64_host.GetPtr<size_t>();
+    const size_t count = dp_input_offset_uint64_host.shape[0];
+    dp_input_offset_int32_tensor.shape = {count};
+    dp_input_offset_int32_tensor.dtype = TYPE_INT32;
+    dp_input_offset_int32_host_tensor.shape = {count};
+    dp_input_offset_int32_host_tensor.dtype = TYPE_INT32;
+    int32_t* dst_host = dp_input_offset_int32_host_tensor.GetPtr<int32_t>();
+    for (size_t i = 0; i < count; ++i) {
+      dst_host[i] = static_cast<int32_t>(src[i]);
+    }
+
+    // Build prefix_kvlod: cumulative prefix lengths for cross-attention on prefix cache
+    // dp_input_prefix_list_uint64 = [0, prefix_len_0, prefix_len_0 + prefix_len_1, ...]
+    {
+      std::vector<int32_t> prefix_int32(dp_input_prefix_list_uint64.size());
+      for (size_t i = 0; i < dp_input_prefix_list_uint64.size(); ++i) {
+        prefix_int32[i] = static_cast<int32_t>(dp_input_prefix_list_uint64[i]);
+      }
+      // host copy
+      dp_input_prefix_int32_host_tensor.shape = {prefix_int32.size()};
+      dp_input_prefix_int32_host_tensor.dtype = TYPE_INT32;
+      memcpy(dp_input_prefix_int32_host_tensor.GetPtr<void>(), prefix_int32.data(),
+             prefix_int32.size() * sizeof(int32_t));
+      // device tensor shape (data upload via copy_into_pack below)
+      dp_input_prefix_int32_tensor.shape = {prefix_int32.size()};
+      dp_input_prefix_int32_tensor.dtype = TYPE_INT32;
+    }
+  }
+#endif
 
   input_prefix_uint64_tensor.shape = {input_prefix_list_uint64.size()};
   input_prefix_uint64_tensor.dtype = TYPE_UINT64;
@@ -1094,6 +1280,15 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
                    dp_input_prefix_list_uint64.size() * sizeof(uint64_t), layout.batch_offset_bytes);
     copy_into_pack(layout.off_dp_prefill_q_offset, dp_prefill_q_offset_uint64_host.GetPtr<void>(),
                    dp_prefill_q_offset_uint64_host.shape[0] * sizeof(uint64_t), layout.batch_offset_bytes);
+#ifdef ENABLE_KUNLUN
+    // Kunlun int32 device tensors: copy from host tensor to pack
+    copy_into_pack(layout.off_dp_prefill_q_offset_int32, dp_prefill_q_offset_int32_host_tensor.GetPtr<void>(),
+                   dp_prefill_q_offset_int32_host_tensor.shape[0] * sizeof(int32_t), layout.int32_offset_bytes);
+    copy_into_pack(layout.off_dp_input_offset_int32, dp_input_offset_int32_host_tensor.GetPtr<void>(),
+                   dp_input_offset_int32_host_tensor.shape[0] * sizeof(int32_t), layout.int32_offset_bytes);
+    copy_into_pack(layout.off_dp_input_prefix_int32, dp_input_prefix_int32_host_tensor.GetPtr<void>(),
+                   dp_input_prefix_int32_host_tensor.shape[0] * sizeof(int32_t), layout.int32_offset_bytes);
+#endif
 
     const size_t input_ids_bytes = input_ids_cpu.size() * sizeof(decltype(input_ids_cpu)::value_type);
     copy_into_pack(layout.off_input_ids, input_ids_cpu.data(), input_ids_bytes,
@@ -1112,9 +1307,22 @@ void ModelInput::PrepareInputIds(const std::vector<ForwardRequest>& forward_reqs
   KLLM_LOG_DEBUG << "attn_dp_group_offsets_ " << attn_dp_group_offsets_;
 
   EventRecord(input_ids_event, GetParseH2DStream());
-#ifdef ENABLE_ACL
-  // Event wait between streams seems not work, force sync here.
+#if defined(ENABLE_ACL)
+  // ACL: keep the historical host sync — cross-stream event ordering has not been
+  // validated on this platform.
   StreamSynchronize(GetParseH2DStream());
+#elif defined(ENABLE_KUNLUN)
+  // KUNLUN: trust cross-stream event ordering by default. The downstream consumer
+  // (CommonModel::EmbedTokensUseGpu at common_model.cpp:207) already does
+  // StreamWaitEvent(compute, input_ids_event), so the extra host sync is pure
+  // overhead (~50-100us/step on the critical path, see optimization_roadmap.md P0).
+  //
+  // This was previously opt-in via KLLM_KUNLUN_TRUST_H2D_EVENT; it is now the default
+  // for the P800 XPU SDK, which honors the ordering. Define KLLM_KUNLUN_FORCE_H2D_SYNC
+  // to restore the host sync on an SDK build that does not.
+#  ifdef KLLM_KUNLUN_FORCE_H2D_SYNC
+  StreamSynchronize(GetParseH2DStream());
+#  endif
 #endif
 }
 

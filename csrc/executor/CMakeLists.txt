@@ -46,3 +46,20 @@ cpp_test(global_cache_put_worker_test
 cpp_test(inflight_resource_test
   SRCS ${PROJECT_SOURCE_DIR}/csrc/executor/inflight_resource_test.cpp
   DEPS ${EXECUTOR_TEST_DEPS})
+
+set(CUPTI_LIB_DIR "" CACHE PATH "Directory containing libcupti.so.11.8 (nvidia cuda_cupti conda package)")
+if(WITH_KUNLUN AND NOT DEFINED _CUPTI_LIB_DIR)
+  find_file(_CUPTI_LIB_FILE libcupti.so.11.8
+    HINTS $ENV{CONDA_PREFIX}/lib/python3.10/site-packages/nvidia/cuda_cupti/lib
+          ${CUPTI_LIB_DIR}
+    NO_DEFAULT_PATH)
+  if(_CUPTI_LIB_FILE)
+    get_filename_component(_CUPTI_LIB_DIR "${_CUPTI_LIB_FILE}" DIRECTORY)
+  else()
+    message(WARNING "libcupti.so.11.8 not found; Kunlun executor test link may fail. "
+                    "Set -DCUPTI_LIB_DIR=<path> or install nvidia-cuda-cupti-cu11 in conda.")
+  endif()
+endif()
+if(WITH_KUNLUN AND WITH_TESTING)
+  target_link_directories(global_cache_put_worker_test PRIVATE ${_CUPTI_LIB_DIR})
+endif()

@@ -121,3 +121,11 @@ docs/superpowers/
 plans
 
 dist
+
+# Kunlun XPU
+build_*/
+docker/ksana-xpu-sdk-*.tar.gz
+# XTDK tarball for docker build (409MB, don't commit to git without LFS)
+docker/xtdk-llvm15-ubuntu2004_x86_64.tar.gz
+# 旧的手工软链目录（已废弃，头文件/库均由镜像与 pip install xtorch_ops 提供）
+.infer_ops_aligned/

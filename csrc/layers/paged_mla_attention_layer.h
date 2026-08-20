@@ -22,6 +22,15 @@ struct PagedMlaAttentionInputs {
   const Tensor* k_pe;
   const Tensor* tile_scheduler_metadata;
   const Tensor* num_splits;
+#ifdef ENABLE_KUNLUN
+  // Kunlun-specific fields (not used by CUDA/Ascend)
+  const Tensor* seq_len_host;        // context lengths, HOST
+  const Tensor* k_cache_blocks_base;  // kv_cache base (NO layer offset), DEVICE
+  const Tensor* layers_slot_mapping;  // per-token slot mapping, DEVICE
+  const Tensor* layers_block_table;   // per-layer block table, DEVICE
+  const Tensor* atb_attention_attr;   // [slot_mapping_dim_1, max_blocks_per_query]
+  const Tensor* context_len_device;  // DEVICE: context lengths [batch_size], int32
+#endif
 };
 
 class PagedMlaAttentionLayer : public AttentionLayer {

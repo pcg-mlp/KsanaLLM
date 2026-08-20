@@ -3,6 +3,7 @@
 ==============================================================================*/
 
 #include "modules/basic/flash_attention.h"
+#include <algorithm>
 #include "layers/flash_attention_layer.h"
 #include "models/base/attention_meta/attention_meta_builder.h"
 #include "utils/singleton.h"
@@ -68,6 +69,25 @@ FlashAttention::FlashAttention(bool is_neox, const LayerCreationContext& creatio
   }
   flash_attention_param.push_back(attn_config.model_config.enable_qk_pre_norm_before_rotary_pos);
   flash_attention_layer_->Init(flash_attention_param, creation_context.runtime_config, context_, rank_);
+  // Workspace sizing for Kunlun: Q + K + V contiguous buffers.
+  // Must be sized by max_step_token_num (total tokens in one forward step), NOT max_batch_size
+  // (number of concurrent requests).  Using max_batch_size causes workspace overflow when
+  // max_token_len or max_step_tokens is increased, leading to Q/K/V buffer overrun and garbled output.
+  //
+  // Element size must track the model's actual dtype: the workspace is written as T*
+  // (T = SCALAR_T from DISPATCH_BY_DTYPE_AND_KVTYPE) inside ForwardT.  Hard-coding
+  // sizeof(uint16_t) undersizes the buffer for fp32 and would silently overrun.
+  size_t flash_ws_size;
+#ifdef ENABLE_KUNLUN
+  flash_ws_size = static_cast<size_t>(creation_context.runtime_config.max_step_token_num) *
+                  static_cast<size_t>(attn_config.stride_size) * GetTypeSize(attn_config.model_config.weight_data_type);
+#else
+  flash_ws_size =
+      static_cast<size_t>(attn_config.max_batch_size) * static_cast<size_t>(attn_config.stride_size) * sizeof(uint16_t);
+#endif
+  // Ensure at least 8MB for safety (covers max_step_tokens * stride * fp16).
+  flash_ws_size = std::max(flash_ws_size, static_cast<size_t>(8 * 1024 * 1024));
+  flash_attention_layer_->SetWorkspaceBuffer(creation_context.workspace_mgr->GetWorkspace(flash_ws_size));
 }
 
 FlashAttention::~FlashAttention() {}
@@ -128,6 +148,31 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   params.max_tokens = static_cast<int>(fs.shape[1]);
   params.layer_block_num = static_cast<int>(fs.shape[2]);
   params.atb_attention_attr = &model_input->atb_attention_attr;
+  STATUS_CHECK_RETURN(typed_flash_layer->Forward(params, &hidden_buffer_tensors_1[0]));
+#elif defined(ENABLE_KUNLUN)
+  // inference on Kunlun XPU — same tensor protocol as Ascend/ATB + QK Norm weights
+  auto* typed_flash_layer = static_cast<FlashAttentionLayer*>(flash_attention_layer_.get());
+  const auto& fs = forward_context.forward_shape;
+  FlashAttentionLayer::KunlunForwardParams params;
+  params.qkv = &hidden_buffer_tensors_0[0];
+  params.rotary_embedding_pos = &model_input->flash_meta->rotary_embedding_pos;
+  params.layers_slot_mapping = &model_input->layers_slot_mapping;
+  params.k_cache_blocks_base = &model_input->k_cache_blocks_base;
+  params.v_cache_blocks_base = &model_input->v_cache_blocks_base;
+  params.seq_len_host = &model_input->seq_len_host;
+  // Kunlun uses the CUDA-style 13-D forward_shape layout (see forwarding_context.cpp), NOT the ACL
+  // 3-D layout: shape[0] is the GLOBAL multi_token_request_num while the flash layer needs the
+  // DP-scoped batch. shape[7]=dp_multi_token_request_num (batch_size, = len(qlod)-1) and
+  // shape[8]=dp_multi_token_request_max_tokens. The ACL indices [0]/[1] were copied here by
+  // mistake; when attention DP>1, shape[0]>shape[7] so max_seq_len over-reads seq_len_host and
+  // batch_size desyncs from qlod → NaN prefill attention. Matches the CUDA branch and reference.
+  params.batch_size = static_cast<int>(fs.shape[7]);
+  params.max_tokens = static_cast<int>(fs.shape[8]);
+  params.layer_block_num = static_cast<int>(fs.shape[2]);
+  params.atb_attention_attr = &model_input->atb_attention_attr;
+  params.query_layernorm_weight = &query_layernorm_weight;
+  params.key_layernorm_weight = &key_layernorm_weight;
+  params.qlod = &model_input->dp_prefill_q_offset_int32_host_tensor;
   STATUS_CHECK_RETURN(typed_flash_layer->Forward(params, &hidden_buffer_tensors_1[0]));
 #endif
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);

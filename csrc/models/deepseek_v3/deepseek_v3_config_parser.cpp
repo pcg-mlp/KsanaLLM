@@ -221,6 +221,32 @@ Status DeepSeekV3ConfigParser::ParseQuantConfig(const nlohmann::json &config_jso
       KLLM_THROW(fmt::format("Not support quant_method {}.", yaml_weight_quant_method));
     }
   }
+#ifdef ENABLE_KUNLUN
+  // Kunlun W4A8 auto-detection: when no quantization_config is present in config.json and
+  // the model contains INT8 weights with BF16 weight_scale (Kimi-K2.6-klx-w4a8-gptq format).
+  // On Kunlun devices, this format is detected by checking for .weight_scale files alongside INT8 weights.
+  if (!deepseek_v3_config->is_quant) {
+    // Check if model directory contains INT8 weights with weight_scale (heuristic: check safetensors index)
+    nlohmann::json safetensors_index =
+        ReadJsonFromFile(deepseek_v3_config->model_dir + "/model.safetensors.index.json");
+    if (!safetensors_index.empty() && safetensors_index.contains("weight_map")) {
+      auto &weight_map = safetensors_index["weight_map"];
+      // Look for the pattern: a layer has both .weight and .weight_scale entries
+      bool has_int8_with_scale = false;
+      for (auto it = weight_map.begin(); it != weight_map.end(); ++it) {
+        const std::string &name = it.key();
+        if (name.find(".weight_scale") != std::string::npos && name.find("norm") == std::string::npos) {
+          has_int8_with_scale = true;
+          break;
+        }
+      }
+      if (has_int8_with_scale) {
+        deepseek_v3_config->is_quant = true;
+        ParseW4A8KlxQuantConfig(deepseek_v3_config->quant_config);
+      }
+    }
+  }
+#endif  // ENABLE_KUNLUN
 
   // Deepseek only support machete backend
   if (deepseek_v3_config->is_quant && deepseek_v3_config->ContainGptqWeights()) {

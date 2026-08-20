@@ -91,7 +91,7 @@ void ExecutorBlockAllocator::PreAllocateBlocks() {
     SetDevice(rank_);
   }
 
-#if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
+#if defined(ENABLE_ACL) || defined(ENABLE_FLASH_ATTN_WITH_CACHE) || defined(ENABLE_KUNLUN)
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
     use_continuous_memory = true;
     size_t dev_bytes = (block_num_ + 1) * block_size_;
@@ -142,7 +142,11 @@ void ExecutorBlockAllocator::Clear() {
     SetDevice(rank_);
   }
 
-#if defined(ENABLE_ACL_ATB) || defined(ENABLE_FLASH_ATTN_WITH_CACHE)
+#if defined(ENABLE_ACL_ATB) || defined(ENABLE_FLASH_ATTN_WITH_CACHE) || defined(ENABLE_KUNLUN)
+  // 与 PreAllocateBlocks() 的连续内存分配保持对称:那里对 ACL/FLASH_ATTN_WITH_CACHE/KUNLUN
+  // 只做一次 malloc 得到 base_mem_ptr,各 block 是它的偏移指针;此处必须只 free 这一个 base
+  // 指针。若漏掉 ENABLE_KUNLUN 而走下面的通用逐指针释放,会对偏移指针调用 xpu_free,触发
+  // XPU -707 "free a non-base allocation device pointer"。
   if (location_ == MemoryLocation::LOCATION_DEVICE) {
     std::unique_lock<std::mutex> lock(mutex_);
 

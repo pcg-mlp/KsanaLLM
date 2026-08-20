@@ -51,6 +51,11 @@ if(WITH_ACL)
   list(FILTER distributed_SRCS EXCLUDE REGEX ".*nccl_data_channel.cpp")
 endif()
 
+if(WITH_KUNLUN)
+  # Kunlun XPU: exclude NCCL data channel (uses BKCL instead)
+  list(FILTER distributed_SRCS EXCLUDE REGEX ".*nccl_data_channel.cpp")
+endif()
+
 list(FILTER distributed_SRCS EXCLUDE REGEX ".*test.cpp")
 message(STATUS "distributed_SRCS: ${distributed_SRCS}")
 

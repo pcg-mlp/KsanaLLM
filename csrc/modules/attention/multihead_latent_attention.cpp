@@ -68,9 +68,35 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
 
   const auto& linear_compute_backend = model_creation_config.attn_config.model_config.quant_config.backend;
 
-  // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
   const std::string fused_lora_a_projs_weight_name = layer_prefix + ".self_attn.fused_lora_a_proj.weight";
-  if (creation_context.base_weight->GetModelWeights(fused_lora_a_projs_weight_name).GetElementNumber() > 0) {
+  const bool has_fused_lora_a =
+      creation_context.base_weight->GetModelWeights(fused_lora_a_projs_weight_name).GetElementNumber() > 0;
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun: requires fused_lora_a_proj.weight for rmsnorm_split_col path.
+  // W4A8_KLX weights must be loaded; absent weights indicate misconfiguration.
+  KLLM_CHECK_WITH_INFO(
+      has_fused_lora_a,
+      fmt::format("{} requires fused_lora_a_proj.weight; ensure W4A8_KLX weights are loaded", layer_prefix));
+  use_fused_lora_a_ = true;
+
+  q_a_layernorm_weight_ =
+      creation_context.base_weight->GetModelWeights(layer_prefix + ".self_attn.q_a_layernorm.weight");
+  kv_a_layernorm_weight_ =
+      creation_context.base_weight->GetModelWeights(layer_prefix + ".self_attn.kv_a_layernorm.weight");
+
+  rmsnorm_split_col_layer_ = std::make_shared<KunlunRmsnormSplitColLayer>();
+  rmsnorm_split_col_layer_->Init({model_creation_config.layernorm_config.layernorm_eps,
+                                  static_cast<int64_t>(attn_config.model_config.mla_config.q_lora_rank),
+                                  static_cast<int64_t>(attn_config.model_config.mla_config.kv_lora_rank),
+                                  static_cast<int64_t>(attn_config.model_config.mla_config.qk_rope_head_dim)},
+                                 creation_context.runtime_config, creation_context.context, creation_context.rank);
+
+  attn_fused_lora_a_projs_ =
+      std::make_shared<Linear>(fused_lora_a_projs_weight_name, creation_context, linear_compute_backend);
+#else
+  // TODO(huicongyao, jinxcwu): suppport INT4 model to keep use_fused_lora_a_ always true
+  if (has_fused_lora_a) {
     use_fused_lora_a_ = true;
     attn_fused_lora_a_projs_ =
         std::make_shared<Linear>(fused_lora_a_projs_weight_name, creation_context, linear_compute_backend);
@@ -85,6 +111,7 @@ MultiHeadLatentAttention::MultiHeadLatentAttention(int layer_idx, bool is_neox, 
     attn_kv_a_ropes_ = std::make_shared<Linear>(layer_prefix + ".self_attn.kv_a_rope_proj.weight", creation_context,
                                                 linear_compute_backend);
   }
+#endif
 
   attn_q_b_projs_ = std::make_shared<Linear>(layer_prefix + ".self_attn.q_b_nope_rope_proj.weight", creation_context,
                                              linear_compute_backend);
@@ -146,7 +173,22 @@ Status MultiHeadLatentAttention::CreateBuffers(BufferManager* buffer_mgr, const 
   const size_t kv_buffer_size = max_token_num * kv_lora_rank_;
   mla_buffers.kv_buffer = buffer_mgr->CreateBufferTensor("mla_buffers.kv_buffer", {kv_buffer_size}, weight_type);
 
+#ifdef ENABLE_KUNLUN
+  // Kunlun: k_rope_buffer is used for both compressed_kv_with_k_rope and softmax_lse.
+  // compressed_kv_with_k_rope layout: [max_token_num, kv_lora_rank_ + qk_rope_head_dim_]
+  // k_rope_buffer is reused for softmax_lse storage in flash_mla prefix-cache path.
+  // Total capacity needed (in float elements): 4 * max_token_num * head_num_per_atp
+  //   factor 1: sizeof(float) / sizeof(weight_type)   — LSE is float, buffer is weight_type
+  //   factor 2: input + transposed output (no in-place transpose)
+  //   factor 3: lse_new + lse_prefix (self-attn + cross-attn)
+  // The first factor compensates dtype size; the last two give 4x float-element headroom.
+  // softmax_lse brings no extra cost for MLA model in TP8, max_token_num * 64 < max_token_num * 576
+  const size_t k_rope_buffer_size = std::max(
+      max_token_num * (kv_lora_rank_ + qk_rope_head_dim_),
+      max_token_num * head_num_per_atp_ * (sizeof(float) / GetTypeSize(weight_type)) * 2 * 2);
+#else
   const size_t k_rope_buffer_size = max_token_num * qk_rope_head_dim_;
+#endif
   mla_buffers.k_rope_buffer =
       buffer_mgr->CreateBufferTensor("mla_buffers.k_rope_buffer", {k_rope_buffer_size}, weight_type);
 
@@ -220,6 +262,27 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
   if (dp_total_tokens > 0) {
     std::vector<Tensor>& kv_lora_buffer_tensors = q_nope_rope_buffer_tensors;
     std::vector<Tensor>& q_buffer_tensors = reduce_buffer_tensors;
+#ifdef ENABLE_KUNLUN
+    // ---- Kunlun: fused rmsnorm_split_col replaces split + layernorm ----
+    {
+      PROFILE_EVENT_SCOPE(attn_fused_lora_a_projs, "attn_fused_lora_a_proj", rank);
+      STATUS_CHECK_RETURN(attn_fused_lora_a_projs_->Forward(dp_hidden_input, hidden_buffer_tensors_1));
+    }
+
+    q_buffer_tensors[0].shape = {dp_total_tokens, q_lora_rank_};
+    kv_buffer_tensors[0].shape = {dp_total_tokens, kv_lora_rank_};
+    k_rope_buffer_tensors[0].shape = {dp_total_tokens, kv_lora_rank_ + qk_rope_head_dim_};
+
+    {
+      PROFILE_EVENT_SCOPE(rmsnorm_split_col, "rmsnorm_split_col", rank);
+      std::vector<Tensor> rsc_output = {q_buffer_tensors[0], kv_buffer_tensors[0], k_rope_buffer_tensors[0]};
+      STATUS_CHECK_RETURN(rmsnorm_split_col_layer_->Forward(
+          {hidden_buffer_tensors_1[0], q_a_layernorm_weight_, kv_a_layernorm_weight_}, rsc_output));
+    }
+
+    Tensor q_b_input = q_buffer_tensors[0];
+#else
+    // ---- Other platforms: split + layernorm (original logic) ----
     if (use_fused_lora_a_) {
       PROFILE_EVENT_SCOPE(attn_fused_lora_a_projs, "attn_fused_lora_a_proj", rank);
       // weight_shape = (q_lora_rank + kv_lora_rank + qk_rope_head_dim, hidden_units)
@@ -269,6 +332,7 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
       }
       q_b_input = hidden_buffer_tensors_1[0];
     }
+#endif
 
     if (sparse_mla_indexer_) {
       STATUS_CHECK_RETURN(sparse_mla_indexer_->Forward(dp_hidden_input, q_b_input,
@@ -339,6 +403,11 @@ Status MultiHeadLatentAttention::Forward(std::vector<Tensor>& hidden_buffer_tens
 
   if (dp_decode_tokens > 0) {
     PROFILE_EVENT_SCOPE(PagedAttentionForward, "PagedAttentionForward", forwarding_context.GetCurrentRank());
+
+    // Reshape `reduce_buffer_tensors` to avoid memory checker error in the following `GetView`.
+    // NOTE: the rebase onto master dropped this line; without it reduce_buffer_tensors[0] keeps a
+    // stale shape from the prefill/projection phase, and the GetView below over-reads it.
+    reduce_buffer_tensors[0].shape = {dp_decode_tokens, head_num_per_atp_ * kv_lora_rank_};
 
     // Swap the usage of output_tensors and workspace_buffer for absorb tokens
     // to ensure the result of bmm can be placed in output_tensors

@@ -4,5 +4,5 @@
 #include "kernels/trans_layout.h"
 
 namespace ksana_llm {
-Status TransLayout(Tensor& tensor, Stream& stream) { return Status(); }
+Status TransLayout(Tensor& tensor, Stream& stream, void* device_ctx) { return Status(); }
 }  // namespace ksana_llm

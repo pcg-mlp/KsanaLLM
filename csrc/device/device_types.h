@@ -12,6 +12,7 @@
 #define DEVICE_TYPE_NVIDIA 0
 #define DEVICE_TYPE_ASCEND 1
 #define DEVICE_TYPE_ZIXIAO 2
+#define DEVICE_TYPE_KUNLUN 3
 
 // Unknown device type.
 #define DEVICE_TYPE_UNKNOWN -1
@@ -23,6 +24,8 @@
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_ASCEND
 #elif defined(ENABLE_TOPS)
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_ZIXIAO
+#elif defined(ENABLE_KUNLUN)
+#  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_KUNLUN
 #else
 #  define ACTIVE_DEVICE_TYPE DEVICE_TYPE_UNKNOWN
 #endif
@@ -44,6 +47,18 @@
 #  include <acl/acl_rt.h>
 #endif
 
+// Kunlun XPU: only include the runtime header here (XPUStream / XPUEvent typedefs
+// are required by kunlun_device.h via StreamTypeTraits/EventTypeTraits specializations).
+// BKCL header lives next to runtime header but is included in bkcl_utils.h, NOT here,
+// to avoid pulling BKCL types into every translation unit.
+//
+// Note: <xpu/runtime.h> defines `typedef void* XPUStream` and `typedef void* XPUEvent`
+// (both opaque handles, NOT aliases of cudaStream_t — cudart compatibility uses a
+// separate path through libcudart.so).
+#ifdef ENABLE_KUNLUN
+#  include <xpu/runtime.h>
+#endif
+
 namespace ksana_llm {
 
 // The type define.
@@ -60,6 +75,13 @@ typedef int16_t bfloat16;
 #elif defined(ENABLE_TOPS)
 typedef int16_t float16;
 typedef uint16_t bfloat16;
+#elif defined(ENABLE_KUNLUN)
+// Kunlun XPU: use int16_t/uint16_t as float16/bfloat16 storage types.
+// Note: xdnn's libxpu_dnn.so uses its own struct float16/bfloat16 internally,
+// but they are memory-layout compatible (both 2 bytes). kernel_wrapper.cpp
+// uses reinterpret_cast to bridge the type mismatch at link time.
+typedef int16_t float16;
+typedef uint16_t bfloat16;
 #endif
 
 // All the available data format, for ascend aclTensor.
@@ -71,6 +93,8 @@ enum DataFormat {
   FORMAT_ND = aclFormat::ACL_FORMAT_ND,
   FORMAT_NZ = aclFormat::ACL_FORMAT_FRACTAL_NZ
 #elif defined(ENABLE_TOPS)
+  FORMAT_DEFAULT
+#elif defined(ENABLE_KUNLUN)
   FORMAT_DEFAULT
 #endif
 };
@@ -182,6 +206,36 @@ enum DataType {
   TYPE_POINTER,
   TYPE_I4_GROUP,
   TYPE_BLOCK_FP8_E4M3,
+  TYPE_UINT4x2,
+  TYPE_INT4x2,
+  TYPE_FP8_DS_MLA,
+  TYPE_FP8_E8M0,
+  TYPE_FP4_E2M1FN_x2,
+#elif defined(ENABLE_KUNLUN)
+  // Kunlun XPU Stage 0: enumerate ALL possible DataType values (mirroring CUDA/TOPS)
+  // so downstream code that references e.g. TYPE_FP8_E4M3 still compiles.
+  // Runtime support (in kernels/layers) will KLLM_THROW for unsupported dtypes.
+  TYPE_INVALID,
+  TYPE_BOOL,
+  TYPE_UINT8,
+  TYPE_UINT16,
+  TYPE_UINT32,
+  TYPE_UINT64,
+  TYPE_INT8,
+  TYPE_INT16,
+  TYPE_INT32,
+  TYPE_INT64,
+  TYPE_BF16,
+  TYPE_FP16,
+  TYPE_FP32,
+  TYPE_FP64,
+  TYPE_BYTES,
+  TYPE_FP8_E4M3,
+  TYPE_I4_GROUP,
+  TYPE_BLOCK_FP8_E4M3,
+  TYPE_FP8_E5M2,
+  TYPE_VOID,
+  TYPE_POINTER,
   TYPE_UINT4x2,
   TYPE_INT4x2,
   TYPE_FP8_DS_MLA,

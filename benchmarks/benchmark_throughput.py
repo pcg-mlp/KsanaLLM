@@ -932,7 +932,10 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
                             # Reset the chunk_acc
                             chunk_acc = ""
                             if ("server" in args.backend or args.backend == "openai-chat") and args.stream:
-                                delta = output.get("choices", [{}])[0].get("delta", {})
+                                choices = output.get("choices", [])
+                                if not choices:
+                                    continue
+                                delta = choices[0].get("delta", {})
                                 delta_reasoning = delta.get("reasoning_content", "")
                                 delta_content = delta.get("content", "")
                                 if delta_reasoning:
@@ -1008,10 +1011,14 @@ async def send_request_async(args: argparse.Namespace, prompt: int,
         output_token_num = len(output.get("output_token_ids")[0])
     elif "server" in args.backend or args.backend == "openai-chat":
         if args.stream:
+            # Final stream chunk may have empty choices (only usage info).
+            # Ensure choices[0] exists for unified extraction below.
+            if not output.get("choices"):
+                output["choices"] = [{"delta": {}}]
             output["choices"][0]["delta"]["content"] = server_stream_output
             output["choices"][0]["delta"]["reasoning_content"] = server_stream_reasoning
         msg = output['choices'][0][server_map_idx]
-        reasoning_content = msg.get("reasoning_content", "")
+        reasoning_content = msg.get("reasoning_content") or ""
         content = msg.get("content", "")
         output_text = reasoning_content + content
         # Use saved usage for stream mode, otherwise get from output

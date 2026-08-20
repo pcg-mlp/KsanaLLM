@@ -68,6 +68,12 @@ ModelCommunicator::ModelCommunicator(Tensor* input, int rank, const RuntimeConfi
 
   hccl_all_gather_layer_ = std::make_shared<HcclAllGatherLayer>();
   hccl_all_gather_layer_->Init({}, runtime_config, context, rank);
+#elif defined(ENABLE_KUNLUN)
+  bkcl_all_reduce_sum_layer_ = std::make_shared<BkclAllReduceSumLayer>();
+  bkcl_all_reduce_sum_layer_->Init({}, runtime_config, context_, rank_);
+
+  bkcl_all_gather_layer_ = std::make_shared<BkclAllGatherLayer>();
+  bkcl_all_gather_layer_->Init({}, runtime_config, context_, rank_);
 #endif
 }
 
@@ -103,12 +109,14 @@ void ModelCommunicator::InitTensorParaCustomAllReduceSumLayer(Tensor* input, con
 
 ModelCommunicator::~ModelCommunicator() {
   EventDestroy(comm_finish_event_);
+#ifdef ENABLE_CUDA
   if (tp_custom_all_reduce_sum_layer_) {
     tp_custom_all_reduce_sum_layer_->Clear();
   }
   if (tp_trt_all_reduce_sum_layer_) {
     tp_trt_all_reduce_sum_layer_->Clear();
   }
+#endif
 }
 
 Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) {
@@ -124,6 +132,19 @@ Status ModelCommunicator::AllGather(const std::vector<Tensor>& input_tensors, st
 #ifdef ENABLE_ACL
   if (context_->global->GetTensorParallelSize() > 1) {
     STATUS_CHECK_RETURN(hccl_all_gather_layer_->Forward(&input_tensors[0], &input_tensors[1], &output_tensors[0]));
+    if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
+      EventRecord(comm_finish_event_, context_->device->GetCommStream());
+      StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);
+    }
+  } else {
+    MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+                MEMCPY_DEVICE_TO_DEVICE, context_->device->GetPrimaryComputeStream());
+  }
+#endif
+
+#ifdef ENABLE_KUNLUN
+  if (context_->global->GetTensorParallelSize() > 1) {
+    STATUS_CHECK_RETURN(bkcl_all_gather_layer_->Forward(input_tensors, output_tensors));
     if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
       EventRecord(comm_finish_event_, context_->device->GetCommStream());
       StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);
@@ -159,6 +180,21 @@ Status ModelCommunicator::ReduceSum(const std::vector<Tensor>& input_tensors, st
 #ifdef ENABLE_ACL
   if (context_->global->GetTensorParallelSize() > 1) {
     STATUS_CHECK_RETURN(hccl_all_reduce_sum_layer_->Forward(&input_tensors[0], &output_tensors[0]));
+    if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
+      EventRecord(comm_finish_event_, context_->device->GetCommStream());
+      StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);
+    }
+  } else {
+    MemcpyAsync(output_tensors[0].GetPtr<void>(), input_tensors[0].GetPtr<void>(), input_tensors[0].GetTotalBytes(),
+                MEMCPY_DEVICE_TO_DEVICE, context_->device->GetPrimaryComputeStream());
+    output_tensors[0].shape = input_tensors[0].shape;
+    output_tensors[0].dtype = input_tensors[0].dtype;
+  }
+#endif
+
+#ifdef ENABLE_KUNLUN
+  if (context_->global->GetTensorParallelSize() > 1) {
+    STATUS_CHECK_RETURN(bkcl_all_reduce_sum_layer_->Forward(input_tensors, output_tensors));
     if (!context_->global->IsRunContextDecodeAndDecodeSerially()) {
       EventRecord(comm_finish_event_, context_->device->GetCommStream());
       StreamWaitEvent(context_->device->GetPrimaryComputeStream(), comm_finish_event_);

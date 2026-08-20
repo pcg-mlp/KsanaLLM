@@ -86,6 +86,9 @@ Status ModelExecutor::Forward(std::shared_ptr<NewModelInput> model_input, Hidden
         stage_reqs.emplace_back(req);
       }
     }
+    if (stage_reqs.empty()) {
+      continue;
+    }
     const Status status =
         model_instance_->Forward(model_weight_->GetWeight(), stage, stage_reqs, hidden_unit, model_input->run_mode,
                                  slot, prev_ring_dev, gpu_input_already_prepared);

@@ -398,6 +398,7 @@ void Tensor::SaveToNpyFile(const std::string& file_path) {
 }
 
 void Tensor::LoadFromNpyFile(const std::string& file_path) {
+#if defined(ENABLE_CUDA) || defined(ENABLE_ACL)
   KLLM_LOG_DEBUG << fmt::format("Load {} To Tensor {}", file_path, ToString());
 
   std::vector<size_t> file_data_shape;
@@ -433,6 +434,9 @@ void Tensor::LoadFromNpyFile(const std::string& file_path) {
 
   free(file_host_data_ptr);
   fclose(f_ptr);
+#else
+  KLLM_THROW("LoadFromNpyFile not supported on this platform (requires llm_kernels utils)");
+#endif  // ENABLE_CUDA || ENABLE_ACL
 }
 
 }  // namespace ksana_llm

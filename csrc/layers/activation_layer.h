@@ -24,12 +24,12 @@ class ActivationLayer : public BaseLayer {
                  const Tensor* bias = nullptr, const Tensor* gated_bias = nullptr,
                  const LayerExecContext& exec_ctx = {});
 
- private:
+ protected:
   template <typename T>
   Status ForwardT(const Tensor* input, Tensor* output, const Tensor* gated_weight, const Tensor* bias,
                   const Tensor* gated_bias);
 
- private:
+ protected:
   ActivationType activation_type_;
 };
 

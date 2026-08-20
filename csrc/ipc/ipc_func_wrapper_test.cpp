@@ -38,13 +38,19 @@ namespace ksana_llm {
 
 class IpcFuncWrapperCommunicationTest : public ::testing::Test {
  protected:
-  void SetUp() override { nccl_uid = GenerateNCCLUniqueID(); }
+  void SetUp() override {
+#ifdef ENABLE_CUDA
+    nccl_uid = GenerateNCCLUniqueID();
+#endif
+  }
 
   void TearDown() override {}
 
  protected:
   const size_t executor_num = 2;
+#ifdef ENABLE_CUDA
   ncclUniqueId nccl_uid;
+#endif
 };
 
 // ============================================================================
@@ -63,6 +69,7 @@ TEST_F(IpcFuncWrapperCommunicationTest, MulticastCommunicationTest) {
     context->global->InitDistributedConfig();
 
     context->device = std::make_shared<DeviceContext>(executor_num);
+#ifdef ENABLE_CUDA
     context->device->ext->InitNcclParam(nccl_uid);
     // Force multicast for testing
     context->device->ext->is_multicast_supported_ = true;
@@ -79,6 +86,7 @@ TEST_F(IpcFuncWrapperCommunicationTest, MulticastCommunicationTest) {
     [[maybe_unused]] Tensor input(MemoryLocation::LOCATION_MULTICAST, TYPE_FP16, {1024});
     auto nvls_handle = nvls_mcast_memory->GetNvlsHandle();
     EXPECT_NE(nvls_handle, nullptr);
+#endif
 
     // Sync executor
     executor_wrapper->AddExecutor();
@@ -86,6 +94,7 @@ TEST_F(IpcFuncWrapperCommunicationTest, MulticastCommunicationTest) {
     // Await completion of multicast initialization
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
+#ifdef ENABLE_CUDA
     // Check IPC handle
     EXPECT_EQ(nvls_handle->peer_uc_vas.size(), executor_num);
     EXPECT_EQ(nvls_handle->peer_uc_handles.size(), executor_num);
@@ -95,6 +104,7 @@ TEST_F(IpcFuncWrapperCommunicationTest, MulticastCommunicationTest) {
     for (const auto& ipc_handle : ipc_handles) {
       EXPECT_GE(ipc_handle.fd, 0);
     }
+#endif
 
     std::exit(0);
   };

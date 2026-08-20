@@ -23,6 +23,10 @@ void ParseFP8QuantConfig(const nlohmann::json &config_json, bool is_moe, QuantCo
 // Parse W4A8_AWQ quantization configuration
 void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, QuantConfig &quant_config);
 
+// Parse W4A8_KLX quantization configuration (Kunlun format)
+// Used for Kimi-K2.6-klx-w4a8-gptq style models: INT8 per-channel weights, no activation scales.
+void ParseW4A8KlxQuantConfig(QuantConfig &quant_config);
+
 // Parse compressed-tensors quantization configuration
 // Extracts GPTQ-equivalent parameters from config_groups and handles MoE ignore list.
 // Populates quant_config and sub_quant_configs for MoE INT4 pattern.

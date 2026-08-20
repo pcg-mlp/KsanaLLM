@@ -50,9 +50,13 @@ class SamplerTest : public testing::Test {
     context_ = std::make_shared<Context>();
     context_->global.reset(new GlobalContext(1, 1, 1, env));
     context_->global->InitDistributedConfig();
+#ifdef ENABLE_CUDA
     ncclUniqueId nccl_uid = GenerateNCCLUniqueID();
+#endif
     context_->device = std::make_shared<DeviceContext>(1);
+#ifdef ENABLE_CUDA
     context_->device->ext->InitNcclParam(nccl_uid);
+#endif
 
     sampler_ = std::make_shared<DerivedSampler>(batch_scheduler_config, device_id_, context_);
 

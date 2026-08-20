@@ -3,8 +3,10 @@
 ==============================================================================*/
 
 #include "models/base/common_model_weight_loader.h"
-#include "kernels/permute.h"
 
+#include <cstring>
+
+#include "kernels/permute.h"
 #ifdef ENABLE_CUDA
 #  include "kernels/nvidia/basic_kernel_wrapper.h"
 #endif
@@ -78,7 +80,8 @@ Status CommonModelWeightLoader::PermuteWeight(Tensor& input_tensor, const std::v
   Tensor& permute_tensor = permute_buffers_[dev_rank].at(key);
   permute_tensor.dtype = input_tensor.dtype;
   permute_tensor.shape = input_tensor.shape;
-  Permute(input_tensor, permute_tensor, permutation, context_->device->GetMemoryManageStream());
+  auto& stream = context_->device->GetMemoryManageStream();
+  Permute(input_tensor, permute_tensor, permutation, stream, GetDeviceCtxPtr(context_->device.get(), stream));
   for (size_t i = 0; i < permutation.size(); i++) {
     permute_tensor.shape[i] = input_tensor.shape[permutation[i]];
   }
@@ -160,6 +163,55 @@ Tensor CommonModelWeightLoader::TensorParallelSplit1D(const Tensor& input_tensor
   return dev_tensor;
 }
 
+#ifdef ENABLE_KUNLUN
+Tensor CommonModelWeightLoader::HostTensorParallelSlice2D(const Tensor& input_tensor, int dev_rank, size_t para_size,
+                                                          TensorParallelMode tp_mode) {
+  KLLM_CHECK_WITH_INFO(input_tensor.shape.size() == 2, "HostTensorParallelSlice2D only supports 2D tensors");
+  KLLM_CHECK_WITH_INFO(input_tensor.location == MemoryLocation::LOCATION_HOST,
+                       "HostTensorParallelSlice2D requires host tensor");
+
+  const size_t type_size = GetTypeSize(input_tensor.dtype);
+  const size_t rank_offset = dev_rank % para_size;
+  const bool is_row_para = (tp_mode == TensorParallelMode::RowPara);
+  const size_t split_dim = is_row_para ? 0 : 1;
+
+  KLLM_CHECK_WITH_INFO(input_tensor.shape[split_dim] % para_size == 0,
+                       fmt::format("Tensor shape[{}] must be divisible by para_size", split_dim));
+
+  const size_t split_size = input_tensor.shape[split_dim] / para_size;
+  std::vector<size_t> slice_shape = input_tensor.shape;
+  slice_shape[split_dim] = split_size;
+
+  if (is_row_para) {
+    // RowPara: 按行切分，数据在内存中已经连续，直接用指针偏移（零拷贝shared buffer）
+    const size_t row_bytes = input_tensor.shape[1] * type_size;
+    const size_t offset = split_size * rank_offset * row_bytes;
+    Tensor slice_tensor(MemoryLocation::LOCATION_HOST, input_tensor.dtype, slice_shape,
+                        static_cast<void*>(input_tensor.GetPtr<uint8_t>() + offset));
+    return slice_tensor;
+  } else {
+    // ColPara: 按列切分，数据不连续，需要gather到连续buffer
+    const size_t rows = input_tensor.shape[0];
+    const size_t src_cols = input_tensor.shape[1];
+    const size_t dst_cols = split_size;
+    const size_t col_offset = split_size * rank_offset;
+
+    // 分配host连续buffer（Tensor RAII管理生命周期）
+    Tensor slice_tensor(MemoryLocation::LOCATION_HOST, input_tensor.dtype, slice_shape);
+
+    // Host侧逐行memcpy gather到连续内存（CPU cache友好，远快于XPU逐行API调用）
+    const uint8_t* src_base = input_tensor.GetPtr<uint8_t>() + col_offset * type_size;
+    uint8_t* dst_base = slice_tensor.GetPtr<uint8_t>();
+    const size_t src_row_bytes = src_cols * type_size;
+    const size_t dst_row_bytes = dst_cols * type_size;
+    for (size_t row = 0; row < rows; ++row) {
+      std::memcpy(dst_base + row * dst_row_bytes, src_base + row * src_row_bytes, dst_row_bytes);
+    }
+    return slice_tensor;
+  }
+}
+#endif
+
 Tensor CommonModelWeightLoader::TensorParallelSplit2D(const Tensor& input_tensor, int dev_rank, size_t para_size,
                                                       TensorParallelMode tp_mode) {
   const size_t type_size = GetTypeSize(input_tensor.dtype);
@@ -173,7 +225,20 @@ Tensor CommonModelWeightLoader::TensorParallelSplit2D(const Tensor& input_tensor
   const size_t split_size = input_tensor.shape[split_dim] / para_size;
   std::vector<size_t> slice_shape = input_tensor.shape;
   slice_shape[split_dim] = split_size;
-  // 计算Memcpy2D参数
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun优化路径: 当源tensor在host上时，先在host侧完成切分得到连续内存，再整块H2D。
+  // 目的: 规避昆仑XPU Runtime无原生2D memcpy导致的逐行xpu_memcpy_async调用开销。
+  if (input_tensor.location == MemoryLocation::LOCATION_HOST) {
+    Tensor host_slice = HostTensorParallelSlice2D(input_tensor, dev_rank, para_size, tp_mode);
+    Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, input_tensor.dtype, slice_shape);
+    MemcpyAsync(dev_tensor.GetPtr<void>(), host_slice.GetPtr<void>(), host_slice.GetTotalBytes(),
+                MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
+    return dev_tensor;
+  }
+#endif
+
+  // 默认路径: 使用Memcpy2D实现二维切片拷贝（CUDA/Ascend有原生2D memcpy，性能正常）
   const size_t rows = is_row_para ? split_size : input_tensor.shape[0];
   const size_t cols = is_row_para ? input_tensor.shape[1] : split_size;
   const size_t src_pitch = input_tensor.shape[1] * type_size;

@@ -107,7 +107,7 @@ class KsanaOpenAIServingCompletion(KsanaOpenAIServing):
                 )
             
             # 转换为 Ksana 格式
-            converter = RequestConverter(self.config, tokenizer=tokenizer)
+            converter = RequestConverter(self.config, tokenizer=self.tokenizer)
             
             try:
                 ksana_request = converter.convert_to_ksana_format(

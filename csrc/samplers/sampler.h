@@ -36,6 +36,8 @@ class Sampler {
                                          SamplingDeviceParameter& sampling_device_parameter, float*& device_logits,
                                          Stream& stream, size_t slot = 0);
 
+#ifndef ENABLE_KUNLUN
+  // CUDA: dual-slot ping-pong ring.
   // 双 sampler buffer 是否已分配 slot 1（build-ahead 启用条件之一）。
   bool HasDoubleSlot() const { return device_output_tokens_slot1_ != nullptr; }
 
@@ -59,6 +61,22 @@ class Sampler {
   // 暴露 slot 对应 device_output_tokens 指针，供 WriteRingKernel 使用。
   // 慢路径不应调用 slot=1；slot 1 未分配时内部回落 slot 0。
   uint32_t* GetDeviceOutputTokensPtr(size_t slot) { return GetDeviceOutputTokens(slot); }
+#else
+  // Kunlun: single persistent ring (device_ring_slot1_ aliases device_ring_slot0_).
+  // No dual-slot ping-pong: the earlier ping-pong dropped entries under async batch churn
+  // (a decode req's -1 placeholder went un-backfilled -> embedding OOB -> XPU -714).
+  bool HasDoubleSlot() const { return device_ring_slot1_ != nullptr; }
+  int64_t* GetRingSlot(size_t slot) { return slot == 1 ? device_ring_slot1_ : device_ring_slot0_; }
+
+  // Build the persistent per-req union of latest sampled tokens in ring `slot`: carry forward the
+  // OTHER slot's (slot ^ 1) union — dropping req_ids in evict_ids_host (this step's finished reqs)
+  // — then upsert this step's batch, consuming device_output_tokens_ directly (no D2H). No-op
+  // if the ring was not allocated or the batch is empty.
+  void WriteRing(size_t slot, const std::vector<int64_t>& cur_req_ids_host, const std::vector<int64_t>& evict_ids_host,
+                 Stream& stream);
+  void BroadcastRingSlot(size_t slot, Stream& stream);
+  uint32_t* GetDeviceOutputTokensPtr(size_t slot) { return GetDeviceOutputTokens(slot); }
+#endif
 
   // Copies the probabilities from the logits buffer to the output vector for each sampling request.
   std::function<void()> CopyProbsOutput(std::vector<SamplingRequest>& sampling_reqs, Stream& stream,
@@ -137,6 +155,39 @@ class Sampler {
   RandState* device_curandstates_{nullptr};
   std::vector<int> host_output_tokens_;
 
+#ifdef ENABLE_KUNLUN
+  // C2 sampler-overlap events: allocated unconditionally for stable class layout; unused now.
+  Event sampling_tokens_ready_event_;
+  Event sampling_d2h_done_event_;
+
+  // Identity int64 slot_map [0,1,...,max_logits_num), allocated once in the ctor.
+  // Used by build-ahead WriteRing.
+  int64_t* device_identity_slot_map_ = nullptr;
+
+  // Build-ahead (Phase 1) single persistent ring buffer, [1 + 2*max_batch_size] int64, layout
+  // [count, req_id_0, token_0, ...]. Allocated and zeroed only when IsEnabledAtStartup() —
+  // nullptr otherwise. device_ring_slot1_ aliases device_ring_slot0_ (single in-place ring,
+  // NOT dual-slot ping-pong: the earlier ping-pong dropped entries under async batch churn
+  // -> -1 placeholder un-backfilled -> XPU -714).
+  int64_t* device_ring_slot0_ = nullptr;
+  int64_t* device_ring_slot1_ = nullptr;
+  size_t device_ring_capacity_ = 0;        // per-slot length in int64 elements (1 + 2*ring_entry_capacity)
+  size_t device_ring_entry_capacity_ = 0;  // max (req_id, token) entries per slot (= 2*max_batch_size)
+  // Staging buffer for this step's finished req_ids, H2D'd into device_evict_ids_ inside WriteRing so
+  // the union carry-forward can drop them. Sized ring_entry_capacity (>= any single step's finish set).
+  int64_t* device_evict_ids_ = nullptr;
+  // Staging buffer for THIS step's sampled req_ids, laid out as (req_id, 0) stride-2 pairs so the
+  // write_ring kernel (which reads cur_pairs[2*i]) consumes them unchanged. H2D'd inside WriteRing
+  // from cur_req_ids_host. Sized 2*ring_entry_capacity int64.
+  int64_t* device_write_pairs_ = nullptr;
+  // Build-ahead slot-1 mirrors. Kunlun uses a single persistent ring (slot1 aliases slot0), so these
+  // stay null/empty here and the unconditional GetDeviceOutputTokens/Ptrs/Host accessors fall back to
+  // slot0/base. Declared in this branch too (not only in the #else) so those accessors resolve on Kunlun.
+  void* device_buffer_slot1_{nullptr};
+  uint32_t* device_output_tokens_slot1_{nullptr};
+  int** device_output_tokens_ptrs_slot1_{nullptr};
+  std::vector<int> host_output_tokens_slot1_;
+#else
   // build-ahead 双实例：slot 1 独立 buffer；慢路径不分配，对原路径零影响。
   // 物理隔离 device/host 数据，避免相邻 step sampling 互相覆盖。
   void* device_buffer_slot1_{nullptr};
@@ -149,9 +200,20 @@ class Sampler {
   int64_t* device_ring_slot0_{nullptr};
   int64_t* device_ring_slot1_{nullptr};
   size_t device_ring_capacity_{0};  // 已分配槽长度 (int64 元素数), 即 1 + 2*max_batch_size
+#endif
   std::vector<int> host_topKs_;
   std::vector<float> host_topPs_;
   std::vector<float> host_temperatures_;
+  // Cache of the last H2D-uploaded slice [0..last_uploaded_bs_). When
+  // SamplingParameterToDevice sees the same values as last step, we skip the
+  // H2D — sampling configs almost never change mid-generation. The dirty
+  // flags force at least one upload before use.
+  std::vector<int> last_uploaded_topKs_;
+  std::vector<float> last_uploaded_topPs_;
+  std::vector<float> last_uploaded_temperatures_;
+  bool topKs_dirty_ = true;
+  bool topPs_dirty_ = true;
+  bool temperatures_dirty_ = true;
   std::vector<const float*> host_logits_;
 
   // The context

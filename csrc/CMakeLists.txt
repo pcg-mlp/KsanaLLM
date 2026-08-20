@@ -142,6 +142,7 @@ target_link_libraries(ksana_llm_libs INTERFACE
   gflags
   periphery
   ${NCCL_LIBRARIES}
+  ${XPU_SHARED_LIBS}
 )
 
 add_subdirectory(torch_op)

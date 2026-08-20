@@ -148,6 +148,8 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
   const size_t paged_tokens = dsv4_paged_ptr ? dsv4_paged_ptr->compressor.dp_tokens : 0;
 
   // Prefix cache tail read-copy: 把 prefix 末 block 的 tail kv_score 复制到 state buffer。
+  // 依赖 CUDA-only 的 dsv4_tail_copy kernel，昆仑无对应实现，直接跳过该 overlap 优化。
+#ifdef ENABLE_CUDA
   if (compress_ratio_ == 4) {
     if (const int num_req = static_cast<int>(compressor_shared.tail_read_block_tensor.GetElementNumber());
         num_req > 0) {
@@ -169,6 +171,7 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
                       forwarding_context.GetContext()->device->GetPrimaryComputeStream().Get());
     }
   }
+#endif  // ENABLE_CUDA
 
   if (flash_tokens > 0) {
     Tensor context_kv_score_input = kv_score_input.GetView({flash_tokens, kv_score_input.shape[1]});
@@ -231,6 +234,8 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
   }
 
   // Prefix cache write-copy: 把 c4 层当前 step 的 kv_score 持久化到 tail 区，供下个请求复用。
+  // 依赖 CUDA-only 的 dsv4_tail_copy kernel，昆仑无对应实现，直接跳过该持久化。
+#ifdef ENABLE_CUDA
   if (compress_ratio_ == 4) {
     if (const size_t num_tokens = compressor_shared.tail_write_indices_tensor.GetElementNumber(); num_tokens > 0) {
       // tail_write_indices may be stale when the forward is replayed with a
@@ -264,6 +269,7 @@ Status Compressor::Forward(const Tensor& x, const Tensor& workspace, Tensor& kv_
       }
     }
   }
+#endif  // ENABLE_CUDA
 
   // Correctly set the output shape
   kv_compressed_output.shape = {total_tokens, head_dim_};  // Uncompressed tokens remain in place

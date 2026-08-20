@@ -182,6 +182,7 @@ Status Fp8E4m3Method::ProcessProjWeight(std::unordered_map<std::string, Tensor>&
 
 Status Fp8E4m3Method::process_attn_qkv_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                             const std::string& weight_prefix_name, int dev_rank) {
+#ifdef ENABLE_CUDA
   const std::string q_proj_name = weight_prefix_name;
   const std::string k_proj_name = WeightNameReplace(weight_prefix_name, "q_proj", "k_proj");
   const std::string v_proj_name = WeightNameReplace(weight_prefix_name, "q_proj", "v_proj");
@@ -287,6 +288,9 @@ Status Fp8E4m3Method::process_attn_qkv_proj(std::unordered_map<std::string, Tens
   }
 
   return Status();
+#else
+  return Status(RetCode::RET_MODEL_QUANT_FAILED, "FP8 E4M3 quantization requires CUDA support");
+#endif
 }
 
 Status Fp8E4m3Method::process_attn_o_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -296,6 +300,7 @@ Status Fp8E4m3Method::process_attn_o_proj(std::unordered_map<std::string, Tensor
 
 Status Fp8E4m3Method::process_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                                const std::string& weight_prefix_name, int dev_rank) {
+#ifdef ENABLE_CUDA
   const std::string gate_proj_name = weight_prefix_name;
   const std::string up_proj_name = WeightNameReplace(weight_prefix_name, "gate_proj", "up_proj");
   const std::string gate_up_proj_name = WeightNameReplace(weight_prefix_name, "gate_proj", "gate_up_proj");
@@ -395,6 +400,9 @@ Status Fp8E4m3Method::process_mlp_gate_up_proj(std::unordered_map<std::string, T
   }
 
   return Status();
+#else
+  return Status(RetCode::RET_MODEL_QUANT_FAILED, "FP8 E4M3 quantization requires CUDA support");
+#endif
 }
 
 Status Fp8E4m3Method::process_mlp_down_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
@@ -405,6 +413,7 @@ Status Fp8E4m3Method::process_mlp_down_proj(std::unordered_map<std::string, Tens
 // only support static fp8 with both weight scale and input scale.
 Status Fp8E4m3Method::process_experts_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                            const std::string& weight_prefix_name, int dev_rank, int num_experts) {
+#ifdef ENABLE_CUDA
   // process up_gate_proj.
   // Step 1: Create up_gate input_scale and weight_scale tensors.
   const std::string up_gate_input_scale_name = weight_prefix_name + "up_gate_proj.input_scale";
@@ -578,6 +587,9 @@ Status Fp8E4m3Method::process_experts_proj(std::unordered_map<std::string, Tenso
   device_model_weights[merged_down_name].input_scales = &device_model_weights[merged_down_input_scale_name];
 
   return Status();
+#else
+  return Status(RetCode::RET_MODEL_QUANT_FAILED, "FP8 E4M3 quantization requires CUDA support");
+#endif
 }
 
 }  // namespace ksana_llm

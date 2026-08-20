@@ -3,8 +3,8 @@
 ==============================================================================*/
 #include <string>
 
-#include "utils/attention_backend/flash_attention_backend.h"
 #include "test.h"
+#include "utils/attention_backend/flash_attention_backend.h"
 
 namespace ksana_llm {
 
@@ -84,6 +84,9 @@ TEST_F(FlashAttentionBackendTest, GetCudaComputeCapabilityNoCudaTest) {
 
 // ============================================================================
 // 各种库路径获取测试
+// 这些测试通过 popen 调用 Python 探测 CUDA 闪存注意力库路径，
+// 仅在 CUDA 构建下有意义；昆仑芯构建下 popen 必然失败、返回空值，
+// 统一用 #ifdef ENABLE_CUDA 守卫避免无意义执行。
 // ============================================================================
 #ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, GetFlashAttention3LibPathTest) {
@@ -91,7 +94,6 @@ TEST_F(FlashAttentionBackendTest, GetFlashAttention3LibPathTest) {
   std::string lib_path = backend_->GetFlashAttention3LibPath();
   EXPECT_FALSE(lib_path.empty());
 }
-#endif
 
 TEST_F(FlashAttentionBackendTest, GetVllmFlashAttentionLibPathTest) {
   // 这会尝试调用 Python，在测试环境中可能失败
@@ -106,6 +108,7 @@ TEST_F(FlashAttentionBackendTest, GetFlashAttention2LibPathTest) {
   // 不管成功还是失败，都应该返回字符串（可能为空）
   EXPECT_TRUE(lib_path.empty() || !lib_path.empty());
 }
+#endif  // ENABLE_CUDA
 
 // ============================================================================
 // 版本比较测试
@@ -135,8 +138,10 @@ TEST_F(FlashAttentionBackendTest, IsVersionGreaterOrEqualTest) {
 
 // ============================================================================
 // ExecutePythonCommand 测试
+// 该测试通过 popen 执行 Python 命令，仅在 CUDA 构建下有意义。
 // ============================================================================
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, ExecutePythonCommandTest) {
   // 测试简单的 Python 命令
   std::string result = backend_->ExecutePythonCommand("python -c \"print('hello')\"");
@@ -151,11 +156,13 @@ TEST_F(FlashAttentionBackendTest, ExecutePythonCommandTest) {
   std::string empty_result = backend_->ExecutePythonCommand("");
   EXPECT_TRUE(empty_result.empty());
 }
+#endif  // ENABLE_CUDA
 
 // ============================================================================
 // LibraryInfo 相关测试
 // ============================================================================
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, GetPythonLibInfoTest) {
   // 测试获取 Python 模块信息
   auto info = backend_->GetPythonLibInfo("sys", "sys");
@@ -177,7 +184,9 @@ TEST_F(FlashAttentionBackendTest, GetPythonLibInfoTest) {
   EXPECT_TRUE(empty_info.path.empty());
   EXPECT_TRUE(empty_info.name.empty());
 }
+#endif
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, GetFlashAttention3LibInfoTest) {
   auto info = backend_->GetFlashAttention3LibInfo();
   if (!info.path.empty()) {
@@ -203,11 +212,13 @@ TEST_F(FlashAttentionBackendTest, GetFlashAttention2LibInfoTest) {
     EXPECT_FALSE(info.path.empty());
   }
 }
+#endif  // ENABLE_CUDA
 
 // ============================================================================
 // DetermineLibrary 测试
 // ============================================================================
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesHopperTest) {
   // 测试 Hopper 架构（SM 9.0+）
   auto lib_infos = backend_->DetermineAllLibraries(90);
@@ -218,7 +229,9 @@ TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesHopperTest) {
     EXPECT_FALSE(lib_info.version.empty());
   }
 }
+#endif
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesAmpereTest) {
   // 测试 Ampere 架构（SM 8.0+）
   auto lib_infos = backend_->DetermineAllLibraries(80);
@@ -235,6 +248,7 @@ TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesAmpereTest) {
     }
   }
 }
+#endif  // ENABLE_CUDA
 
 TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesUnsupportedTest) {
   // 测试不支持的计算能力
@@ -246,6 +260,7 @@ TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesUnsupportedTest) {
 // Python 库路径获取测试
 // ============================================================================
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, GetPythonLibPathValidModuleTest) {
   // 测试获取一个通常存在的 Python 模块
   std::string lib_path = backend_->GetPythonLibPath("sys");
@@ -258,6 +273,7 @@ TEST_F(FlashAttentionBackendTest, GetPythonLibPathInvalidModuleTest) {
   std::string lib_path = backend_->GetPythonLibPath("non_existent_module_12345");
   EXPECT_TRUE(lib_path.empty());
 }
+#endif
 
 // ============================================================================
 // 初始化状态测试
@@ -341,6 +357,7 @@ TEST_F(FlashAttentionBackendTest, InitializeWithLibraryInfoTest) {
 // 更新的边界条件测试
 // ============================================================================
 
+#ifdef ENABLE_CUDA
 TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesBoundaryTestUpdated) {
   // 测试 DetermineAllLibraries 的边界值
   auto libs_79 = backend_->DetermineAllLibraries(79);
@@ -358,5 +375,6 @@ TEST_F(FlashAttentionBackendTest, DetermineAllLibrariesBoundaryTestUpdated) {
     EXPECT_FALSE(lib_info.path.empty());
   }
 }
+#endif  // ENABLE_CUDA
 
 }  // namespace ksana_llm

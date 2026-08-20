@@ -33,6 +33,14 @@ class FlashMlaAttention {
 
   Tensor kv_b_nope_proj_weight_;
   Tensor v_head_proj_weight_;
+
+#ifdef ENABLE_KUNLUN
+  // Kunlun optimization: concat kv_b_nope_proj + v_head_proj into single matmul
+  std::shared_ptr<Linear> kv_b_proj_combined_;
+  Tensor kv_b_proj_combined_weight_;
+  // Output dim of kv_b_proj_combined: head_num_per_tp * (qk_nope_head_dim + v_head_dim)
+  size_t kv_b_proj_output_dim_ = 0;
+#endif
 };
 
 }  // namespace ksana_llm

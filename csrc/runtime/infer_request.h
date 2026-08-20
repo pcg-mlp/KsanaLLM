@@ -552,7 +552,6 @@ class InferRequest {
 
   // RetireChunkedReqs 已 reset inflight, 后续 UpdateAfterInflightTaskFinished 应跳过正常处理.
   size_t inflight_update_skip_count_ = 0;
-
   ScheduleTask planning_task_;
   ScheduleTaskWorkload planning_workload_;
   ScheduleTaskWorkload remaining_workload_;

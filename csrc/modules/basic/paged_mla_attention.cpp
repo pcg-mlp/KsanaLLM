@@ -117,9 +117,25 @@ Status PagedMlaAttention::Forward(const std::shared_ptr<ModelInput>& model_input
     inputs.k_pe = &k_rope_buffer_tensor;
     inputs.tile_scheduler_metadata = &page_mla.tile_scheduler_metadata;
     inputs.num_splits = &page_mla.num_splits;
+#ifdef ENABLE_KUNLUN
+    inputs.seq_len_host = &model_input->seq_len_host;
+    inputs.k_cache_blocks_base = &model_input->k_cache_blocks_base;
+    inputs.layers_slot_mapping = &model_input->layers_slot_mapping;
+    inputs.layers_block_table = &model_input->layers_block_table;
+    inputs.atb_attention_attr = &model_input->atb_attention_attr;
+    inputs.context_len_device = &model_input->context_len_device;
+#endif
     STATUS_CHECK_RETURN(paged_mla_layer_->Forward(inputs, &output_tensors[0]));
   }
+#ifdef ENABLE_CUDA
+  // shape[2] is the CUDA flash_mla/DSA "meta initialized" flag (see PrepareFlashMla in
+  // mla_attention_meta_builder.cpp and the sched_meta_initialized reads in the nvidia
+  // sparse/dsv4 layers). On Kunlun/Ascend, PrepareFlashMla and MLASharedAttentionMeta::Init
+  // are CUDA-only no-ops, so tile_scheduler_metadata is a default Tensor with an EMPTY shape
+  // vector — writing shape[2] here dereferences null and segfaults all ranks on the first
+  // decode. The Kunlun layer ignores this tensor entirely ((void)tile_scheduler_metadata).
   page_mla.tile_scheduler_metadata.shape[2] = 1;
+#endif
   return Status();
 }
 

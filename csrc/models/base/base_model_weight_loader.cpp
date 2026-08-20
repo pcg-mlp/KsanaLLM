@@ -71,14 +71,16 @@ Status BaseModelWeightLoader::CopyHostTensorToDevice(const Tensor host_tensor, i
 
 Status BaseModelWeightLoader::PermuteDeviceTensor(const Tensor& input_tensor, const std::vector<size_t>& permutation,
                                                   int dev_rank, Tensor& output_tensor) {
-  Permute(const_cast<Tensor&>(input_tensor), output_tensor, permutation, context_->device->GetMemoryManageStream());
+  auto& stream = context_->device->GetMemoryManageStream();
+  void* device_ctx = GetDeviceCtxPtr(context_->device.get(), stream);
+  Permute(const_cast<Tensor&>(input_tensor), output_tensor, permutation, stream, device_ctx);
   output_tensor.shape = input_tensor.shape;
   for (size_t i = 0; i < permutation.size(); ++i) {
     output_tensor.shape[i] = input_tensor.shape[permutation[i]];
   }
 
   // For compatible with Ascend device.
-  TransLayout(output_tensor, context_->device->GetMemoryManageStream());
+  TransLayout(output_tensor, stream, device_ctx);
   return Status();
 }
 

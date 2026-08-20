@@ -7,6 +7,7 @@
 #include "models/common/common_model.h"
 #include "runtime/speculative/orchestration/composite_speculative_decoder.h"
 #include "runtime/structured_generation/xgrammar/xgrammar_structured_generator_creator.h"
+#include "utils/logger.h"
 
 namespace ksana_llm {
 

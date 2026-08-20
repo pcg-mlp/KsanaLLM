@@ -8,8 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "utils/logger.h"
-
 namespace ksana_llm {
 
 Status Qwen::GetModelRunConfig(ModelRunConfig& model_run_config, const ModelConfig& model_config) {

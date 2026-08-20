@@ -345,7 +345,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 else:
                     output_index = 0
                     ksana_python_output = output_data
-                    
+
                 is_finished = False
                 is_error = False
                 if hasattr(ksana_python_output, 'finish_status') and ksana_python_output.finish_status:

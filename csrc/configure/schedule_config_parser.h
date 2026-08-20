@@ -68,8 +68,9 @@ struct BatchSchedulerConfig {
   // Max waiting time in millisecond.
   size_t waiting_timeout_in_ms = 600000;
 
-  // The max queue len of waiting request.
-  size_t max_waiting_queue_len = 256;
+  // The max queue len of waiting request. Keep in sync with the yaml default in
+  // ScheduleConfigParser::ParseBatchSchedulerConfig.
+  size_t max_waiting_queue_len = 1200;
 
   // The max token number for one scheduler step.
   size_t max_step_token_num = 4096;  // to be removed
@@ -126,7 +127,7 @@ struct BatchSchedulerConfig {
 
   bool enable_async = false;
 
-  // 是否启用 Executor 端 build-ahead + device 侧 token 替换（默认关闭）。
+  // 是否启用 Executor 端 build-ahead + device 侧 token 替换（默认关闭），即 depth=2 流水线 overlap。
   // 仅在 enable_async=true 且 FastPathController 启动期硬条件全部满足时真正启用；
   // 否则透明降级到原 enable_async 深度 1 路径。
   bool enable_executor_build_ahead = false;
@@ -435,6 +436,8 @@ struct RuntimeConfig {
   // For MoE backend.
   MoeBackendConfig moe_backend_config;
   bool enable_full_shared_expert = false;
+  bool enable_cuda_graph = false;
+  std::vector<int> cuda_graph_bs;
   bool separate_prefill_decode = false;
   CompressorConfig compressor_config;
 

@@ -1,0 +1,62 @@
+# Qwen3-0.6B 单卡推理配置 — 昆仑芯 P800
+# 用于端到端推理验证
+
+setting:
+  global:
+    tensor_para_size: 1
+    pipeline_para_size: 1
+    attn_data_para_size: 1
+    expert_world_size: 1
+    expert_para_size: 1
+    embed_tokens_use_cpu: false
+    enable_cuda_graph: true
+    enable_full_shared_expert: false
+
+  batch_scheduler:
+    scheduler_type: 0
+    schedule_strategy: 0
+    waiting_timeout_in_ms: 3600000
+    max_waiting_queue_len: 1200
+    max_step_tokens: 512
+    max_batch_size: 2
+    max_token_len: 512
+    swapout_block_threshold: 1.0
+    swapin_block_threshold: 2.0
+    launch_block_threshold: 2.0
+    enable_auto_prefix_cache: false
+    split_fuse_token_num: 0
+    swap_threadpool_size: 4
+    preempt_mode: 0
+    min_flexible_cache_num: 0
+    enable_speculative_decoding: false
+    mtp_step_num: 1
+
+  block_manager:
+    block_token_num: 16
+    reserved_device_memory_ratio: 0.05
+    block_device_memory_ratio: -1.0
+    block_host_memory_factor: 0.0
+
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: false
+
+  quantization_config:
+    kv_cache:
+      dtype: auto
+    weight:
+      quant_method: auto
+
+  profiler:
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+
+  endpoint_type: python
+
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+
+model_spec:
+  base_model:
+    model_dir: /data1/models/Qwen3-0.6B-19141/
+    is_embedding_model: false

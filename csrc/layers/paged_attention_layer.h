@@ -32,6 +32,19 @@ struct PagedAttentionInputs {
   const Tensor* seq_len_host;
   const Tensor* forward_shape;
   const Tensor* atb_attention_attr;
+#elif defined(ENABLE_KUNLUN)
+  // Same tensor protocol as Ascend/ATB, plus optional QK-Norm weights.
+  const Tensor* qkv_tensor;
+  const Tensor* rotary_embedding_pos;
+  const Tensor* layers_slot_mapping;
+  const Tensor* layers_block_table;
+  const Tensor* k_cache_blocks_base;
+  const Tensor* v_cache_blocks_base;
+  const Tensor* seq_len_host;
+  const Tensor* forward_shape;
+  const Tensor* atb_attention_attr;
+  const Tensor* query_layernorm_weight = nullptr;
+  const Tensor* key_layernorm_weight = nullptr;
 #endif
 };
 

@@ -105,7 +105,17 @@ BatchScheduler::BatchScheduler(const BatchSchedulerConfig& batch_scheduler_confi
 
 BatchScheduler::~BatchScheduler() { threadpool_->Stop(); }
 
-void BatchScheduler::Stop() { terminating_ = true; }
+void BatchScheduler::Stop() {
+  {
+    // Set the flag under the lock the waiters use, so a producer cannot evaluate its predicate
+    // and go back to sleep just before the notify.
+    std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
+    terminating_ = true;
+  }
+  // Wake producers blocked waiting for staging space so shutdown does not have to wait out
+  // their timeout. They observe terminating_ and fail their request.
+  waiting_reqs_cv_.notify_all();
+}
 
 void BatchScheduler::SetCacheManager(std::shared_ptr<CacheManagerInterface> cache_manager, int dp_idx) {
   KLLM_CHECK_WITH_INFO(dp_idx < dp_num_, FormatStr("dp_idx %d is out of range, dp_num_ %zu.", dp_idx, dp_num_));
@@ -199,14 +209,42 @@ void BatchScheduler::WaitUntilHaveReqs(size_t multi_batch_id) {
 }
 
 Status BatchScheduler::EnqueueWaitingBufferQueue(std::vector<std::shared_ptr<InferRequest>>& infer_request_group) {
-  std::lock_guard<std::mutex> guard(waiting_reqs_mutex_);
+  std::unique_lock<std::mutex> lock(waiting_reqs_mutex_);
 
-  if (waiting_reqs_.size() + infer_request_group.size() > batch_scheduler_config_.max_waiting_queue_len) {
+  // waiting_reqs_ is a staging buffer, not the queue requests actually wait in: BalanceWaitingReqs
+  // empties it completely once per schedule step, into dp_waiting_reqs_, which has no size limit at
+  // all (it is only reserve()d). So a full staging buffer means "more requests arrived between two
+  // schedule steps than fit in one drain", which is arrival timing -- not a capacity limit. The
+  // engine can be entirely idle and still reject here.
+  //
+  // Rejecting that burst is wrong. Wait for the next drain instead. The wait is bounded so that a
+  // genuinely wedged scheduler still surfaces an error rather than hanging forever; one drain per step
+  // means the normal wait is a single step, and the timeout below is several hundred steps of slack. On
+  // timeout we return RET_EXCEED_CAPACITY exactly as before, so callers that already treat that code as
+  // backpressure (see _submit_with_backpressure in python/ksana_llm/ksana_engine.py) keep working
+  // unchanged.
+  //
+  // Raising max_waiting_queue_len is a complement to this, not a substitute: it widens one drain so a
+  // burst never has to wait, but it only helps launch paths that actually set it, and this wait is what
+  // keeps every other path from rejecting. (Raising it used to also cost hundreds of MB of device memory
+  // per doubling, because it sized the worst-case layers_slot_mapping / layers_block_table in ModelInput.
+  // That coupling is gone -- those tensors are now sized by what one forward step can hold, see
+  // csrc/models/base/model_input.cpp -- so the cap is free to raise.)
+  constexpr auto kStagingBufferWaitTimeout = std::chrono::seconds(10);
+  const size_t group_size = infer_request_group.size();
+  // A group that cannot fit in an empty buffer will never satisfy the predicate, so waiting would
+  // only burn the timeout before failing. Reject it immediately, as before this change.
+  const bool fits_at_all = group_size <= batch_scheduler_config_.max_waiting_queue_len;
+  const bool has_space = fits_at_all && waiting_reqs_cv_.wait_for(lock, kStagingBufferWaitTimeout, [&] {
+    return terminating_ || waiting_reqs_.size() + group_size <= batch_scheduler_config_.max_waiting_queue_len;
+  });
+
+  if (!has_space || terminating_) {
     std::shared_ptr<InferRequest>& infer_request = infer_request_group[0];
     KLLM_LOG_ERROR << "waiting queue is full, req " << infer_request << " failed."
                    << " waiting queue size: " << waiting_reqs_.size()
                    << ", max_waiting_queue_len: " << batch_scheduler_config_.max_waiting_queue_len
-                   << ", infer_request_group_size: " << infer_request_group.size();
+                   << ", infer_request_group_size: " << group_size << ", terminating: " << terminating_;
 
     auto finish_status = Status(RET_EXCEED_CAPACITY, "waiting queue is full.");
     infer_request->finish_status = finish_status;
@@ -240,6 +278,7 @@ void BatchScheduler::BalanceWaitingReqs() {
     if (waiting_reqs_.size() == 1 && dp_waiting_reqs_.size() == 1) {
       dp_waiting_reqs_[0].insert(dp_waiting_reqs_[0].end(), waiting_reqs_.begin(), waiting_reqs_.end());
       waiting_reqs_.clear();
+      waiting_reqs_cv_.notify_all();
       KLLM_LOG_SCHEDULER << "waiting_reqs_ size is 1";
       return;
     }
@@ -257,6 +296,8 @@ void BatchScheduler::BalanceWaitingReqs() {
           std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
     }
     waiting_reqs_.clear();
+    // Staging space is free again; release any producer blocked in EnqueueWaitingBufferQueue.
+    waiting_reqs_cv_.notify_all();
   }
 
   std::vector<float> workload(dp_num_, 0);
@@ -777,6 +818,8 @@ void BatchScheduler::BalanceADPRequests(size_t multi_batch_id) {
           std::make_pair<size_t, std::shared_ptr<InferRequest>>(static_cast<size_t>(tokens_num), std::move(req)));
     }
     waiting_reqs_.clear();
+    // Staging space is free again; release any producer blocked in EnqueueWaitingBufferQueue.
+    waiting_reqs_cv_.notify_all();
   }
 
   // Collect from dp_waiting_reqs_ and batch_states waiting queues

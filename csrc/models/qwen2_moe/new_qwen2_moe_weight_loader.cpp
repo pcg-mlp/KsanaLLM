@@ -4,7 +4,10 @@
 
 #include "models/qwen2_moe/new_qwen2_moe_weight_loader.h"
 
+#include <algorithm>
+
 #include "model_loader/model_loader_utils.h"
+#include "models/base/utils.h"
 #include "models/qwen2_moe/new_qwen2_moe_config.h"
 
 namespace ksana_llm {
@@ -67,25 +70,132 @@ Status NewQwen2MoeWeightLoader::FilterWeightNames(std::vector<std::string>& weig
   return Status();
 }
 
+void NewQwen2MoeWeightLoader::ComputeExpertPartition(int dev_rank, size_t num_experts, size_t& num_experts_per_rank,
+                                                     size_t& expert_start, size_t& expert_end, size_t& moe_tp_size,
+                                                     size_t& tp_rank) const {
+  // Mirrors csrc/models/quant/quant_weight.cpp so the BF16 layout matches what the MoE kernels expect.
+  const size_t expert_world_size = runtime_config_.parallel_basic_config.expert_world_size;
+  const size_t expert_para_size = runtime_config_.parallel_basic_config.expert_parallel_size;
+  const size_t global_expert_para_size = expert_world_size * expert_para_size;
+  moe_tp_size = runtime_config_.parallel_basic_config.moe_tensor_para_size;
+
+  ExpertParallelConfig expert_parallel_config;
+  env_->GetExpertParallelConfig(expert_parallel_config);
+  const size_t expert_node_rank = expert_parallel_config.expert_node_rank;
+
+  num_experts_per_rank = (num_experts + global_expert_para_size - 1) / global_expert_para_size;
+  const size_t rank_expert_offset = expert_node_rank * expert_para_size * num_experts_per_rank;
+  const size_t expert_offset =
+      (global_expert_para_size > 1) ? ((static_cast<size_t>(dev_rank) % expert_para_size) * num_experts_per_rank) : 0;
+  expert_start = rank_expert_offset + expert_offset;
+  expert_end = std::min(num_experts, expert_start + num_experts_per_rank);
+  tp_rank = (moe_tp_size > 1) ? (static_cast<size_t>(dev_rank) / expert_para_size) : 0;
+}
+
+// Parse the global expert index out of a name like
+// "model.layers.<L>.mlp.experts.<E>.gate_proj.weight". Returns -1 if not a routed-expert weight
+// (e.g. shared_expert / dense MLP), which must keep the standard full-TP split.
+static int ParseExpertIdx(const std::string& weight_name) {
+  const std::string marker = ".mlp.experts.";
+  size_t pos = weight_name.find(marker);
+  if (pos == std::string::npos) return -1;
+  pos += marker.size();
+  size_t end = weight_name.find('.', pos);
+  if (end == std::string::npos || end == pos) return -1;
+  return std::stoi(weight_name.substr(pos, end - pos));
+}
+
+Status NewQwen2MoeWeightLoader::load_mlp_gate_up_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                                      const std::string& weight_name, const Tensor& weight_tensor,
+                                                      int dev_rank) {
+  if (!CheckWeightNameEndMatched(weight_name, {".weight"})) return Status();
+
+  const int expert_idx = ParseExpertIdx(weight_name);
+  if (expert_idx < 0) {
+    // Non-routed weight (shared expert / dense MLP): standard full-TP split (unchanged behavior).
+    device_model_weights[weight_name] =
+        common_weight_loader_->TensorParallelSplit(weight_tensor, dev_rank, tp_, TensorParallelMode::RowPara);
+    return Status();
+  }
+
+  std::shared_ptr<NewQwen2MoeConfig> new_qwen2_moe_config = std::dynamic_pointer_cast<NewQwen2MoeConfig>(model_config_);
+  const size_t num_experts = new_qwen2_moe_config->moe_config.num_experts;
+  size_t num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank;
+  ComputeExpertPartition(dev_rank, num_experts, num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank);
+
+  // Skip routed experts that do not belong to this rank's expert-parallel shard.
+  if (static_cast<size_t>(expert_idx) < expert_start || static_cast<size_t>(expert_idx) >= expert_end) {
+    return Status();
+  }
+  // Split the intermediate dim by the moe tensor-parallel group (RowPara), not the full tensor_parallel_size.
+  device_model_weights[weight_name] = common_weight_loader_->TensorParallelSplit(
+      weight_tensor, static_cast<int>(tp_rank), moe_tp_size, TensorParallelMode::RowPara);
+  return Status();
+}
+
+Status NewQwen2MoeWeightLoader::load_mlp_down_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
+                                                   const std::string& weight_name, const Tensor& weight_tensor,
+                                                   int dev_rank) {
+  if (!CheckWeightNameEndMatched(weight_name, {".weight"})) return Status();
+
+  const int expert_idx = ParseExpertIdx(weight_name);
+  if (expert_idx < 0) {
+    // Non-routed weight (shared expert / dense MLP): standard full-TP split (unchanged behavior).
+    device_model_weights[weight_name] =
+        common_weight_loader_->TensorParallelSplit(weight_tensor, dev_rank, tp_, TensorParallelMode::ColPara);
+    return Status();
+  }
+
+  std::shared_ptr<NewQwen2MoeConfig> new_qwen2_moe_config = std::dynamic_pointer_cast<NewQwen2MoeConfig>(model_config_);
+  const size_t num_experts = new_qwen2_moe_config->moe_config.num_experts;
+  size_t num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank;
+  ComputeExpertPartition(dev_rank, num_experts, num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank);
+
+  if (static_cast<size_t>(expert_idx) < expert_start || static_cast<size_t>(expert_idx) >= expert_end) {
+    return Status();
+  }
+  device_model_weights[weight_name] = common_weight_loader_->TensorParallelSplit(
+      weight_tensor, static_cast<int>(tp_rank), moe_tp_size, TensorParallelMode::ColPara);
+  return Status();
+}
+
 Status NewQwen2MoeWeightLoader::process_experts_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                                      const std::string& weight_prefix_name, int dev_rank) {
   std::shared_ptr<NewQwen2MoeConfig> new_qwen2_moe_config = std::dynamic_pointer_cast<NewQwen2MoeConfig>(model_config_);
+  const size_t num_experts = new_qwen2_moe_config->moe_config.num_experts;
+
+  // Expert-parallel partition for this rank. Under EP each rank only holds its local experts
+  // [expert_start, expert_end) and splits the intermediate dim by moe_tensor_para_size.
+  // With ep=1 this reduces to: all experts, split by tensor_parallel_size (== moe_tensor_para_size).
+  size_t num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank;
+  ComputeExpertPartition(dev_rank, num_experts, num_experts_per_rank, expert_start, expert_end, moe_tp_size, tp_rank);
+  const size_t local_expert_num = expert_end - expert_start;
+
   // 合并gate_up
   {
     const std::string gate_up_proj_name = fmt::format("{}up_gate_proj.", weight_prefix_name);
     const std::vector<std::string> weight_suffixs = {"weight"};
     for (const std::string& weight_suffix : weight_suffixs) {
       std::vector<std::string> concat_names;
-      for (int expert_idx = 0; expert_idx < new_qwen2_moe_config->moe_config.num_experts; expert_idx++) {
+      for (size_t expert_idx = expert_start; expert_idx < expert_end; expert_idx++) {
+#ifdef ENABLE_KUNLUN
+        // Kunlun (xblas moe_fc_fusion + infer_ops::swiglu with turn=true):
+        // swiglu expects [gate|up] layout, i.e. SiLU(first_half) * second_half.
+        // 对齐 xsglang 的 w13 = [gate_proj(idx=0) | up_proj(idx=1)] 顺序。
+        concat_names.push_back(fmt::format("{}{}.gate_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
+        concat_names.push_back(fmt::format("{}{}.up_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
+#else
+        // NVIDIA (InvokeFusedMoe): 保持原始 [up|gate] 顺序不变。
         concat_names.push_back(fmt::format("{}{}.up_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
         concat_names.push_back(fmt::format("{}{}.gate_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
+#endif
       }
       common_weight_loader_->AutoMergeWeight(concat_names, gate_up_proj_name + weight_suffix, device_model_weights,
                                              dev_rank);
       // shape检查与调整
       const std::vector<size_t> old_shape = device_model_weights.at(gate_up_proj_name + weight_suffix).shape;
-      const std::vector<size_t> new_shape = {new_qwen2_moe_config->moe_config.num_experts,
-                                             2 * new_qwen2_moe_config->moe_config.moe_inter_size / tp_,
+      const std::vector<size_t> new_shape = {local_expert_num,
+                                             2 * new_qwen2_moe_config->moe_config.moe_inter_size / moe_tp_size,
                                              new_qwen2_moe_config->hidden_units};
       KLLM_CHECK((old_shape[0] == (new_shape[0] * new_shape[1])) && (old_shape[1] == new_shape[2]));
       device_model_weights.at(gate_up_proj_name + weight_suffix).shape = new_shape;
@@ -97,16 +207,15 @@ Status NewQwen2MoeWeightLoader::process_experts_proj(std::unordered_map<std::str
     const std::vector<std::string> weight_suffixs = {"weight"};
     for (const std::string& weight_suffix : weight_suffixs) {
       std::vector<std::string> concat_names;
-      for (int expert_idx = 0; expert_idx < new_qwen2_moe_config->moe_config.num_experts; expert_idx++) {
+      for (size_t expert_idx = expert_start; expert_idx < expert_end; expert_idx++) {
         concat_names.push_back(fmt::format("{}{}.down_proj.{}", weight_prefix_name, expert_idx, weight_suffix));
       }
       common_weight_loader_->AutoMergeWeight(concat_names, down_proj_name + weight_suffix, device_model_weights,
                                              dev_rank);
       // shape检查与调整
       const std::vector<size_t> old_shape = device_model_weights.at(down_proj_name + weight_suffix).shape;
-      const std::vector<size_t> new_shape = {new_qwen2_moe_config->moe_config.num_experts,
-                                             new_qwen2_moe_config->hidden_units,
-                                             new_qwen2_moe_config->moe_config.moe_inter_size / tp_};
+      const std::vector<size_t> new_shape = {local_expert_num, new_qwen2_moe_config->hidden_units,
+                                             new_qwen2_moe_config->moe_config.moe_inter_size / moe_tp_size};
       KLLM_CHECK((old_shape[0] == (new_shape[0] * new_shape[1])) && (old_shape[1] == new_shape[2]));
       device_model_weights.at(down_proj_name + weight_suffix).shape = new_shape;
     }
@@ -146,8 +255,10 @@ Status NewQwen2MoeWeightLoader::PreProcessModelWeights(
   REGISTER_COMMON(load, attn_q_k_v_proj);
   REGISTER_COMMON(load, attn_o_proj);
   REGISTER_COMMON(load, experts_gate);
-  REGISTER_COMMON(load, mlp_gate_up_proj);
-  REGISTER_COMMON(load, mlp_down_proj);
+  // EP-aware expert loaders (keep only local routed experts, split by moe_tensor_para_size).
+  // Shared-expert / dense-MLP weights fall back to the standard full-TP split inside these.
+  REGISTER_CUSTOM(load, mlp_gate_up_proj);
+  REGISTER_CUSTOM(load, mlp_down_proj);
   REGISTER_COMMON(load, norm);
   REGISTER_COMMON(load, embed_tokens);
   REGISTER_COMMON(load, lm_head);

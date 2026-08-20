@@ -304,9 +304,20 @@ Status QwenWeightLoader::PostProcessModelWeights(std::unordered_map<std::string,
       continue;
     }
 
+    DataType target_dtype = qwen_config->weight_data_type;
+    // NOTE: The Kunlun norm layers (LayernormLayer, AddNormLayer, and the QK-Norm paths in
+    // Flash/Paged attention) now read the norm affine weights as native 16-bit (TW=T) — the
+    // 16-bit-norm optimization. Norm weights are therefore stored in the 16-bit weight_data_type,
+    // NOT forced to fp32. (The former ENABLE_KUNLUN fp32-forcing block here was the pre-optimization
+    // workaround and has been removed; keeping it would reinterpret 16-bit-read kernels' weights.)
+
+    if (dev_tensor.dtype == target_dtype) {
+      continue;
+    }
+
     KLLM_LOG_DEBUG << fmt::format("Dev_rank {}, cast weight {}, from {} to {}", dev_rank, weight_name, dev_tensor.dtype,
-                                  qwen_config->weight_data_type);
-    common_weight_loader_->CastDeviceTensorType(dev_tensor, qwen_config->weight_data_type, dev_rank);
+                                  target_dtype);
+    common_weight_loader_->CastDeviceTensorType(dev_tensor, target_dtype, dev_rank);
   }
 
   for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; layer_idx++) {

@@ -28,6 +28,23 @@ set(MODELS_TEST_DEPS batch_scheduler runtime device utils
     ipc executor distributed connector transfer engine
     models model_loader cache_manager samplers configure service supervisor)
 
+# libtorch_cpu.so (via MODELS_TEST_DEPS) has a versioned DT_NEEDED for libcupti.so.11.8;
+# the CUDA path copy has SONAME 11.7 (mismatch). Apply the correct search path directory-wide.
+if(WITH_KUNLUN AND NOT DEFINED _CUPTI_LIB_DIR)
+  find_file(_CUPTI_LIB_FILE libcupti.so.11.8
+    HINTS $ENV{CONDA_PREFIX}/lib/python3.10/site-packages/nvidia/cuda_cupti/lib
+          /data/miniconda3/envs/env-3.10/lib/python3.10/site-packages/nvidia/cuda_cupti/lib
+    NO_DEFAULT_PATH)
+  if(_CUPTI_LIB_FILE)
+    get_filename_component(_CUPTI_LIB_DIR "${_CUPTI_LIB_FILE}" DIRECTORY)
+  else()
+    set(_CUPTI_LIB_DIR "/data/miniconda3/envs/env-3.10/lib/python3.10/site-packages/nvidia/cuda_cupti/lib")
+  endif()
+endif()
+if(WITH_KUNLUN)
+  link_directories(${_CUPTI_LIB_DIR})
+endif()
+
 cpp_test(batch_scheduler_helper_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_test_helper_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(batch_scheduler_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/batch_scheduler_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
 cpp_test(request_admission_test SRCS ${PROJECT_SOURCE_DIR}/csrc/batch_scheduler/request_admission_test.cpp DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

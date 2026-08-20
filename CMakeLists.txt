@@ -39,6 +39,14 @@ option(WITH_ACL "Enable Ascend" OFF)
 # support Tencent ZiXiao
 option(WITH_TOPS "Enable Tops" OFF)
 
+# support Baidu Kunlun XPU (P800 / KL3)
+option(WITH_KUNLUN "Enable Kunlun XPU" OFF)
+
+# 互斥保护：选择非 CUDA 后端时自动关闭 WITH_CUDA（因为 WITH_CUDA 默认 ON）
+if(WITH_KUNLUN OR WITH_ACL OR WITH_TOPS)
+  set(WITH_CUDA OFF CACHE BOOL "Enable CUDA" FORCE)
+endif()
+
 option(WITH_TESTING "Enable testing" OFF)
 option(WITH_STANDALONE_TEST "Enable standalone testing" OFF)
 option(WITH_EVENT_RECORD "Enable event record" OFF)
@@ -115,12 +123,19 @@ elseif(WITH_TOPS)
   list(APPEND CMAKE_MODULE_PATH "/opt/tops/cmake_modules")
   include(FindTOPS)
   project(ksana_llm LANGUAGES CXX TOPS)
+elseif(WITH_KUNLUN)
+  # support Baidu Kunlun XPU (P800 / KL3)
+  # XPU kernels (.xpu files) require custom compilation via xpu-clang
+  # defined in cmake/kunlun.cmake using add_custom_command
+  # Only declare CXX language here (consistent with ZiXiao early stage)
+  set(XPU_ARCH "kl3")
+  project(ksana_llm LANGUAGES CXX)
 else()
-  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON and Tencent ZiXiao with -DWITH_TOPS=ON")
+  message(FATAL_ERROR "Support platform is not selected. Select NVIDIA GPU with -DWITH_CUDA=ON, Huawei NPU with -DWITH_ACL=ON, Tencent ZiXiao with -DWITH_TOPS=ON or Baidu Kunlun XPU with -DWITH_KUNLUN=ON")
 endif()
 
-if(NOT WITH_CUDA AND NOT WITH_ACL AND NOT WITH_TOPS)
-  message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF and WITH_TOPS=OFF is not allow")
+if(NOT WITH_CUDA AND NOT WITH_ACL AND NOT WITH_TOPS AND NOT WITH_KUNLUN)
+  message(FATAL_ERROR "WITH_CUDA=OFF and WITH_ACL=OFF and WITH_TOPS=OFF and WITH_KUNLUN=OFF is not allow")
 endif()
 
 set(USE_CXX11_ABI, "False")
@@ -245,7 +260,14 @@ if(WITH_BOOST)
   include(external/boost)
 endif()
 
-include(LLM_kernels)
+# LLM_kernels 内部做 find_package(Torch) + enable_language(CUDA)，
+# Kunlun 路径不使用 LLM_kernels（算子使用 xdnn/xblas/xinfer 等昆仑算子库），跳过编译。
+# 但仍需加 include 路径，否则公共头文件里的 nvidia-only include 会找不到。
+if(NOT WITH_KUNLUN)
+  include(LLM_kernels)
+else()
+  include_directories(3rdparty/LLM_kernels)
+endif()
 include(base)
 
 # set compiler flags
@@ -290,6 +312,10 @@ if(WITH_TOPS)
   include(zixiao)
 endif()
 
+if(WITH_KUNLUN)
+  include(kunlun)
+endif()
+
 # set cmake output path
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -308,12 +334,15 @@ include_directories(
   ${ACL_INC_DIRS}
   ${TOPS_INC_DIRS}
 )
+# XPU SDK headers — treat as system headers to suppress warnings from vendor code
+include_directories(SYSTEM ${XPU_INC_DIRS})
 
 # set linked libraries
 link_directories(
   ${CUDA_LIB_DIRS}
   ${ACL_LIB_DIRS}
   ${TOPS_LIB_DIRS}
+  ${XPU_LIB_DIRS}
 )
 
 if(WITH_TESTING)
@@ -331,6 +360,13 @@ set(USE_SYSTEM_NVTX ON)
 
 # include torch
 set(PYTHON_PATH "python" CACHE STRING "Python path")
+
+# Kunlun: TORCH_INCLUDE_DIRS / TORCH_LIBRARIES / Python3 set in cmake/kunlun.cmake (included above).
+if(WITH_KUNLUN)
+  include_directories(${TORCH_INCLUDE_DIRS})
+  include_directories(${Python3_INCLUDE_DIRS})
+else() # ---- 以下为原有 CUDA/ACL/TOPS 路径，不改动 ----
+
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"
   RESULT_VARIABLE _PYTHON_SUCCESS
   OUTPUT_VARIABLE TORCH_VERSION)
@@ -353,43 +389,47 @@ endif()
 
 list(APPEND CMAKE_PREFIX_PATH ${TORCH_DIR})
 
-# Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
-set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
-set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
-set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
-set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
+if(WITH_CUDA OR WITH_ACL OR WITH_TOPS)
+  # Save our CMAKE_CUDA_ARCHITECTURES before find_package(Torch) — Torch may overwrite it
+  set(_SAVED_CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}")
+  set(_SAVED_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}")
+  set(_SAVED_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE}")
+  set(_SAVED_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG}")
 
-find_package(Torch REQUIRED)
+  find_package(Torch REQUIRED)
 
-# After find_package(Torch), PyTorch's TorchConfig.cmake / Caffe2 cuda.cmake may:
-#   1. Overwrite CMAKE_CUDA_ARCHITECTURES with Torch's own build-time architectures
-#   2. Inject -gencode flags into CMAKE_CUDA_FLAGS (global, affects ALL targets)
-#   3. Set INTERFACE_COMPILE_OPTIONS on torch_cuda target (propagated via target_link_libraries)
-# All three break per-target CUDA_ARCHITECTURES and may cause missing kernel images.
+  # After find_package(Torch), PyTorch's TorchConfig.cmake / Caffe2 cuda.cmake may:
+  #   1. Overwrite CMAKE_CUDA_ARCHITECTURES with Torch's own build-time architectures
+  #   2. Inject -gencode flags into CMAKE_CUDA_FLAGS (global, affects ALL targets)
+  #   3. Set INTERFACE_COMPILE_OPTIONS on torch_cuda target (propagated via target_link_libraries)
+  # All three break per-target CUDA_ARCHITECTURES and may cause missing kernel images.
 
-# Restore CMAKE_CUDA_ARCHITECTURES to our own setting
-set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
-message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
+  # Restore CMAKE_CUDA_ARCHITECTURES to our own setting
+  set(CMAKE_CUDA_ARCHITECTURES "${_SAVED_CUDA_ARCHITECTURES}")
+  message(STATUS "Restored CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES}")
 
-# Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
-set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
-set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
-set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
-message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
+  # Restore CMAKE_CUDA_FLAGS (remove any -gencode Torch injected)
+  set(CMAKE_CUDA_FLAGS "${_SAVED_CUDA_FLAGS}")
+  set(CMAKE_CUDA_FLAGS_RELEASE "${_SAVED_CUDA_FLAGS_RELEASE}")
+  set(CMAKE_CUDA_FLAGS_DEBUG "${_SAVED_CUDA_FLAGS_DEBUG}")
+  message(STATUS "Restored CMAKE_CUDA_FLAGS: ${CMAKE_CUDA_FLAGS}")
 
-# Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
-# via target_link_libraries, which would override per-target CUDA_ARCHITECTURES
-# on SM-specific kernels (e.g., flash_sparse_mla=90a, blockwise_gemm=90/90a).
-foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
-  if(TARGET ${_torch_tgt})
-    get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
-    if(_opts)
-      list(FILTER _opts EXCLUDE REGEX "-gencode")
-      set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+  # Clean torch_cuda INTERFACE_COMPILE_OPTIONS to prevent -gencode propagation
+  # via target_link_libraries, which would override per-target CUDA_ARCHITECTURES
+  # on SM-specific kernels (e.g., flash_sparse_mla=90a, blockwise_gemm=90/90a).
+  foreach(_torch_tgt torch_cuda torch_cuda_cu torch_cuda_cpp)
+    if(TARGET ${_torch_tgt})
+      get_target_property(_opts ${_torch_tgt} INTERFACE_COMPILE_OPTIONS)
+      if(_opts)
+        list(FILTER _opts EXCLUDE REGEX "-gencode")
+        set_target_properties(${_torch_tgt} PROPERTIES INTERFACE_COMPILE_OPTIONS "${_opts}")
+      endif()
     endif()
-  endif()
-endforeach()
-message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+  endforeach()
+  message(STATUS "Cleaned -gencode flags from Torch CUDA targets")
+else()
+  message(STATUS "Skipping main project find_package(Torch) for non-CUDA/ACL/TOPS backend (current: WITH_KUNLUN=${WITH_KUNLUN})")
+endif()
 
 execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; from distutils import sysconfig;
 print(sysconfig.get_python_inc());"
@@ -421,6 +461,8 @@ endif()
 
 include_directories(${PYTHON_INCLUDE_DIRS})
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
+
+endif() # if(WITH_KUNLUN) ... else()
 
 add_subdirectory(3rdparty)
 add_subdirectory(examples)

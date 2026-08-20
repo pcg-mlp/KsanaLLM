@@ -63,10 +63,38 @@ class FlashAttentionLayer : public AttentionLayer {
   Status Forward(const AclForwardParams& params, Tensor* output, const LayerExecContext& exec_ctx = {});
 #endif
 
+#ifdef ENABLE_KUNLUN
+  // Typed parameters for the Kunlun XPU forward path.
+  // Same tensor protocol as Ascend/ATB, plus QK Norm weights.
+  struct KunlunForwardParams {
+    const Tensor* qkv;
+    const Tensor* rotary_embedding_pos;
+    const Tensor* layers_slot_mapping;
+    const Tensor* k_cache_blocks_base;
+    const Tensor* v_cache_blocks_base;
+    const Tensor* seq_len_host;
+    // Scalars formerly encoded in forward_shape (input[6]):
+    int batch_size;       // shape[0]
+    int max_tokens;       // shape[1]
+    int layer_block_num;  // shape[2]
+    const Tensor* atb_attention_attr;
+    // QK Norm weights (Kunlun-specific, for use_qk_norm)
+    const Tensor* query_layernorm_weight;
+    const Tensor* key_layernorm_weight;
+    // HOST int32 cumulative q offsets [batch_size+1] (avoids per-layer D2H cumsum)
+    const Tensor* qlod;
+  };
+  Status Forward(const KunlunForwardParams& params, Tensor* output, const LayerExecContext& exec_ctx = {});
+#endif
+
  private:
 #ifdef ENABLE_CUDA
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
   Status ForwardT(const CudaForwardParams& p, Tensor* output);
+#endif
+#ifdef ENABLE_KUNLUN
+  template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
+  Status ForwardT(const KunlunForwardParams& p, Tensor* output);
 #endif
 
  private:

@@ -15,6 +15,10 @@
 #  include "device/zixiao/zixiao_device.h"
 #endif
 
+#ifdef ENABLE_KUNLUN
+#  include "device/kunlun/kunlun_device.h"
+#endif
+
 namespace ksana_llm {
 
 // The stream for different device type.

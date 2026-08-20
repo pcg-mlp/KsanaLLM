@@ -107,8 +107,10 @@ class ControlChannel {
   virtual Status ProcessTcpDataResponse(NodeInfo* node_info, Packet* rsp_packet);
 
   // nccl data
+#ifdef ENABLE_CUDA
   virtual Status ProcessNcclDataRequest(NodeInfo* node_info, Packet* req_packet);
   virtual Status ProcessNcclDataResponse(NodeInfo* node_info, Packet* rsp_packet);
+#endif
 
   // EP communicator config
   virtual Status ProcessEPCommunicationConfigRequest(NodeInfo* node_info, Packet* req_packet);

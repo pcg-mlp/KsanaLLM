@@ -31,7 +31,7 @@ void PrepareFlashMla(MLAAttentionMeta& mla_meta, DSAAttentionMeta& dsa_meta, MLA
 // chunk_kv_cu_seq_lens_tensor reflect the actual chunk count for this batch.
 //
 // Caller must ensure flash_meta.dp_reqs is non-empty.
-// Only active under ENABLE_CUDA; no-op on other backends.
+// Active under ENABLE_CUDA and ENABLE_KUNLUN; no-op on other backends.
 void PrepareChunkKV(MLASharedAttentionMeta& mla_shared, const FlashAttentionMeta& flash_meta,
                     const AttentionBuilderConfig& config);
 

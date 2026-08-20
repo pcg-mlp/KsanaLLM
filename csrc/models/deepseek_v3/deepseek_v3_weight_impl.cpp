@@ -4,11 +4,15 @@
 
 #include "models/deepseek_v3/deepseek_v3_weight_impl.h"
 
+#include <torch/torch.h>
+
+#include <cstring>
 #include <numeric>
 #include <regex>
 
 #include "kernels/permute.h"
 #include "model_loader/model_loader_utils.h"
+#include "models/weight_method/w4a8_klx_method.h"
 #include "utils/logger.h"
 #include "utils/string_utils.h"
 #include "utils/utils.h"
@@ -50,7 +54,8 @@ Status DeepSeekV3WeightImpl<T>::PermuteWeight(Tensor& input_tensor, const std::v
   Tensor& permute_tensor = permute_buffers_[dev_rank].at(key);
   permute_tensor.dtype = input_tensor.dtype;
   permute_tensor.shape = input_tensor.shape;
-  Permute(input_tensor, permute_tensor, permutation, context_->device->GetMemoryManageStream());
+  auto& stream = context_->device->GetMemoryManageStream();
+  Permute(input_tensor, permute_tensor, permutation, stream, GetDeviceCtxPtr(context_->device.get(), stream));
   for (size_t i = 0; i < permutation.size(); i++) {
     permute_tensor.shape[i] = input_tensor.shape[permutation[i]];
   }
@@ -67,6 +72,11 @@ Status DeepSeekV3WeightImpl<T>::TransSplitOptTrans(const Tensor& host_weight_ten
   MemcpyAsync(full_dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>(), host_weight_tensor.GetTotalBytes(),
               MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
   PermuteWeight(full_dev_tensor, {1, 0}, dev_rank);
+#ifdef ENABLE_KUNLUN
+  // NOTE(zhongzhicao):
+  // 适配时发现这里需要同步否则加载的权重有脏数据，但kernel都在同一个stream上，后续需对齐transpose算子实现
+  StreamSynchronize(context_->device->GetMemoryManageStream());
+#endif
 
   std::vector<size_t> slice_shape = {static_cast<size_t>(DivRoundUp(full_dev_tensor.shape[0], para_size)),
                                      full_dev_tensor.shape[1]};
@@ -107,6 +117,12 @@ Status DeepSeekV3WeightImpl<T>::SplitOptTrans(const Tensor& host_weight_tensor, 
 
   MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.GetPtr<void>() + slice_offset, slice_bytes,
               MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
+
+#ifdef ENABLE_KUNLUN
+  // NOTE(zhongzhicao): 适配8卡大模型时发现这里需要同步，但kernel都在同一个stream上，后续需对齐transpose算子实现
+  StreamSynchronize(context_->device->GetMemoryManageStream());
+#endif
+
   if (transpose) {
     PermuteWeight(dev_tensor, {1, 0}, dev_rank);
   }
@@ -304,7 +320,9 @@ Status DeepSeekV3WeightImpl<T>::PostProcessFp8E4m3BlockWiseQuantWeights(
                                   {head_num_tp, dequant_v_head_proj.shape[1], v_head_dim}, nullptr,
                                   &(context_->device->GetMemoryManageStream()));
       dequant_v_head_proj.shape = {head_num_tp, v_head_dim, dequant_v_head_proj.shape[1]};
-      Permute(dequant_v_head_proj, w_uv_tensor, {0, 2, 1}, context_->device->GetMemoryManageStream());
+      auto& perm_stream = context_->device->GetMemoryManageStream();
+      Permute(dequant_v_head_proj, w_uv_tensor, {0, 2, 1}, perm_stream,
+              GetDeviceCtxPtr(context_->device.get(), perm_stream));
       std::string w_uv_name = weight_name.substr(0, weight_name.find_first_of('_')) + "_attn.w_uv.weight";
       device_model_weights[w_uv_name] = w_uv_tensor;
       KLLM_LOG_DEBUG << fmt::format("[PostProcessFp8] w_uv stored: {}, shape: {}, dtype: {}", w_uv_name,
@@ -655,8 +673,10 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
   size_t head_num = deepseek_v3_config->head_num;
   size_t head_num_tp = DivRoundUp(head_num, attn_tp_size);
 
+  bool is_w4a8_klx = (deepseek_v3_config->quant_config.method == QUANT_W4A8_KLX);
+
   for (const auto& [host_weight_name, host_weight_tensor] : host_gptq_weights) {
-    // Skip qzeros, g_idx, and weight_shape (compressed-tensors metadata)
+    // Skip qzeros, g_idx, and weight_shape (compressed-tensors metadata, not present in W4A8_KLX)
     if (host_weight_name.find(".qzeros") != std::string::npos || host_weight_name.find(".g_idx") != std::string::npos ||
         host_weight_name.find(".weight_shape") != std::string::npos) {
       continue;
@@ -666,7 +686,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
                                   Vector2Str(std::vector<size_t>(host_weight_tensor.shape)));
     size_t mlp_tensor_para_size =
         runtime_config_.enable_full_shared_expert ? 1 : context_->global->GetTensorParallelSize();
-    // 1, quant MLP layers
+    // 1, quant MLP layers (dense/shared expert — not present in W4A8_KLX expert path)
     if (host_weight_name.find(".mlp.down_proj.") != std::string::npos ||
         host_weight_name.find(".mlp.shared_expert.down_proj.") != std::string::npos) {
       Tensor dev_tensor;
@@ -694,7 +714,8 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
       if (expert_idx_ < 0) {
         continue;
       }
-      if (host_weight_name.find(".input_scale") != std::string::npos) {
+      // input_scale handling (GPTQ with input_scale=true, not W4A8_KLX)
+      if (!is_w4a8_klx && host_weight_name.find(".input_scale") != std::string::npos) {
         size_t input_scale_size = GetTypeSize(host_weight_tensor.dtype);
         if (host_weight_name.find(".up_proj.") != std::string::npos ||
             host_weight_name.find(".gate_proj.") != std::string::npos) {
@@ -732,21 +753,168 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
         }
       }
 
-      bool is_qweight = host_weight_name.find(".qweight") != std::string::npos;
+      // Determine if this is the main weight or a scale/auxiliary tensor
+      bool is_qweight;
+      if (is_w4a8_klx) {
+        // W4A8_KLX: ".weight" (not ".weight_scale") is the quantized weight
+        is_qweight = !W4A8KlxMethod::IsWeightScale(host_weight_name);
+      } else {
+        is_qweight = host_weight_name.find(".qweight") != std::string::npos;
+      }
+
+#ifdef ENABLE_KUNLUN
+      // Kunlun optimized path: host-side TP slicing + single 1D H2D copy.
+      // Avoids per-row xpu_memcpy_async overhead (no native 2D tensor copy on XPU).
+      {
+        // For W4A8_KLX, the tensor is already in its final dtype (INT8 packed or BF16 scale)
+        // No INT32->UINT8 conversion or permute needed.
+        // For W4A8_KLX scale tensors: cast bf16/fp16 → fp32 on host before H2D
+        // (Kunlun has no device-side cast kernel).
+        size_t type_size = GetTypeSize(host_weight_tensor.dtype);
+        bool is_klx_scale = is_w4a8_klx && !is_qweight;
+        std::vector<float> klx_scale_fp32_buf;
+        const void* h2d_src_ptr = host_weight_tensor.template GetPtr<void>();
+        if (is_klx_scale && host_weight_tensor.dtype != DataType::TYPE_FP32) {
+          size_t total_elems = host_weight_tensor.GetTotalBytes() / GetTypeSize(host_weight_tensor.dtype);
+          klx_scale_fp32_buf.resize(total_elems);
+          if (host_weight_tensor.dtype == DataType::TYPE_BF16) {
+            const c10::BFloat16* bf16_src = reinterpret_cast<const c10::BFloat16*>(h2d_src_ptr);
+            for (size_t i = 0; i < total_elems; ++i) klx_scale_fp32_buf[i] = static_cast<float>(bf16_src[i]);
+          } else if (host_weight_tensor.dtype == DataType::TYPE_FP16) {
+            const c10::Half* fp16_src = reinterpret_cast<const c10::Half*>(h2d_src_ptr);
+            for (size_t i = 0; i < total_elems; ++i) klx_scale_fp32_buf[i] = static_cast<float>(fp16_src[i]);
+          }
+          h2d_src_ptr = klx_scale_fp32_buf.data();
+          type_size = sizeof(float);
+        }
+
+        if (host_weight_name.find(".up_proj.") != std::string::npos ||
+            host_weight_name.find(".gate_proj.") != std::string::npos) {
+          // Stacked name: "model.layers.X.mlp.experts.up_gate_proj.{weight|weight_scale|scales}"
+          std::string suffix;
+          if (is_w4a8_klx) {
+            suffix = is_qweight ? "weight" : "weight_scale";
+          } else {
+            suffix = is_qweight ? "weight" : "scales";
+          }
+          std::string up_gate_experts_name =
+              fmt::format("model.layers.{}.mlp.experts.up_gate_proj.{}", layer_idx, suffix);
+
+          // Effective tensor shape after any dtype conversion (for GPTQ INT32→UINT8 or KLX scale→FP32)
+          size_t eff_shape1 = host_weight_tensor.shape[1];
+          DataType eff_dtype = host_weight_tensor.dtype;
+          if (!is_w4a8_klx && is_qweight && host_weight_tensor.dtype == DataType::TYPE_INT32) {
+            eff_dtype = DataType::TYPE_UINT8;
+            eff_shape1 = host_weight_tensor.shape[1] * 4;
+            type_size = GetTypeSize(eff_dtype);
+          }
+          if (is_klx_scale) {
+            eff_dtype = DataType::TYPE_FP32;
+          }
+
+          size_t expert_pitch = moe_inter_size_per_rank * eff_shape1 * type_size;
+          size_t double_expert_pitch = expert_pitch * 2;
+          size_t src_upgate_offset = deepseek_v3_config->moe_tensor_para_size > 1 ? moe_tp_rank * expert_pitch : 0;
+
+          if (device_model_weights.find(up_gate_experts_name) == device_model_weights.end()) {
+            device_model_weights[up_gate_experts_name] =
+                Tensor(MemoryLocation::LOCATION_DEVICE, eff_dtype,
+                       {num_experts_per_rank, moe_inter_size_per_rank * 2, eff_shape1}, nullptr,
+                       &(context_->device->GetMemoryManageStream()));
+          }
+          Tensor& up_gate_experts_tensor = device_model_weights.at(up_gate_experts_name);
+
+          // up/gate TP split is along output dim (rows) → data is contiguous, direct H2D
+          size_t dst_offset;
+          if (host_weight_name.find(".up_proj.") != std::string::npos) {
+            dst_offset = static_cast<size_t>(expert_idx_) * double_expert_pitch + expert_pitch;
+          } else {
+            dst_offset = static_cast<size_t>(expert_idx_) * double_expert_pitch;
+          }
+          MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + dst_offset,
+                      static_cast<const uint8_t*>(h2d_src_ptr) + src_upgate_offset, expert_pitch, MEMCPY_HOST_TO_DEVICE,
+                      context_->device->GetMemoryManageStream());
+          continue;
+        }
+
+        if (host_weight_name.find(".down_proj.") != std::string::npos) {
+          std::string suffix;
+          if (is_w4a8_klx) {
+            suffix = is_qweight ? "weight" : "weight_scale";
+          } else {
+            suffix = is_qweight ? "weight" : "scales";
+          }
+          std::string down_experts_name = fmt::format("model.layers.{}.mlp.experts.down_proj.{}", layer_idx, suffix);
+
+          size_t eff_shape1 = host_weight_tensor.shape[1];
+          DataType eff_dtype = host_weight_tensor.dtype;
+          if (!is_w4a8_klx && is_qweight && host_weight_tensor.dtype == DataType::TYPE_INT32) {
+            eff_dtype = DataType::TYPE_UINT8;
+            eff_shape1 = host_weight_tensor.shape[1] * 4;
+            type_size = GetTypeSize(eff_dtype);
+          }
+          if (is_klx_scale) {
+            eff_dtype = DataType::TYPE_FP32;
+          }
+
+          size_t down_inter_size_per_rank = DivRoundUp(eff_shape1, deepseek_v3_config->moe_tensor_para_size);
+          if (device_model_weights.find(down_experts_name) == device_model_weights.end()) {
+            device_model_weights[down_experts_name] =
+                Tensor(MemoryLocation::LOCATION_DEVICE, eff_dtype,
+                       {num_experts_per_rank, hidden_units, down_inter_size_per_rank}, nullptr,
+                       &(context_->device->GetMemoryManageStream()));
+          }
+
+          size_t dst_pitch = down_inter_size_per_rank * type_size;
+          size_t src_pitch = eff_shape1 * type_size;
+          size_t expert_pitch = dst_pitch * hidden_units;
+          size_t src_down_offset = deepseek_v3_config->moe_tensor_para_size > 1 ? moe_tp_rank * dst_pitch : 0;
+          Tensor& down_experts_tensor = device_model_weights.at(down_experts_name);
+
+          if (deepseek_v3_config->moe_tensor_para_size > 1) {
+            // Column slicing: data not contiguous in host, gather to contiguous buffer then 1D H2D
+            size_t slice_total = dst_pitch * hidden_units;
+            std::vector<uint8_t> host_slice(slice_total);
+            const uint8_t* src_base = static_cast<const uint8_t*>(h2d_src_ptr) + src_down_offset;
+            uint8_t* dst_base = host_slice.data();
+            for (size_t row = 0; row < hidden_units; ++row) {
+              std::memcpy(dst_base + row * dst_pitch, src_base + row * src_pitch, dst_pitch);
+            }
+            MemcpyAsync(down_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx_) * expert_pitch,
+                        host_slice.data(), slice_total, MEMCPY_HOST_TO_DEVICE,
+                        context_->device->GetMemoryManageStream());
+          } else {
+            // No column slicing (moe_tensor_para_size=1): entire tensor is contiguous, direct H2D
+            MemcpyAsync(down_experts_tensor.GetPtr<void>() + static_cast<size_t>(expert_idx_) * expert_pitch,
+                        h2d_src_ptr, host_weight_tensor.GetElementNumber() * type_size, MEMCPY_HOST_TO_DEVICE,
+                        context_->device->GetMemoryManageStream());
+          }
+          continue;
+        }
+      }
+#else
+      // NVIDIA/default path: upload entire expert to device, then D2D slice/stack
       Tensor dev_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, host_weight_tensor.dtype, host_weight_tensor.shape,
                                  nullptr, &(context_->device->GetMemoryManageStream()));
       MemcpyAsync(dev_tensor.GetPtr<void>(), host_weight_tensor.template GetPtr<void>(),
                   host_weight_tensor.GetTotalBytes(), MEMCPY_HOST_TO_DEVICE, context_->device->GetMemoryManageStream());
       StreamSynchronize(context_->device->GetMemoryManageStream());
-      if (!deepseek_v3_config->GetGptqQuantConfig().input_scale && !deepseek_v3_config->is_compressed_tensors) {
+      if (!is_w4a8_klx && !deepseek_v3_config->GetGptqQuantConfig().input_scale &&
+          !deepseek_v3_config->is_compressed_tensors) {
         PermuteWeight(dev_tensor, {1, 0}, dev_rank);
       }
       if (host_weight_name.find(".up_proj.") != std::string::npos ||
           host_weight_name.find(".gate_proj.") != std::string::npos) {
+        std::string suffix;
+        if (is_w4a8_klx) {
+          suffix = is_qweight ? "weight" : "weight_scale";
+        } else {
+          suffix = is_qweight ? "weight" : "scales";
+        }
         std::string up_gate_experts_name =
-            fmt::format("model.layers.{}.mlp.experts.up_gate_proj.{}", layer_idx, is_qweight ? "weight" : "scales");
+            fmt::format("model.layers.{}.mlp.experts.up_gate_proj.{}", layer_idx, suffix);
 
-        if (is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
+        if (!is_w4a8_klx && is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
           // an uint8 weight actually contains two int4 weights
           dev_tensor.dtype = DataType::TYPE_UINT8;
           dev_tensor.shape[1] = dev_tensor.shape[1] * 4;  // int32->uint8
@@ -762,7 +930,6 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
                      &(context_->device->GetMemoryManageStream()));
         }
         Tensor& up_gate_experts_tensor = device_model_weights.at(up_gate_experts_name);
-        // TODO(jinxcwu) up_gate权重名字有问题，实际是up在后，gate在前
         if (host_weight_name.find(".up_proj.") != std::string::npos) {
           MemcpyAsync(up_gate_experts_tensor.GetPtr<void>() + expert_idx_ * double_expert_pitch + expert_pitch,
                       dev_tensor.GetPtr<void>() + src_upgate_offset, expert_pitch, MEMCPY_DEVICE_TO_DEVICE,
@@ -775,10 +942,15 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
         continue;
       }
       if (host_weight_name.find(".down_proj.") != std::string::npos) {
-        std::string down_experts_name =
-            fmt::format("model.layers.{}.mlp.experts.down_proj.{}", layer_idx, is_qweight ? "weight" : "scales");
+        std::string suffix;
+        if (is_w4a8_klx) {
+          suffix = is_qweight ? "weight" : "weight_scale";
+        } else {
+          suffix = is_qweight ? "weight" : "scales";
+        }
+        std::string down_experts_name = fmt::format("model.layers.{}.mlp.experts.down_proj.{}", layer_idx, suffix);
 
-        if (is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
+        if (!is_w4a8_klx && is_qweight && dev_tensor.dtype == DataType::TYPE_INT32) {
           // an uint8 weight actually contains two int4 weights
           dev_tensor.dtype = DataType::TYPE_UINT8;
           dev_tensor.shape[1] = dev_tensor.shape[1] * 4;  // int32->uint8
@@ -802,6 +974,7 @@ Status DeepSeekV3WeightImpl<T>::LoadInt4QuantWeight(std::unordered_map<std::stri
                       MEMCPY_DEVICE_TO_DEVICE, context_->device->GetMemoryManageStream());
         continue;
       }
+#endif
     }
 
     // TODO(huicongyao): add fuse lora for gptq int4 and pad fuse weight to a multiple of 128

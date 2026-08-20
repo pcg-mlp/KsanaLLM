@@ -9,7 +9,9 @@
 #include "batch_scheduler/global_cache_fetcher.h"
 #include "ipc/core/ipc_func_types.h"
 #include "ipc/functions/add_executor.h"
-#include "ipc/functions/connect_nccl_data_channel.h"
+#ifdef ENABLE_CUDA
+#  include "ipc/functions/connect_nccl_data_channel.h"
+#endif
 #include "ipc/functions/connect_tcp_data_channel.h"
 #include "ipc/functions/create_block_manager.h"
 #include "ipc/functions/create_executor_runtime.h"
@@ -27,8 +29,10 @@
 #include "ipc/functions/listen_tcp_data_channel.h"
 #include "ipc/functions/load_model.h"
 #include "ipc/functions/load_weight.h"
-#include "ipc/functions/nccl_operations.h"
 #include "ipc/functions/pd_v2_barrier_done.h"
+#ifdef ENABLE_CUDA
+#  include "ipc/functions/nccl_operations.h"
+#endif
 #include "ipc/functions/report_layer_progress.h"
 #include "ipc/functions/report_sampling_output.h"
 #include "ipc/functions/reset_pipeline_config.h"
@@ -87,9 +91,11 @@ void IpcFuncWrapper::SetIpcFunctions() {
       IPC_FUNC_CONNECT_TCP_DATA_CHANNEL);
 
   // nccl data channel
+#ifdef ENABLE_CUDA
   ipc_func_proxy_->SetFuncInfo<ConnectNcclDataChannelCallable, ConnectNcclDataChannelRequest,
                                ConnectNcclDataChannelResponse, ConnectNcclDataChannelCallback>(
       IPC_FUNC_CONNECT_NCCL_DATA_CHANNEL);
+#endif
 
   // result reporter channel
   ipc_func_proxy_->SetFuncInfo<InitReporterChannelCallable, InitReporterChannelRequest, InitReporterChannelResponse,
@@ -151,6 +157,16 @@ void IpcFuncWrapper::SetIpcFunctions() {
       ->SetFuncInfo<PdV2BarrierDoneCallable, PdV2BarrierDoneRequest, PdV2BarrierDoneResponse, PdV2BarrierDoneCallback>(
           IPC_FUNC_PD_V2_BARRIER_DONE);
 
+  // get EP communicator config (platform-independent)
+  ipc_func_proxy_->SetFuncInfo<GetEPCommunicationConfigCallable, GetEPCommunicationConfigRequest,
+                               GetEPCommunicationConfigResponse, GetEPCommunicationConfigCallback>(
+      IPC_FUNC_GET_EP_COMMUNICATION_CONFIG);
+
+  // set EP communicator config (platform-independent)
+  ipc_func_proxy_->SetFuncInfo<SetEPCommunicationConfigCallable, SetEPCommunicationConfigRequest,
+                               SetEPCommunicationConfigResponse, SetEPCommunicationConfigCallback>(
+      IPC_FUNC_SET_EP_COMMUNICATION_CONFIG);
+
 #ifdef ENABLE_CUDA
   // Connector NCCL operations
   ipc_func_proxy_->SetFuncInfo<ConnectorInitNcclCommGroupCallable, ConnectorInitNcclCommGroupRequest,
@@ -176,16 +192,6 @@ void IpcFuncWrapper::SetIpcFunctions() {
   ipc_func_proxy_->SetFuncInfo<ConnectorGetNcclCommInfoCallable, ConnectorGetNcclCommInfoRequest,
                                ConnectorGetNcclCommInfoResponse, ConnectorGetNcclCommInfoCallback>(
       IPC_FUNC_CONNECTOR_GET_NCCL_COMM_INFO);
-
-  // get EP communicator config
-  ipc_func_proxy_->SetFuncInfo<GetEPCommunicationConfigCallable, GetEPCommunicationConfigRequest,
-                               GetEPCommunicationConfigResponse, GetEPCommunicationConfigCallback>(
-      IPC_FUNC_GET_EP_COMMUNICATION_CONFIG);
-
-  // set EP communicator config
-  ipc_func_proxy_->SetFuncInfo<SetEPCommunicationConfigCallable, SetEPCommunicationConfigRequest,
-                               SetEPCommunicationConfigResponse, SetEPCommunicationConfigCallback>(
-      IPC_FUNC_SET_EP_COMMUNICATION_CONFIG);
 #endif
 }
 
@@ -225,6 +231,16 @@ Status IpcFuncWrapper::SetDeviceCommunicationContext(std::shared_ptr<Context> co
 }
 
 Status IpcFuncWrapper::InitDeviceCommunication() {
+#ifdef ENABLE_KUNLUN
+  // bkcl_get_unique_id() blocks waiting for RDMA network rendezvous even on
+  // single-card setups, which hangs indefinitely. Skip collective-comm init
+  // entirely when there is only one executor (no inter-device communication needed).
+  if (executor_num_ <= 1) {
+    KLLM_LOG_INFO << "Kunlun single-card: skipping BKCL InitDeviceCommunication.";
+    return Status();
+  }
+#endif
+
   auto callback =
       ipc_func_proxy_->GetSharedIpcFuncCallback<InitDeviceCommunicationCallback>(IPC_FUNC_INIT_DEVICE_COMMUNICATION);
   callback->Reset(executor_num_);
@@ -232,7 +248,11 @@ Status IpcFuncWrapper::InitDeviceCommunication() {
   std::shared_ptr<IpcContext> ipc_context =
       CreateBroadcastContext(IPC_FUNC_INIT_DEVICE_COMMUNICATION, true, false, true, true);
   std::shared_ptr<InitDeviceCommunicationRequest> request = std::make_shared<InitDeviceCommunicationRequest>();
+#ifdef ENABLE_CUDA
   request->nccl_uid = GenerateNCCLUniqueID();
+#elif defined(ENABLE_KUNLUN)
+  request->bkcl_uid = GenerateBKCLUniqueID();
+#endif
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
 
   callback->Wait();

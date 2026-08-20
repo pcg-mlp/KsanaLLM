@@ -5,7 +5,7 @@
 
 namespace ksana_llm {
 
-Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* workspace_ptr) {
+Status CastInplace(Tensor& tensor, const DataType target_dtype, Stream& stream, void* device_ctx, void* workspace_ptr) {
   return Status(RET_UNDEFINED_REFERENCE, "CastInplace not supported.");
 }
 

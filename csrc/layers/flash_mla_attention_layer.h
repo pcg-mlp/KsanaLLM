@@ -36,6 +36,21 @@ struct FlashMlaAttentionInputs {
   const Tensor* v_head_proj_weight;
   const Tensor* k_buffer;
   const Tensor* v_buffer;
+#ifdef ENABLE_KUNLUN
+  // Kunlun-specific fields (not used by CUDA/Ascend)
+  const Tensor* dp_input_offset_int32;       // device int32 offsets (for xfa VectorParam ATTN_LVSL)
+  const Tensor* dp_prefill_q_offset_int32;   // device int32 offsets (for xfa VectorParam ATTN_LVSL)
+  const Tensor* layer_kv_cache;              // layer kv cache ptr (for block_num metadata)
+  const Tensor* block_table;                 // block table (unused on Kunlun, kept for interface compat)
+  const Tensor* prefix_kv_buffer;            // prefix kv buffer (unused on Kunlun, no prefix cache)
+  const Tensor* qlod_host_tensor;            // HOST int32 cumulative q offsets [batch_size+1]
+  const Tensor* kvlod_host_tensor;           // HOST int32 cumulative kv offsets [batch_size+1]
+  const Tensor* layers_slot_mapping;         // per-layer per-token slot mapping (device)
+  const Tensor* atb_attention_attr;          // [slot_mapping_dim_1, max_num_blocks_per_query]
+  const Tensor* prefix_kvlod_host_tensor;     // HOST int32 prefix cumulative lengths [batch_size+1]
+  const Tensor* prefix_kvlod_dev_tensor;     // DEVICE int32 prefix cumulative lengths [batch_size+1]
+  const Tensor* kv_b_proj_combined_weight;   // weight for prefix kv_b_proj
+#endif
 };
 
 class FlashMlaAttentionLayer : public AttentionLayer {
@@ -49,6 +64,10 @@ class FlashMlaAttentionLayer : public AttentionLayer {
  private:
   template <typename SCALAR_T, typename CACHE_T, llm_kernels::utils::KVCacheType KV_DTYPE>
   Status ForwardT(const FlashMlaAttentionInputs& inputs, Tensor* output);
+
+  // NOTE: the per-chunk prefix-cache helper (previously ForwardChunkT) lives as a file-local
+  // free function in kunlun/flash_mla_attention_layer.cpp. It is deliberately NOT declared here
+  // so that non-Kunlun translation units including this header never reference xdnn::Context.
 
  private:
   size_t max_step_token_num_ = 0;

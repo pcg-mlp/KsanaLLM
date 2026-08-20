@@ -127,7 +127,7 @@ struct ForwardRequest {
   // |     GPU0   |     GPU1    |     GPU2   |     GPU3    |
   uint32_t attn_dp_group_id = 0;
 
-#if defined(ENABLE_ACL) || defined(ENABLE_CUDA)
+#if defined(ENABLE_ACL) || defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   // NOTE(xingjinglu)When ENABLE_CUDA, if enable_blocked_multi_token_fowarding_kv is true, it
   // will use the variable the same as ACL. Now, regardless of whether enable_blocked_multi_token_fowarding_kv is
   // turned on, the variable definition here will be enabled.

@@ -11,7 +11,7 @@
 #include "utils/tensor.h"
 
 namespace ksana_llm {
-Status TransLayout(Tensor& tensor, Stream& stream) {
+Status TransLayout(Tensor& tensor, Stream& stream, void* device_ctx) {
   // NOTE(karlluo): 2 condition: shape[0] and shape[1] must divide by 16 and only support FP16
   // TODO(karlluo): support INT8
   if ((tensor.shape[1] % 16 != 0 || tensor.shape[0] % 16 != 0) || tensor.dtype != TYPE_FP16) {

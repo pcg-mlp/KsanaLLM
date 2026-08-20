@@ -38,12 +38,17 @@ Status CommonAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0,
   auto& paged_buffer_tensors = reduce_buffer_tensors;
 
   // MMHA Flash/Paged Attention
-  if (layer_idx_ == 0) {
-    // only need sync in the first layer
+  if (layer_idx_ == 0 && !forwarding_context.IsGraphCapturing()) {
+    // only need sync in the first layer; skip during graph capture (cross-stream events break capture)
     StreamWaitEvent(forwarding_context.GetContext()->device->GetPrimaryComputeStream(),
                     forwarding_context.GetModelInput()->kvcache_offset_event);
     StreamWaitEvent(forwarding_context.GetContext()->device->GetPrimaryComputeStream(),
                     forwarding_context.GetModelInput()->rotary_embedding_event);
+#if defined(ENABLE_KUNLUN)
+    // Wait for PrepareATBKVCache H2D copies (layers_block_table, seq_len, slot_mapping).
+    StreamWaitEvent(forwarding_context.GetContext()->device->GetPrimaryComputeStream(),
+                    forwarding_context.GetModelInput()->h2d_atb_event);
+#endif
   }
   if (forwarding_context.GetModelInput()->multi_token_request_num) {
     flash_attentions_->Forward(hidden_buffer_tensors_0, forwarding_context.GetModelInput(), hidden_buffer_tensors_1,

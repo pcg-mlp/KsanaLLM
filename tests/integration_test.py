@@ -246,6 +246,7 @@ def start_distributed_node(script_path: str, config_file: str,
     if node_rank == 0:
         # NOTE(karlluo): if not set default 0,1
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices[node_rank]
+        os.environ["XPU_VISIBLE_DEVICES"] = cuda_visible_devices[node_rank]
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = ascend_rt_visible_devices[
             node_rank]
         os.environ["KLLM_LOG_FILE"] = "log/master_ksana_llm.log"
@@ -257,6 +258,7 @@ def start_distributed_node(script_path: str, config_file: str,
                                      text=True)
     else:
         os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices[node_rank]
+        os.environ["XPU_VISIBLE_DEVICES"] = cuda_visible_devices[node_rank]
         os.environ["ASCEND_RT_VISIBLE_DEVICES"] = ascend_rt_visible_devices[
             node_rank]
         os.environ["KLLM_LOG_FILE"] = "log/worker_ksana_llm.log"

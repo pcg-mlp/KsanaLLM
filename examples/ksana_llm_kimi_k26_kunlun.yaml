@@ -1,0 +1,63 @@
+# Kimi-K2.6-klx-w4a8-gptq 8卡推理配置 — 昆仑芯 P800
+# DeepSeek-V3 architecture: 384 experts, top-8, moe_inter_size=2048, hidden=7168
+# expert_para_size=8: 384/8=48 experts per GPU, moe_tensor_para_size=8/8=1
+
+setting:
+  global:
+    tensor_para_size: 8
+    pipeline_para_size: 1
+    attn_data_para_size: 1
+    expert_world_size: 1
+    expert_para_size: 8
+    embed_tokens_use_cpu: false
+    enable_cuda_graph: false
+    enable_full_shared_expert: false
+
+  batch_scheduler:
+    scheduler_type: 0
+    schedule_strategy: 0
+    waiting_timeout_in_ms: 3600000
+    max_waiting_queue_len: 1200
+    max_step_tokens: 16384
+    max_batch_size: 256
+    max_token_len: 16384
+    swapout_block_threshold: 1.0
+    swapin_block_threshold: 2.0
+    launch_block_threshold: 2.0
+    enable_auto_prefix_cache: true
+    split_fuse_token_num: 0
+    swap_threadpool_size: 4
+    preempt_mode: 0
+    min_flexible_cache_num: 0
+    enable_speculative_decoding: false
+    mtp_step_num: 1
+
+  block_manager:
+    block_token_num: 64
+    reserved_device_memory_ratio: 0.05
+    block_device_memory_ratio: -1.0
+    block_host_memory_factor: 0.0
+
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: false
+
+  quantization_config:
+    kv_cache:
+      dtype: auto
+    weight:
+      quant_method: auto
+
+  profiler:
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+
+  endpoint_type: python
+
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+
+model_spec:
+  base_model:
+    model_dir: /data1/klx/Kimi-K2.6-klx-w4a8-gptq
+    is_embedding_model: false

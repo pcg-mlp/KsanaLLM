@@ -86,6 +86,13 @@ class ModelRunner {
 
   std::shared_ptr<HiddenUnitBufferPool> hidden_unit_buffer_pool_ = nullptr;
 
+  // Build-ahead (Phase 1): dual-slot ring ping-pong index, flipped 0<->1 each execute step on the
+  // (single) execute thread. Step N writes ring GetRingSlot(cur_ring_slot_) and reads
+  // GetRingSlot(cur_ring_slot_ ^ 1) (the previous step's slot), physically isolating this step's
+  // WriteRing target from the previous step's ReplaceLastToken source. Only meaningful when
+  // build-ahead is enabled; harmless otherwise.
+  size_t cur_ring_slot_ = 0;
+
  private:
   // Read schedule_output and build model input.
   std::thread preprocess_thread_;
@@ -121,11 +128,6 @@ class ModelRunner {
 
   // pd_v2: see SetEpochReqCapture.
   std::function<void(uint64_t, const std::vector<std::shared_ptr<ExecutorInferRequest>>&)> epoch_req_capture_ = nullptr;
-
-  // 本步采样 ring 的当前 slot；仅在 HandlePreprocess 线程内访问，无需原子。
-  // build-ahead 启用时每步 cur_ring_slot_ ^= 1u（0/1 交替），上一步写入 slot 为 cur_slot ^ 1u；
-  // 不依赖 batch 是否同构或本步是否做替换（req_id 解耦，prefill/decode 混合一视同仁）。
-  size_t cur_ring_slot_ = 0;
 
   // Composite speculative decoder (unified interface for all speculative methods).
   std::shared_ptr<CompositeSpeculativeDecoder> composite_decoder_ = nullptr;

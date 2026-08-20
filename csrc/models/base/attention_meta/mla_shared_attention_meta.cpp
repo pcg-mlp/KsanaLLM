@@ -14,12 +14,15 @@ namespace ksana_llm {
 
 void MLASharedAttentionMeta::Init(const ModelConfig& model_config, const RuntimeConfig& runtime_config,
                                   size_t decode_token_num_threshold, int rank) {
-#ifdef ENABLE_CUDA
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   if (!model_config.use_mla) {
     return;
   }
 
   const size_t max_batch_size = runtime_config.max_batch_size;
+#endif
+
+#ifdef ENABLE_CUDA
   const size_t head_num_per_tp = model_config.head_num / runtime_config.parallel_basic_config.attn_tensor_parallel_size;
 
   num_splits = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {max_batch_size + 1 + decode_token_num_threshold});
@@ -47,7 +50,15 @@ void MLASharedAttentionMeta::Init(const ModelConfig& model_config, const Runtime
                             static_cast<size_t>(llm_kernels::nvidia::GetDecodingSchedMetaSize() / sizeof(int)), 1});
   }
 
+#endif  // ENABLE_CUDA
+
   // Chunked-KV buffers: pre-allocate to worst-case sizes (shapes overwritten per batch).
+  // Guard must match PrepareChunkKV() in mla_attention_meta_builder.cpp: KUNLUN runs the
+  // two-step (chunked-prefix) MLA attention path too, so these buffers must exist there.
+  // Leaving this CUDA-only (as on master) left chunk_kv_batch_starts_host unallocated on
+  // KUNLUN, and PrepareChunkKV then wrote through the null host pointer -> coredump on the
+  // first MLA prefill.
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   max_chunked_kv_tokens = static_cast<int>(runtime_config.max_chunked_kv_tokens);
   chunk_kv_batch_starts_host = Tensor(MemoryLocation::LOCATION_HOST, TYPE_INT32, {max_batch_size + 1});
   chunk_kv_cu_extend_lens_tensor = Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_INT32, {2 * max_batch_size});

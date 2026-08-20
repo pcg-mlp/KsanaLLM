@@ -70,7 +70,7 @@ template <>
 void EventCreateT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event);
 
 template <>
-void EventCreateWithFlagsT(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags);
+void EventCreateWithFlagsT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND>* event, unsigned int flags);
 
 template <>
 void EventDestroyT<DEVICE_TYPE_ASCEND>(EventT<DEVICE_TYPE_ASCEND> event);

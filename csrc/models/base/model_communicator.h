@@ -5,6 +5,10 @@
 
 #include <memory>
 #include <vector>
+
+#include "configure/context.h"
+#include "utils/tensor.h"
+
 #ifdef ENABLE_CUDA
 #  include "layers/custom_all_reduce_sum_layer.h"
 #  include "layers/nccl_all_gather_layer.h"
@@ -16,6 +20,9 @@
 #elif defined(ENABLE_TOPS)
 #  include "layers/eccl_all_gather_layer.h"
 #  include "layers/eccl_all_reduce_sum_layer.h"
+#elif defined(ENABLE_KUNLUN)
+#  include "layers/bkcl_all_gather_layer.h"
+#  include "layers/bkcl_all_reduce_sum_layer.h"
 #endif
 
 namespace ksana_llm {
@@ -57,6 +64,9 @@ class ModelCommunicator {
 
   // The all gather layer
   std::shared_ptr<HcclAllGatherLayer> hccl_all_gather_layer_;
+#elif defined(ENABLE_KUNLUN)
+  std::shared_ptr<BkclAllReduceSumLayer> bkcl_all_reduce_sum_layer_;
+  std::shared_ptr<BkclAllGatherLayer> bkcl_all_gather_layer_;
 #endif
 
  private:

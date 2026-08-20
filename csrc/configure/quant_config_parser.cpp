@@ -63,6 +63,11 @@ void ParseModelOptQuantConfig(const nlohmann::json &config_json, bool is_moe, Qu
   }
 }
 
+void ParseW4A8KlxQuantConfig(QuantConfig &quant_config) {
+  quant_config.method = QUANT_W4A8_KLX;
+  KLLM_LOG_INFO << "using quant model, quant method W4A8_KLX (Kunlun format)";
+}
+
 void ParseCompressedTensorsQuantConfig(const nlohmann::json &quantization_config, bool is_moe,
                                        QuantConfig &quant_config, std::vector<QuantConfig> &sub_quant_configs) {
   KLLM_LOG_INFO << "Parsing compressed-tensors quantization config";

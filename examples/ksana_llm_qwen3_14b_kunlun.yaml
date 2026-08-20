@@ -1,0 +1,68 @@
+# KsanaLLM Qwen3-14B Kunlun (P800) 配置
+# 对齐 SGLang benchmark: 440 concurrency, max_batch_size=32, block_device_memory_ratio=0.215
+#
+# 用法: python serving_server.py --config_file examples/ksana_llm_qwen3_14b_kunlun.yaml --host 0.0.0.0 --port 30001
+# 压测: python benchmarks/benchmark_throughput.py --port 30001 --backend openai-chat --prompt_num 440 --stream --ignore_eos
+
+setting:
+  global:
+    tensor_para_size: 1
+    pipeline_para_size: 1
+    attn_data_para_size: 1
+    expert_world_size: 1
+    expert_para_size: 1
+    embed_tokens_use_cpu: false
+    enable_cuda_graph: true
+    cuda_graph_bs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]
+    enable_full_shared_expert: false
+
+  batch_scheduler:
+    scheduler_type: 0
+    schedule_strategy: 0
+    waiting_timeout_in_ms: 3000000
+    max_waiting_queue_len: 1200
+    max_step_tokens: 8192
+    max_batch_size: 32
+    max_token_len: 35000
+    swapout_block_threshold: 1.0
+    swapin_block_threshold: 2.0
+    launch_block_threshold: 2.0
+    enable_auto_prefix_cache: false
+    split_fuse_token_num: 4096
+    swap_threadpool_size: 4
+    preempt_mode: 0
+    min_flexible_cache_num: 0
+    enable_speculative_decoding: false
+    mtp_step_num: 0
+    enable_async: true
+    enable_executor_build_ahead: true
+
+  block_manager:
+    block_token_num: 64
+    reserved_device_memory_ratio: 0.02
+    block_device_memory_ratio: 0.215  # 对齐 SGLang 0.5: ~20.6GB ≈ 132K tokens
+    block_host_memory_factor: 0
+
+  attn_backend:
+    enable_blocked_multi_token_forwarding_kv: false
+
+  quantization_config:
+    kv_cache:
+      dtype: auto
+    weight:
+      quant_method: auto
+
+  profiler:
+    export_interval_millis: 30000
+    export_timeout_millis: 1000
+
+  endpoint_type: python
+
+  tokenization:
+    add_special_tokens: true
+    skip_special_tokens: true
+
+model_spec:
+  base_model:
+    model_dir: /data1/models/Qwen3-14B/
+    is_embedding_model: false

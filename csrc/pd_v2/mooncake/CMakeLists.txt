@@ -59,13 +59,45 @@ target_compile_definitions(pd_v2_connector_mooncake PRIVATE GLOG_USE_GLOG_EXPORT
 set_target_properties(pd_v2_connector_mooncake PROPERTIES CXX_STANDARD 20)
 set_property(TARGET pd_v2_connector_mooncake APPEND PROPERTY
     BUILD_RPATH ${PD_V2_MOONCAKE_BUILD_DIR}/mooncake-common)
+
+# The Mooncake tent sub-build only produces the CUDA platform archive
+# (tent/src/platform/cuda/libplatform_cuda.a) and links cudart when it is
+# configured with USE_CUDA=ON, which cmake/external/mooncake_tent.cmake ties
+# to the project-level WITH_CUDA toggle. On non-CUDA backends (e.g. Kunlun)
+# neither exists, so keep both out of the link line there; the generic
+# tent/src/platform/libtent_platform_all.a below covers the CPU path.
+set(_PD_V2_MC_PLATFORM_CUDA "")
+set(_PD_V2_MC_CUDART "")
+# NVLink / multi-node-NVLink / GPUDirect-Storage transports are GPU-only and
+# only built by the tent sub-build under USE_CUDA=ON (tied to WITH_CUDA).
+set(_PD_V2_MC_GPU_TRANSPORTS "")
+if(WITH_CUDA)
+  set(_PD_V2_MC_PLATFORM_CUDA
+      ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/platform/cuda/libplatform_cuda.a)
+  set(_PD_V2_MC_CUDART cudart)
+  set(_PD_V2_MC_GPU_TRANSPORTS
+      ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/nvlink/libtent_xport_nvlink.a
+      ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/mnnvl/libtent_xport_mnnvl.a
+      ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/gds/libtent_xport_gds.a)
+endif()
+
+# The HTTP metadata backend is disabled in cmake/external/mooncake_tent.cmake
+# (USE_HTTP=OFF, host lacks libcurl-devel), so its archive may be absent. The
+# tent sub-build already ran at configure time, so a plain EXISTS check is
+# reliable here — link it only when it was actually produced.
+set(_PD_V2_MC_METASTORE_HTTP "")
+if(EXISTS ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/metastore/libmetastore_http.a)
+  set(_PD_V2_MC_METASTORE_HTTP
+      ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/metastore/libmetastore_http.a)
+endif()
+
 target_link_libraries(pd_v2_connector_mooncake PRIVATE
     -Wl,--whole-archive
     ${PD_V2_MOONCAKE_BUILD_DIR}/src/libtransfer_engine.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/src/common/base/libbase.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/mooncake-common-src/libmooncake_common.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/libtent.a
-    ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/platform/cuda/libplatform_cuda.a
+    ${_PD_V2_MC_PLATFORM_CUDA}
     -Wl,--no-whole-archive
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/metrics/libtent_metrics.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/platform/libtent_platform_all.a
@@ -73,16 +105,14 @@ target_link_libraries(pd_v2_connector_mooncake PRIVATE
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/rdma/libtent_xport_rdma.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/bufio/libtent_xport_bufio.a
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/shm/libtent_xport_shm.a
-    ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/nvlink/libtent_xport_nvlink.a
-    ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/mnnvl/libtent_xport_mnnvl.a
-    ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/transport/gds/libtent_xport_gds.a
+    ${_PD_V2_MC_GPU_TRANSPORTS}
     ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/metastore/libmetastore_redis.a
-    ${PD_V2_MOONCAKE_BUILD_DIR}/tent/src/metastore/libmetastore_http.a
+    ${_PD_V2_MC_METASTORE_HTTP}
     ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libglog.a
     ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libjsoncpp.a
     ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libyaml-cpp.a
     ${PD_V2_MOONCAKE_DEPS_PREFIX}/lib/libhiredis.a
-    gflags numa ibverbs rdmacm cudart
+    gflags numa ibverbs rdmacm ${_PD_V2_MC_CUDART}
     ${PD_V2_MOONCAKE_BUILD_DIR}/mooncake-common/libasio.so)
 
 # This .so is a self-contained dlopen plugin: inference_engine loads it with
@@ -102,14 +132,24 @@ if(WITH_STANDALONE_TEST)
     # Cross-device copy contract test. Pins down the CUDA-runtime premises the
     # vendored Mooncake patch depends on. Skips at runtime if fewer than 2 GPUs
     # are visible. Doesn't link Mooncake; it's a pure cuda_runtime contract test.
-    cpp_test(pd_v2_cross_device_copy_contract_test
-        SRCS
-            ${CMAKE_CURRENT_SOURCE_DIR}/k8a_cross_device_copy_test.cpp
-        DEPS utils
-        LIBS cudart)
-    if(TARGET pd_v2_k8a_cross_device_copy_test)
-        target_include_directories(pd_v2_k8a_cross_device_copy_test PRIVATE
-            ${PROJECT_SOURCE_DIR}/csrc)
+    #
+    # CUDA-only: it includes <cuda_runtime.h> and links cudart, and its premises
+    # (cudaPointerGetAttributes / cross-device cudaMemcpy) are meaningless on
+    # non-CUDA backends. On Kunlun (WITH_CUDA=OFF) the CUDA shim reports >= 2
+    # devices for cudaGetDeviceCount but rejects cudaSetDevice(1) with 801
+    # (cudaErrorNotSupported), so the test would build and then hard-fail. Gate
+    # it on WITH_CUDA so it is only registered on real CUDA builds (matches the
+    # ENABLE_CUDA guard in k8a_cross_device_copy_test.cpp).
+    if(WITH_CUDA)
+        cpp_test(pd_v2_cross_device_copy_contract_test
+            SRCS
+                ${CMAKE_CURRENT_SOURCE_DIR}/k8a_cross_device_copy_test.cpp
+            DEPS utils
+            LIBS cudart)
+        if(TARGET pd_v2_k8a_cross_device_copy_test)
+            target_include_directories(pd_v2_k8a_cross_device_copy_test PRIVATE
+                ${PROJECT_SOURCE_DIR}/csrc)
+        endif()
     endif()
 
     # HostStagePool unit test. Pure C++/STL + mmap; no Mooncake link, so

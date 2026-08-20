@@ -44,7 +44,8 @@ void PrepareFlashMla(MLAAttentionMeta& mla_meta, DSAAttentionMeta& dsa_meta, MLA
 
 void PrepareChunkKV(MLASharedAttentionMeta& mla_shared, const FlashAttentionMeta& flash_meta,
                     const AttentionBuilderConfig& config) {
-#ifdef ENABLE_CUDA
+// TODO(zhongzhicao): kunlun平台采用两步attention，可以按照prefix的长度调度
+#if defined(ENABLE_CUDA) || defined(ENABLE_KUNLUN)
   const auto& reqs = flash_meta.dp_reqs;
   const int batch_size = static_cast<int>(reqs.size());
   const int max_chunked_kv_tokens = mla_shared.max_chunked_kv_tokens;

@@ -18,6 +18,10 @@
 #include "modules/basic/paged_mla_attention.h"
 #include "modules/basic/split.h"
 
+#ifdef ENABLE_KUNLUN
+#  include "layers/kunlun_rmsnorm_split_col_layer.h"
+#endif
+
 namespace ksana_llm {
 
 // Buffers used in mla.
@@ -81,6 +85,12 @@ class MultiHeadLatentAttention {
   std::shared_ptr<Layernorm> q_a_layernorms_;
   std::shared_ptr<SparseMlaIndexer> sparse_mla_indexer_;
   std::unique_ptr<MlaOutputGateLayer> mla_output_gate_;
+
+#ifdef ENABLE_KUNLUN
+  std::shared_ptr<KunlunRmsnormSplitColLayer> rmsnorm_split_col_layer_;
+  Tensor q_a_layernorm_weight_;
+  Tensor kv_a_layernorm_weight_;
+#endif
 
   // Use dsa only if input_length > context_dsa_threshold_ for efficiency
   size_t context_dsa_threshold_ = 0;

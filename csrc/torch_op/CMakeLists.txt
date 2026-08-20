@@ -87,6 +87,72 @@ if(WITH_ACL)
   target_link_libraries(torch_serving PRIVATE ${TORCH_LIBRARIES} ksana_llm_libs -Wl,--whole-archive layers -Wl,--no-whole-archive kernels)
 endif()
 
+if(WITH_KUNLUN)
+  # torch_serving.so is dlopen'd by the Python interpreter, so Python C API symbols
+  # (from libtorch_python.so) are resolved at runtime from the running interpreter.
+  # --allow-shlib-undefined suppresses the link-time "undefined reference" errors
+  # that come from libtorch_python.so's dependency on libpython.
+  target_link_options(torch_serving PRIVATE -Wl,--allow-shlib-undefined)
+
+  # Kunlun: link torch libs + all internal static libs with --whole-archive for device
+  # to ensure template specializations (T<3>) are not discarded by the linker.
+  # Use --start-group/--end-group to resolve circular dependencies among static libs.
+  target_link_libraries(torch_serving PRIVATE
+    ${TORCH_LIBRARIES}
+    -Wl,--whole-archive layers -Wl,--no-whole-archive
+    -Wl,--start-group
+    kernels
+    service
+    supervisor
+    engine
+    executor
+    ipc
+    -Wl,--whole-archive batch_scheduler -Wl,--no-whole-archive
+    cache_manager
+    distributed
+    # runtime holds TrieTree / TrieGenerator / MtpDecoderAdapter / DSparkDecoder /
+    # MtpStateGuard etc.; whole-archive so those symbols are exported from torch_serving.so
+    # for the decoder-adapter / draft_generator unit tests (which link ONLY torch_serving.so).
+    -Wl,--whole-archive runtime -Wl,--no-whole-archive
+    configure
+    endpoints
+    samplers
+    profiler
+    periphery
+    model_loader
+    models
+    modules
+    # model_base holds BaseWeight's ctor; production never constructs the base directly
+    # (only concrete weight subclasses do), so it isn't pulled in normally. whole-archive
+    # so BaseWeight's symbols are exported for module_mla_test's TestWeight subclass.
+    -Wl,--whole-archive model_base -Wl,--no-whole-archive
+    connector
+    global_cache_connector
+    transfer
+    -Wl,--whole-archive device -Wl,--no-whole-archive
+    # utils holds RuntimeDllManager (needed by utils_test); whole-archive to export it.
+    -Wl,--whole-archive utils -Wl,--no-whole-archive
+    # pd_v2 concrete sub-libraries (PeerSelector / LinUCBRouter / wire codecs). The pd_v2
+    # aggregator is an INTERFACE target and cannot sit inside a --whole-archive bracket
+    # reliably, so its sub-libs are listed explicitly and whole-archived for the pd_v2 tests.
+    -Wl,--whole-archive
+    pd_v2_public pd_v2_configure pd_v2_wire pd_v2_decode pd_v2_prefill
+    -Wl,--no-whole-archive
+    -Wl,--end-group
+    loguru
+    gflags
+    fmt
+    yaml-cpp
+    re2
+    ${Python3_LIBRARIES}
+    # libxpuml/libxpucuda are indirect dependencies of libbkcl.so
+    # (bkcl NEEDs them, but they reside in xre/so/ while bkcl's RUNPATH is only $ORIGIN).
+    # --no-as-needed forces them into DT_NEEDED so the dynamic linker resolves them
+    # via libtorch_serving.so's RUNPATH (which includes xre/so).
+    -Wl,--no-as-needed -lxpuml -lxpucuda -Wl,--as-needed
+  )
+endif()
+
 # for test
 if(WITH_STANDALONE_TEST)
   file(GLOB_RECURSE serving_op_test_SRCS

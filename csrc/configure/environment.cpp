@@ -97,6 +97,7 @@ size_t GetDecodeTokenNumThreshold() {
 Environment::Environment() {}
 
 void Environment::InitializeAttentionBackend() {
+#ifdef ENABLE_CUDA
   // Initialize attention backend manager using singleton pattern.
   auto attention_manager = AttentionBackendManager::GetInstance();
   if (attention_manager->Initialize()) {
@@ -104,6 +105,11 @@ void Environment::InitializeAttentionBackend() {
   } else {
     KLLM_LOG_ERROR << "Failed to initialize attention backend.";
   }
+#else
+  // On KunlunXin XPU, AttentionBackendManager is not used. Attention is handled
+  // directly by native layer implementations (e.g., flash_attention_layer, paged_attention_layer).
+  KLLM_LOG_INFO << "Attention backend skipped (non-CUDA platform, using native layer implementation).";
+#endif
 }
 
 void Environment::Reset() {

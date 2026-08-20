@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <vector>
 
@@ -119,6 +120,9 @@ class BatchScheduler : public BatchSchedulerInterface {
   std::vector<std::shared_ptr<InferRequest>> waiting_reqs_;
   // Protect the waiting_reqs_.
   std::mutex waiting_reqs_mutex_;
+  // Signalled after BalanceWaitingReqs drains waiting_reqs_, so producers blocked in
+  // EnqueueWaitingBufferQueue waiting for staging space wake up on the next schedule step.
+  std::condition_variable waiting_reqs_cv_;
 
   // The buffer queue needed be scheduled in strategy
   std::vector<std::vector<std::shared_ptr<InferRequest>>> dp_waiting_reqs_;

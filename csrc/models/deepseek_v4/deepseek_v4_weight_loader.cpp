@@ -937,6 +937,7 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
       if (weight_tensor.dtype == DataType::TYPE_FP8_E4M3 || weight_tensor.dtype == DataType::TYPE_BLOCK_FP8_E4M3) {
         std::string weight_scale_name = weight_name + "_scale_inv";
         // dequant wo_a
+#ifdef ENABLE_CUDA
         if (weight_name.find("attn.wo_a") != std::string::npos) {
           Tensor& quant_weight = dev_weights_map.at(weight_name);
           Tensor& quant_weight_scale = dev_weights_map.at(weight_scale_name);
@@ -957,6 +958,7 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
                                         dev_weights_map[weight_name].dtype);
           continue;
         }
+#endif  // ENABLE_CUDA
         auto scale_iter = dev_weights_map.find(weight_scale_name);
         if (scale_iter != dev_weights_map.end()) {
           weight_tensor.weight_scales = &(scale_iter->second);
@@ -1009,6 +1011,7 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
   }
 
   // Marlin FP4 weight preprocessing: repack weights + process scales
+#ifdef ENABLE_CUDA
   if (deepseek_v4_config_->quant_config.expert_dtype == "fp4" &&
       runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4Marlin) {
     cudaStream_t stream = context_->device->GetMemoryManageStream().Get();
@@ -1130,8 +1133,10 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
     }
     cudaStreamSynchronize(stream);
   }
+#endif  // ENABLE_CUDA
 
   // Humming FP4 weight preprocessing: repack weights + process scales
+#ifdef ENABLE_CUDA
   if (deepseek_v4_config_->quant_config.expert_dtype == "fp4" &&
       (runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A16 ||
        runtime_config_.fp4_moe_backend == FP4_MOE_BACKEND_TYPE::FP4HummingW4A8)) {
@@ -1271,6 +1276,7 @@ Status DeepSeekV4WeightLoader::PostProcessModelWeights(std::unordered_map<std::s
       }
     }
   }
+#endif  // ENABLE_CUDA
 
   // Permute weights that need transposition
   for (auto& [weight_name, weight_tensor] : dev_weights_map) {

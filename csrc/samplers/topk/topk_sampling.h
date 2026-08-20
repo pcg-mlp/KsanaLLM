@@ -29,6 +29,9 @@ class TopkSampling : public BaseSampling {
   ArgMaxATBExecutor<float> atb_executor_;
   void* atb_executors_ptr_ = nullptr;
 #endif  // ENABLE_ACL
+#ifdef ENABLE_KUNLUN
+  void* argmax_int64_buffer_ = nullptr;  // pre-allocated: sizeof(int64_t) * max_batch_size
+#endif
 };
 
 }  // namespace ksana_llm

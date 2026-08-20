@@ -1,0 +1,129 @@
+/* Copyright 2026 Tencent Inc.  All rights reserved.
+
+==============================================================================*/
+
+#include "xpu/kernel/xtdk.h"
+
+// vector_add: c[i] = a[i] + b[i]
+__global__ void vector_add_kernel(const float* a, const float* b, float* c, int n) {
+    int tid = core_id() * cluster_num() + cluster_id();
+    int total_threads = core_num() * cluster_num();
+
+    for (int i = tid; i < n; i += total_threads) {
+        c[i] = a[i] + b[i];
+    }
+}
+
+// ── Build-ahead (depth=2 executor pipeline overlap) token-relay kernels ───────
+// Phase 1: concurrency=1 => batch_size/prev_count are tiny (typically 1), so
+// both kernels run single-threaded (cluster 0 / core 0 only) -- no cross-core
+// synchronization to reason about, and no parallelism worth spending on a
+// handful of scalar int64 compares. See build_ahead_kunlun_phase1_design.md §3.
+
+// replace_last_token: for i in [0, batch_size), read (req_id, dst_off) =
+// cur_pairs[2i], cur_pairs[2i+1]. If input_ids[dst_off] == -1 (placeholder),
+// linear-scan prev_ring's `count` (=prev_ring[0]) (req_id, token) entries for a
+// req_id match and, on hit, write input_ids[dst_off] = token. On miss, or if
+// dst_off is out of [0, input_ids_len), leave input_ids untouched (defensive
+// no-op -- should not happen on the fast path). prev_ring[0] == 0 (cold start)
+// makes the outer scan vacuous, so input_ids stays at its -1 placeholder.
+__global__ void replace_last_token_kernel(int32_t* input_ids, const int64_t* cur_pairs, const int64_t* prev_ring,
+                                           int64_t batch_size, int64_t input_ids_len) {
+    if (core_id() != 0 || cluster_id() != 0) {
+        return;
+    }
+    const int64_t prev_count = prev_ring[0];
+    for (int64_t i = 0; i < batch_size; ++i) {
+        const int64_t req_id = cur_pairs[2 * i];
+        const int64_t dst_off = cur_pairs[2 * i + 1];
+        if (dst_off < 0 || dst_off >= input_ids_len) {
+            continue;  // defensive: never touch memory outside input_ids
+        }
+        if (input_ids[dst_off] != -1) {
+            continue;  // not a placeholder slot (e.g. prefill / chunked-prefill step): leave as-is
+        }
+        for (int64_t j = 0; j < prev_count; ++j) {
+            if (prev_ring[1 + 2 * j] == req_id) {
+                input_ids[dst_off] = static_cast<int32_t>(prev_ring[1 + 2 * j + 1]);
+                break;
+            }
+        }
+        // No match found: input_ids[dst_off] keeps its -1 placeholder (defensive fallback).
+    }
+}
+
+// write_ring: build a PERSISTENT per-req union of latest sampled tokens in the
+// destination slot `ring`, so a decode step's XpuReplaceLastToken finds each of
+// its reqs' previous token even when intervening steps ran a *different* batch
+// (continuous batching + build-ahead depth 2 interleave e.g. a bs=2 decode
+// between a req's prefill and its first decode; a plain per-step-snapshot ring
+// would leave those reqs' -1 placeholders unbacked -> emb_lookup OOB crash).
+//
+// dst `ring` and `prev_ring` are the two ping-pong slots (physically distinct):
+//   1. Carry forward prev_ring's (req_id, token) union, DROPPING any req_id in
+//      evict_ids (this step's finished reqs) so the union stays bounded to the
+//      active set.
+//   2. Overlay this step's batch: upsert each (cur_pairs[2i] req_id,
+//      sampled_tokens[i]) — refresh in place on hit, append on miss.
+//   3. ring[0] = resulting entry count.
+// ring_capacity is the max entry count the dst slot can hold; appends past it
+// are dropped (defensive — capacity is sized 2*max_batch_size, comfortably above
+// the active set once finished reqs are evicted).
+__global__ void write_ring_kernel(int64_t* ring, const int64_t* prev_ring, const int64_t* cur_pairs,
+                                   const uint32_t* sampled_tokens, const int64_t* evict_ids, int64_t evict_count,
+                                   int64_t batch_size, int64_t ring_capacity) {
+    if (core_id() != 0 || cluster_id() != 0) {
+        return;
+    }
+    const int64_t src_count = prev_ring[0];
+    int64_t dst = 0;
+    // 1. carry forward the previous union, skipping finished reqs.
+    for (int64_t j = 0; j < src_count; ++j) {
+        const int64_t rid = prev_ring[1 + 2 * j];
+        const int64_t tok = prev_ring[2 + 2 * j];
+        int64_t evicted = 0;
+        for (int64_t k = 0; k < evict_count; ++k) {
+            if (evict_ids[k] == rid) {
+                evicted = 1;
+                break;
+            }
+        }
+        if (evicted) {
+            continue;
+        }
+        if (dst >= ring_capacity) {
+            break;
+        }
+        ring[1 + 2 * dst] = rid;
+        ring[2 + 2 * dst] = tok;
+        ++dst;
+    }
+    // 2. overlay this step's batch (upsert) — skip reqs that finished this step (already evicted
+    // from the carry-forward above; re-adding them would leave stale entries that accumulate and
+    // eventually overflow the ring, causing -1 to stay in input_ids for future decode steps).
+    for (int64_t i = 0; i < batch_size; ++i) {
+        const int64_t rid = cur_pairs[2 * i];
+        int64_t evicted = 0;
+        for (int64_t k = 0; k < evict_count; ++k) {
+            if (evict_ids[k] == rid) { evicted = 1; break; }
+        }
+        if (evicted) continue;
+        const int64_t tok = static_cast<int64_t>(sampled_tokens[i]);
+        int64_t found = -1;
+        for (int64_t j = 0; j < dst; ++j) {
+            if (ring[1 + 2 * j] == rid) {
+                found = j;
+                break;
+            }
+        }
+        if (found >= 0) {
+            ring[2 + 2 * found] = tok;
+        } else if (dst < ring_capacity) {
+            ring[1 + 2 * dst] = rid;
+            ring[2 + 2 * dst] = tok;
+            ++dst;
+        }
+    }
+    // 3. publish entry count.
+    ring[0] = dst;
+}
