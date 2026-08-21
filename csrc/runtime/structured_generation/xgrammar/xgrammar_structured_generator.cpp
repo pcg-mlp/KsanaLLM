@@ -9,7 +9,9 @@
 
 namespace ksana_llm {
 
-  GrammarStructuredGenerator::GrammarStructuredGenerator(std::shared_ptr<CompiledGrammar> compiled_grammar) {
+GrammarStructuredGenerator::GrammarStructuredGenerator(std::shared_ptr<CompiledGrammar> compiled_grammar,
+                                                       StructuredConstraintType constraint_type)
+    : constraint_type_(constraint_type) {
   if (!compiled_grammar) {
     throw std::invalid_argument("Compiled grammar cannot be null");
   }
@@ -41,6 +43,12 @@ void GrammarStructuredGenerator::Rollback(int rollback_token_num) {
   matcher_->Rollback(rollback_token_num);
 }
 
+void GrammarStructuredGenerator::Reset() {
+  if (matcher_) {
+    matcher_->Reset();
+  }
+}
+
 bool GrammarStructuredGenerator::FindJumpForwardTokens(std::vector<int>& jump_tokens) {
   // For grammar constraints, jump-forward tokens are not directly supported
   jump_tokens.clear();
@@ -54,12 +62,16 @@ bool GrammarStructuredGenerator::IsTerminated() const {
   return matcher_->IsTerminated();
 }
 
+bool GrammarStructuredGenerator::IsCompleted() const {
+  return matcher_ && matcher_->IsCompleted();
+}
+
 bool GrammarStructuredGenerator::IsValid() const {
   return matcher_ && !matcher_->IsTerminated() && matcher_->IsInitialized();
 }
 
 StructuredConstraintType GrammarStructuredGenerator::GetConstraintType() const {
-  return StructuredConstraintType::JSON;
+  return constraint_type_;
 }
 
 }  // namespace ksana_llm

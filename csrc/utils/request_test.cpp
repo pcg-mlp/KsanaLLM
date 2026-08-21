@@ -49,6 +49,15 @@ TEST_F(RequestTest, SamplingConfig) {
   EXPECT_EQ(sampling_config.VerifyArgs().GetCode(), RET_INVALID_ARGUMENT);
 }
 
+TEST_F(RequestTest, StructuredOutputConstraintsAreMutuallyExclusive) {
+  SamplingConfig sampling_config;
+  sampling_config.regex = R"([0-9]+)";
+  EXPECT_TRUE(sampling_config.VerifyArgs().OK());
+
+  sampling_config.grammar = R"(root ::= [0-9]+)";
+  EXPECT_EQ(sampling_config.VerifyArgs().GetCode(), RET_INVALID_ARGUMENT);
+}
+
 TEST_F(RequestTest, RequestStatus) {
   std::shared_ptr<KsanaPythonInput> ksana_python_input = std::make_shared<KsanaPythonInput>();
   std::shared_ptr<std::unordered_map<std::string, std::string>> req_ctx =
@@ -476,6 +485,29 @@ TEST_F(RequestTest, CrossNodeReqIdCtorStructuredJsonEnabled) {
 
   EXPECT_EQ(req.structured_generator_config.constraint_type, StructuredConstraintType::JSON);
   EXPECT_EQ(req.structured_generator_config.constraint_spec, R"({"type":"object"})");
+}
+
+TEST_F(RequestTest, CrossNodeReqIdCtorStructuredConstraintTypes) {
+  struct TestCase {
+    StructuredConstraintType type;
+    std::string SamplingConfig::*field;
+    const char* spec;
+  };
+  const TestCase test_cases[] = {
+      {StructuredConstraintType::REGEX, &SamplingConfig::regex, R"([A-Z]+)"},
+      {StructuredConstraintType::GRAMMAR, &SamplingConfig::grammar, R"(root ::= "yes" | "no")"},
+      {StructuredConstraintType::STRUCTURAL_TAG, &SamplingConfig::structural_tag,
+       R"({"type":"structural_tag","format":{"type":"const_string","value":"ok"}})"},
+  };
+
+  for (const auto& test_case : test_cases) {
+    SamplingConfig sc;
+    sc.*(test_case.field) = test_case.spec;
+    sc.enable_structured_output = true;
+    Request req(1LL << IdGenerator::kSubIdBits, std::vector<int>{1}, sc);
+    EXPECT_EQ(req.structured_generator_config.constraint_type, test_case.type);
+    EXPECT_EQ(req.structured_generator_config.constraint_spec, test_case.spec);
+  }
 }
 
 TEST_F(RequestTest, CrossNodeReqIdCtorStructuredDisabledOrEmpty) {

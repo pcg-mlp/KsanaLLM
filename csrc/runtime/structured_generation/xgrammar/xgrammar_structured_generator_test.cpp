@@ -74,6 +74,29 @@ TEST_F(GrammarGeneratorCreatorTest, CreateGeneratorTest) {
   }
 }
 
+TEST_F(GrammarGeneratorCreatorTest, CreateAllConstraintTypesTest) {
+#ifdef ENABLE_CUDA
+  std::shared_ptr<GrammarBackend> backend(GrammarBackend::Create(vocab_info_));
+  ASSERT_NE(backend, nullptr);
+
+  const std::pair<StructuredConstraintType, std::string> test_cases[] = {
+      {StructuredConstraintType::REGEX, R"([a-z]+)"},
+      {StructuredConstraintType::GRAMMAR, R"(root ::= "abc")"},
+      {StructuredConstraintType::STRUCTURAL_TAG,
+       R"({"type":"structural_tag","format":{"type":"const_string","value":"abc"}})"},
+  };
+
+  for (const auto& [type, spec] : test_cases) {
+    GrammarGeneratorCreator creator(backend, type);
+    auto generator = creator.CreateGenerator(StructuredGeneratorConfig(type, spec));
+    ASSERT_NE(generator, nullptr);
+    EXPECT_EQ(generator->GetConstraintType(), type);
+  }
+#else
+  GTEST_SKIP() << "XGrammar is not supported on non-CUDA platforms";
+#endif
+}
+
 TEST_F(GrammarGeneratorCreatorTest, GeneratorTokenAcceptanceTest) {
   if (!generator_creator_) {
     GTEST_SKIP() << "GrammarGeneratorCreator not available, skipping test";
@@ -119,6 +142,60 @@ TEST_F(GrammarGeneratorCreatorTest, GeneratorTokenAcceptanceTest) {
 
   // 检查是否终止
   EXPECT_FALSE(generator->IsTerminated());
+}
+
+TEST_F(GrammarGeneratorCreatorTest, GeneratorCompletedAndResetTest) {
+#ifdef ENABLE_CUDA
+  std::shared_ptr<GrammarBackend> backend(GrammarBackend::Create(vocab_info_));
+  ASSERT_NE(backend, nullptr);
+  GrammarGeneratorCreator creator(backend, StructuredConstraintType::GRAMMAR);
+  auto generator = creator.CreateGenerator(
+      StructuredGeneratorConfig(StructuredConstraintType::GRAMMAR, R"(root ::= "abc")"));
+  ASSERT_NE(generator, nullptr);
+
+  EXPECT_FALSE(generator->IsCompleted());
+  EXPECT_FALSE(generator->IsTerminated());
+  EXPECT_TRUE(generator->AcceptToken(22));  // "abc"
+  EXPECT_TRUE(generator->IsCompleted());
+  EXPECT_FALSE(generator->IsTerminated());
+
+  generator->Reset();
+  EXPECT_FALSE(generator->IsCompleted());
+  EXPECT_FALSE(generator->IsTerminated());
+  EXPECT_TRUE(generator->AcceptToken(22));
+  EXPECT_TRUE(generator->IsCompleted());
+#else
+  GTEST_SKIP() << "XGrammar is not supported on non-CUDA platforms";
+#endif
+}
+
+TEST_F(GrammarGeneratorCreatorTest, JSONSchemaUsesXGrammarStrictModeTest) {
+#ifdef ENABLE_CUDA
+  std::shared_ptr<GrammarBackend> backend(GrammarBackend::Create(vocab_info_));
+  ASSERT_NE(backend, nullptr);
+  GrammarGeneratorCreator creator(backend, StructuredConstraintType::JSON);
+  const std::string schema =
+      R"({"type":"object","properties":{"name":{"type":"string"}}})";
+
+  auto generator = creator.CreateGenerator(
+      StructuredGeneratorConfig(StructuredConstraintType::JSON, schema));
+  ASSERT_NE(generator, nullptr);
+
+  // {"age":123} uses a property not declared by the schema. XGrammar's
+  // backend strict mode must reject it. OpenAI request-level strict fields do
+  // not alter this compiler policy.
+  const std::vector<int> extra_property_object = {10, 7, 5, 7, 8, 20, 11};
+  bool accepted_all = true;
+  for (int token_id : extra_property_object) {
+    if (!generator->AcceptToken(token_id)) {
+      accepted_all = false;
+      break;
+    }
+  }
+  EXPECT_FALSE(accepted_all);
+#else
+  GTEST_SKIP() << "XGrammar is not supported on non-CUDA platforms";
+#endif
 }
 
 TEST_F(GrammarGeneratorCreatorTest, GeneratorBitmaskTest) {

@@ -26,6 +26,12 @@ Status SamplingConfig::VerifyArgs() {
                   "no_repeat_ngram_size/encoder_no_repeat_ngram_size/decoder_no_repeat_ngram_size"
                   " can not be used at the same time");
   }
+  const int structured_constraint_count = !json_schema.empty() + !regex.empty() + !grammar.empty() +
+                                          !structural_tag.empty();
+  if (structured_constraint_count > 1) {
+    return Status(RET_INVALID_ARGUMENT,
+                  "json_schema/regex/grammar/structural_tag can not be used at the same time");
+  }
   return Status();
 }
 
@@ -35,20 +41,58 @@ size_t OutputGroupSize(const SamplingConfig& sc) {
   return std::max(std::max(sc.num_beams, sc.num_return_sequences), 1);
 }
 
+const char* StructuredConstraintTypeName(StructuredConstraintType type) {
+  switch (type) {
+    case StructuredConstraintType::NONE:
+      return "NONE";
+    case StructuredConstraintType::JSON:
+      return "JSON";
+    case StructuredConstraintType::REGEX:
+      return "REGEX";
+    case StructuredConstraintType::GRAMMAR:
+      return "GRAMMAR";
+    case StructuredConstraintType::STRUCTURAL_TAG:
+      return "STRUCTURAL_TAG";
+  }
+  return "UNKNOWN";
+}
+
 void ApplyStructuredGeneratorConfig(Request* req) {
   if (req == nullptr) {
     return;
   }
-  if (!req->sampling_config.json_schema.empty() && req->sampling_config.enable_structured_output) {
-    req->structured_generator_config.constraint_type = StructuredConstraintType::JSON;
-    req->structured_generator_config.constraint_spec = req->sampling_config.json_schema;
-    KLLM_LOG_DEBUG << "Request " << req->req_id << " structured_generator_config set: "
-                   << "constraint_type=JSON, constraint_spec=" << req->structured_generator_config.constraint_spec;
-  } else {
-    KLLM_LOG_DEBUG << "Request " << req->req_id << " no structured output: "
+  req->structured_generator_config = {};
+  if (!req->sampling_config.enable_structured_output) {
+    KLLM_LOG_DEBUG << "Request " << req->req_id << " structured output disabled; cleared structured generator config: "
                    << "json_schema.empty()=" << req->sampling_config.json_schema.empty()
-                   << ", enable_structured_output=" << req->sampling_config.enable_structured_output;
+                   << ", regex.empty()=" << req->sampling_config.regex.empty()
+                   << ", grammar.empty()=" << req->sampling_config.grammar.empty()
+                   << ", structural_tag.empty()=" << req->sampling_config.structural_tag.empty();
+    return;
   }
+
+  const std::pair<StructuredConstraintType, const std::string*> constraints[] = {
+      {StructuredConstraintType::JSON, &req->sampling_config.json_schema},
+      {StructuredConstraintType::REGEX, &req->sampling_config.regex},
+      {StructuredConstraintType::GRAMMAR, &req->sampling_config.grammar},
+      {StructuredConstraintType::STRUCTURAL_TAG, &req->sampling_config.structural_tag},
+  };
+  for (const auto& [type, spec] : constraints) {
+    if (!spec->empty()) {
+      req->structured_generator_config = StructuredGeneratorConfig(type, *spec);
+      KLLM_LOG_DEBUG << "Request " << req->req_id << " structured_generator_config set: "
+                     << "constraint_type=" << StructuredConstraintTypeName(type)
+                     << ", constraint_spec_size=" << spec->size() << ", constraint_spec=" << *spec;
+      return;
+    }
+  }
+
+  KLLM_LOG_DEBUG << "Request " << req->req_id
+                 << " structured output enabled but no constraint spec was provided: "
+                 << "json_schema.empty()=" << req->sampling_config.json_schema.empty()
+                 << ", regex.empty()=" << req->sampling_config.regex.empty()
+                 << ", grammar.empty()=" << req->sampling_config.grammar.empty()
+                 << ", structural_tag.empty()=" << req->sampling_config.structural_tag.empty();
 }
 
 }  // namespace

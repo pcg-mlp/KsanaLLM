@@ -26,6 +26,7 @@ from openaiapi.openai_protocol import (
     ChoiceLogprobs, ChatCompletionTokenLogprob, TopLogprob
 )
 from openaiapi.utils import is_multimodal_messages
+from openaiapi.tool_parsers.structural_tag import build_model_tool_structural_tag
 import numpy as np
 
 
@@ -107,6 +108,46 @@ class RequestConverter:
                 + "schema specification"
             )
         return schema_str
+
+    def convert_structural_tag2str(
+        self, structural_tag: Union[dict, str, BaseModel]
+    ) -> str:
+        """Serialize a native structural tag, converting the legacy API shape."""
+        if isinstance(structural_tag, str):
+            return structural_tag
+        if isinstance(structural_tag, BaseModel):
+            structural_tag = structural_tag.model_dump(by_alias=True,
+                                                        exclude_none=True)
+
+        if "structures" in structural_tag and "triggers" in structural_tag:
+            tags = []
+            for structure in structural_tag["structures"]:
+                begin = structure.get("begin")
+                end = structure.get("end")
+                if begin is None or end is None:
+                    raise ValueError(
+                        "structural_tag structure missing required 'begin' "
+                        f"or 'end' field: {structure!r}"
+                    )
+                tags.append({
+                    "type": "tag",
+                    "begin": begin,
+                    "content": {
+                        "type": "json_schema",
+                        "json_schema": structure.get("schema") or {},
+                    },
+                    "end": end,
+                })
+            structural_tag = {
+                "type": "structural_tag",
+                "format": {
+                    "type": "triggered_tags",
+                    "triggers": structural_tag["triggers"],
+                    "tags": tags,
+                    "at_least_one": structural_tag.get("at_least_one", False),
+                },
+            }
+        return orjson.dumps(structural_tag).decode()
 
     def convert_to_ksana_format(
         self,
@@ -236,17 +277,42 @@ class RequestConverter:
         if config["num_return_sequences"] > config["num_beams"]:
             config["num_return_sequences"] = config["num_beams"]
 
-        json_tool = self._get_guided_json_from_tool(request)
-        # handle response_format
-        # Notice: If response_format is not Null, enable_structured_output is always True
-        if hasattr(request, 'response_format') and request.response_format:
+        model_tool_structural_tag = self._get_model_tool_structural_tag(request)
+        json_tool = (None if model_tool_structural_tag is not None else
+                     self._get_guided_json_from_tool(request))
+        response_format = getattr(request, 'response_format', None)
+        structured_outputs = getattr(request, 'structured_outputs', None)
+        structured_output_regex = getattr(request, 'structured_output_regex',
+                                          None)
+        if model_tool_structural_tag is not None:
+            # Model-native tool protocols must take precedence over the legacy
+            # generic JSON wrapper and response_format.  The structural tag
+            # already describes the complete text/tool choice state machine.
             config["enable_structured_output"] = True
-            if(request.response_format.type == "json_schema"):
-                schema_ = request.response_format.json_schema.schema_
+            config["structural_tag"] = model_tool_structural_tag
+        elif response_format is not None and response_format.type != "text":
+            config["enable_structured_output"] = True
+            if response_format.type == "json_schema":
+                schema_ = response_format.json_schema.schema_
                 assert schema_ is not None, "json_schema should not be None"
                 config["json_schema"] = self.convert_json_schema2str(schema_)
-            elif(request.response_format.type == "json_object"):
+            elif response_format.type == "json_object":
                 config["json_schema"] = '{"type": "object"}'
+            elif response_format.type == "structural_tag":
+                config["structural_tag"] = self.convert_structural_tag2str(response_format)
+        elif structured_outputs is not None:
+            config["enable_structured_output"] = True
+            if structured_outputs.json_schema is not None:
+                config["json_schema"] = self.convert_json_schema2str(structured_outputs.json_schema)
+            elif structured_outputs.regex is not None:
+                config["regex"] = structured_outputs.regex
+            elif structured_outputs.grammar is not None:
+                config["grammar"] = structured_outputs.grammar
+            else:
+                config["structural_tag"] = self.convert_structural_tag2str(structured_outputs.structural_tag)
+        elif structured_output_regex is not None:
+            config["enable_structured_output"] = True
+            config["regex"] = structured_output_regex
         elif json_tool is not None:
             config["enable_structured_output"] = True
             config["json_schema"] = self.convert_json_schema2str(json_tool)
@@ -260,23 +326,35 @@ class RequestConverter:
 
         return config
 
+    def _get_model_tool_structural_tag(self, request) -> Optional[str]:
+        return build_model_tool_structural_tag(
+            request,
+            tool_parser_name=getattr(self.config, "tool_call_parser", None),
+            reasoning_parser_name=getattr(self.config, "reasoning_parser", None),
+            enable_auto_tool_choice=getattr(
+                self.config, "enable_auto_tool_choice", False
+            ),
+        )
+
     def _get_guided_json_from_tool(
             self, request) -> Optional[Union[str, dict, BaseModel]]:
+        tool_choice = getattr(request, 'tool_choice', None)
+        tools = getattr(request, 'tools', None)
         # user has chosen to not use any tool
-        if request.tool_choice == "none" or request.tools is None:
+        if tool_choice == "none" or tools is None:
             return None
 
         # user has chosen to use a named tool
-        if type(request.tool_choice) is ChatCompletionNamedToolChoiceParam:
-            tool_name = request.tool_choice.function.name
-            tools = {tool.function.name: tool.function for tool in request.tools}
-            if tool_name not in tools:
+        if type(tool_choice) is ChatCompletionNamedToolChoiceParam:
+            tool_name = tool_choice.function.name
+            tools_by_name = {tool.function.name: tool.function for tool in tools}
+            if tool_name not in tools_by_name:
                 raise ValueError(
                     f"Tool '{tool_name}' has not been passed in `tools`.")
-            tool = tools[tool_name]
+            tool = tools_by_name[tool_name]
             return tool.parameters
 
-        if request.tool_choice == "required":
+        if tool_choice == "required":
             # Pydantic schema generation cannot be used since the JSON schema
             # has to be constructed for a specific instantiation of a tool list
             # so that parameters of a function are correctly generated
@@ -324,10 +402,10 @@ class RequestConverter:
                 "minItems": 1,
                 "items": {
                     "type": "object",
-                    "anyOf": [get_tool_schema(tool) for tool in request.tools]
+                    "anyOf": [get_tool_schema(tool) for tool in tools]
                 }
             }
-            json_schema_defs = get_tool_schema_defs(request.tools)
+            json_schema_defs = get_tool_schema_defs(tools)
             if json_schema_defs:
                 json_schema["$defs"] = json_schema_defs
             return json_schema

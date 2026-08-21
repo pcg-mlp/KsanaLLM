@@ -27,8 +27,10 @@ std::shared_ptr<StructuredGeneratorInterface> StructuredGeneratorFactory::Create
   }
 
   auto inner_generator = it->second->CreateGenerator(config);
-  // Wrap with ReasoningStructuredGenerator if reasoning mode is enabled
-  if (IsReasoningModeEnabled() && inner_generator) {
+  // A structural tag is a complete state machine and owns its reasoning/tool
+  // transitions. Other constraint types still need the legacy reasoning prefix.
+  if (IsReasoningModeEnabled() && inner_generator &&
+      config.constraint_type != StructuredConstraintType::STRUCTURAL_TAG) {
     KLLM_LOG_DEBUG << "Structured generator enable thinking: " << enable_thinking
                    << ", think_end_token_id: " << vocab_info_.think_end_token_id;
     return std::make_shared<ReasoningStructuredGenerator>(inner_generator, vocab_info_.think_end_token_id,

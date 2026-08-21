@@ -16,6 +16,10 @@ from .llama_tool_parser import Llama3JsonToolParser
 from .mistral_tool_parser import MistralToolParser
 from .glm47_moe_tool_parser import Glm47MoeToolParser
 from .pythonic_tool_parser import PythonicToolParser
+from .structural_tag import (
+    build_model_tool_structural_tag,
+    uses_model_tool_structural_tag,
+)
 
 __all__ = [
     "ToolParser", "ToolParserManager", "MistralToolParser",
@@ -24,4 +28,6 @@ __all__ = [
     "PythonicToolParser", "DeepSeekV3ToolParser", 
     "KimiK2ToolParser", "DeepSeekV31ToolParser",
     "DeepSeekV32ToolParser", "DeepSeekV4ToolParser", "Glm47MoeToolParser",
+    "build_model_tool_structural_tag",
+    "uses_model_tool_structural_tag",
 ]

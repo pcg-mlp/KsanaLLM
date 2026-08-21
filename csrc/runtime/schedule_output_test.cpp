@@ -70,6 +70,9 @@ std::shared_ptr<Request> BuildRequest(std::shared_ptr<KsanaPythonInput>& input) 
   input->sampling_config.topk = 3;
   input->sampling_config.temperature = 0.7f;
   input->sampling_config.stop_token_ids = {7, 9};
+  input->sampling_config.structural_tag =
+      R"({"type":"structural_tag","format":{"type":"const_string","value":"ok"}})";
+  input->sampling_config.enable_structured_output = true;
   input->request_target["logits"] = BuildTargetDescribe();
 
   auto ctx = std::make_shared<std::unordered_map<std::string, std::string>>();
@@ -169,6 +172,7 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   auto input = std::make_shared<KsanaPythonInput>();
   auto request = BuildRequest(input);
   auto full_req = BuildInferRequest(request, 1001, false);
+  full_req->need_recreate_generator = true;
   auto patch_req = BuildInferRequest(request, 1002, true);
   // pd_v2 split-fuse: default is true; set false to prove the non-default
   // value survives both the full-req and patch serialize/deserialize paths.
@@ -229,10 +233,17 @@ TEST(ScheduleOutputTest, SerializeInferRequestAndPatch) {
   EXPECT_EQ(exec_req->sampling_token_num, full_req->sampling_token_num);
   EXPECT_EQ(exec_req->incremental_decoded_str, full_req->incremental_decoded_str);
   EXPECT_EQ(exec_req->need_create_generator, full_req->need_recreate_generator);
+  EXPECT_EQ(exec_req->structured_generator_config.constraint_type,
+            full_req->structured_generator_config.constraint_type);
+  EXPECT_EQ(exec_req->structured_generator_config.constraint_spec,
+            full_req->structured_generator_config.constraint_spec);
   EXPECT_TRUE(CheckRequestTarget(full_req->request_target, exec_req->request_target));
   EXPECT_EQ(exec_req->sampling_config.topk, full_req->sampling_config.topk);
   EXPECT_EQ(exec_req->sampling_config.temperature, full_req->sampling_config.temperature);
   EXPECT_EQ(exec_req->sampling_config.stop_token_ids, full_req->sampling_config.stop_token_ids);
+  EXPECT_EQ(exec_req->sampling_config.structural_tag, full_req->sampling_config.structural_tag);
+  EXPECT_EQ(exec_req->sampling_config.enable_structured_output,
+            full_req->sampling_config.enable_structured_output);
 
   const auto& patch = dst.running_req_patches[0];
   EXPECT_EQ(patch->req_id, patch_req->req_id);

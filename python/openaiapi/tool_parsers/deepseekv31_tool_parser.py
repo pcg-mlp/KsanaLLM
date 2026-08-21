@@ -13,6 +13,8 @@ from openaiapi.openai_protocol import (ChatCompletionRequest,
                                         FunctionCall, ToolCall)
 from openaiapi.tool_parsers.abstract_tool_parser import (
     ToolParser, ToolParserManager)
+from openaiapi.tool_parsers.structural_tag import (
+    uses_model_tool_structural_tag)
 
 from openaiapi.transformers_utils.chat_utils import make_tool_call_id
 
@@ -23,6 +25,9 @@ logger = get_logger(__name__)
 
 @ToolParserManager.register_module("deepseek_v31")
 class DeepSeekV31ToolParser(ToolParser):
+
+    structural_tag_model = "deepseek_v3_1"
+    EOS_Token: str = "<｜end▁of▁sentence｜>"
     tool_calls_start_token: str = "<｜tool▁calls▁begin｜>"
     tool_calls_end_token: str = "<｜tool▁calls▁end｜>"
 
@@ -70,6 +75,18 @@ class DeepSeekV31ToolParser(ToolParser):
                 "start/end tokens in the tokenizer!"
             )
 
+    def adjust_request(
+        self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        request = super().adjust_request(request)
+        if uses_model_tool_structural_tag(
+                request,
+                enable_auto_tool_choice=True,
+                structural_tag_model=self.structural_tag_model):
+            # Keep native tool-protocol markers visible to the streaming
+            # parser only when XGrammar emits the model-native structural tag.
+            request.skip_special_tokens = False
+        return request
+
     def extract_tool_start_ids(self, input_ids: Sequence[int]) -> Sequence[int]:
 
         if self.tool_call_start_token_id not in input_ids:
@@ -83,6 +100,9 @@ class DeepSeekV31ToolParser(ToolParser):
         model_output: str,
         request: ChatCompletionRequest,
     ) -> ExtractedToolCallInformation:
+        if self.model_structural_tag_enabled:
+            model_output = model_output.removesuffix(self.EOS_Token)
+
         # sanity check; avoid unnecessary processing
         if self.tool_calls_start_token not in model_output:
             return ExtractedToolCallInformation(
@@ -135,6 +155,12 @@ class DeepSeekV31ToolParser(ToolParser):
         logger.debug("previous_text: %s", previous_text)
         logger.debug("delta_text: %s", delta_text)
         logger.debug("delta_token_ids: %s", delta_token_ids)
+
+        if self.model_structural_tag_enabled:
+            current_text = current_text.removesuffix(self.EOS_Token)
+            return self.extract_structural_tag_streaming(
+                previous_text, current_text, request)
+
         # preprocess to parser "xxx<｜tool▁call▁end｜><｜tool▁call▁begin｜>xxx" case
         if self.temp_text:
             logger.warning("temp_text found: %s", self.temp_text)
@@ -482,3 +508,8 @@ class DeepSeekV31ToolParser(ToolParser):
         except (IndexError, ValueError, AttributeError, TypeError, KeyError):
             logger.exception("Error trying to handle streaming tool call")
             return None  # do not stream a delta. skip this token ID.
+
+    def flush_streaming(self, current_text: str) -> Union[DeltaMessage, None]:
+        if self.model_structural_tag_enabled:
+            current_text = current_text.removesuffix(self.EOS_Token)
+        return super().flush_streaming(current_text)

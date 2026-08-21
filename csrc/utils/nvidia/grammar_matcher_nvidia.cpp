@@ -71,12 +71,27 @@ void GrammarMatcherWrapperNvidia::Rollback(int rollback_token_num) {
   KLLM_LOG_DEBUG << "Rolled back " << rollback_token_num << " tokens";
 }
 
+void GrammarMatcherWrapperNvidia::Reset() {
+  if (matcher_ == nullptr) {
+    KLLM_LOG_ERROR << "Grammar matcher is null, cannot reset";
+    return;
+  }
+  matcher_->Reset();
+}
+
 bool GrammarMatcherWrapperNvidia::IsTerminated() const {
   if (matcher_ == nullptr) {
     KLLM_LOG_ERROR << "Grammar matcher is null, assuming terminated";
     return true;
   }
   return matcher_->IsTerminated();
+}
+
+bool GrammarMatcherWrapperNvidia::IsCompleted() const {
+  if (matcher_ == nullptr) {
+    return false;
+  }
+  return matcher_->IsCompleted();
 }
 
 }  // namespace ksana_llm

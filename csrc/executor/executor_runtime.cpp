@@ -63,9 +63,24 @@ Status ExecutorRuntime::InitializeStructuredGeneratorFactory() {
       KLLM_LOG_INFO << "Created structured generator factory with vocab_size: " << vocab_info.vocab_size
                     << ", think_end_token_id: " << vocab_info.think_end_token_id;
 
-      // Create GrammarGeneratorCreator with VocabInfo reference
-      auto creator = std::make_unique<GrammarGeneratorCreator>(vocab_info);
-      structured_generator_factory_->RegisterCreator(StructuredConstraintType::JSON, std::move(creator));
+      auto owned_grammar_backend = GrammarBackend::Create(vocab_info);
+      if (!owned_grammar_backend) {
+        // Keep an empty factory on platforms where XGrammar is unavailable. This
+        // allows ordinary inference to start while constrained requests fail
+        // explicitly with an unsupported-constraint error.
+        KLLM_LOG_WARNING << "Grammar backend is unavailable; structured constraints are disabled";
+        generation_controller_->SetStructuredGeneratorFactory(structured_generator_factory_);
+        return Status();
+      }
+      // All constraint creators for this model share one compiler and its
+      // cache; the constraint type only selects the compile entry point.
+      std::shared_ptr<GrammarBackend> grammar_backend(std::move(owned_grammar_backend));
+      for (const auto constraint_type : {StructuredConstraintType::JSON, StructuredConstraintType::REGEX,
+                                         StructuredConstraintType::GRAMMAR,
+                                         StructuredConstraintType::STRUCTURAL_TAG}) {
+        structured_generator_factory_->RegisterCreator(
+            constraint_type, std::make_unique<GrammarGeneratorCreator>(grammar_backend, constraint_type));
+      }
       KLLM_LOG_INFO << "Structured generator factory initialized successfully";
       generation_controller_->SetStructuredGeneratorFactory(structured_generator_factory_);
     } catch (const std::exception& e) {

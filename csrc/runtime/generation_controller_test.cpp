@@ -34,13 +34,17 @@ class MockStructuredGenerator : public StructuredGeneratorInterface {
   bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
 
   void Rollback(int rollback_token_num) override {
-    KLLM_CHECK(static_cast<size_t>(rollback_token_num) < expecting_idx_);
+    KLLM_CHECK(static_cast<size_t>(rollback_token_num) <= expecting_idx_);
     expecting_idx_ -= rollback_token_num;
   }
+
+  void Reset() override { expecting_idx_ = 0; }
 
   bool FindJumpForwardTokens(std::vector<int>& jump_tokens) override { return false; }
 
   bool IsTerminated() const override { return false; }
+
+  bool IsCompleted() const override { return expecting_idx_ == expected_output_tokens_.size(); }
 
   bool IsValid() const override { return true; }
 
@@ -223,9 +227,44 @@ TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorWithReasoning) {
   EXPECT_FALSE(reasoner_generator->AcceptToken(15));  // 不符合期望的 token
   EXPECT_TRUE(reasoner_generator->AcceptToken(20));   // 第二个期望的 token
   EXPECT_TRUE(reasoner_generator->AcceptToken(30));   // 第三个期望的 token
+  EXPECT_TRUE(reasoner_generator->IsCompleted());
+  EXPECT_FALSE(reasoner_generator->IsTerminated());
 
   // 验证约束类型
   EXPECT_EQ(reasoner_generator->GetConstraintType(), StructuredConstraintType::REGEX);
+}
+
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorReset) {
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{10});
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, 999, true);
+
+  EXPECT_FALSE(reasoner_generator->IsCompleted());
+  EXPECT_TRUE(reasoner_generator->AcceptToken(1));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
+  EXPECT_TRUE(reasoner_generator->IsCompleted());
+
+  reasoner_generator->Reset();
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_FALSE(reasoner_generator->IsCompleted());
+  EXPECT_FALSE(reasoner_generator->IsTerminated());
+
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
+  EXPECT_TRUE(reasoner_generator->IsCompleted());
+}
+
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorResetPreservesDisabledReasoning) {
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{10});
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, 999, false);
+
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
+  EXPECT_TRUE(reasoner_generator->IsCompleted());
+  reasoner_generator->Reset();
+
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_FALSE(reasoner_generator->IsCompleted());
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
 }
 
 // 测试没有思考内容的模型 - 直接使用Xgrammar 作为约束解码后端
@@ -305,6 +344,57 @@ TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorRollback) {
 
   // 测试负数回滚应该抛出异常
   EXPECT_THROW(reasoner_generator->Rollback(-1), std::invalid_argument);
+}
+
+TEST_F(GenerationControllerTest, ReasoningStructuredGeneratorRollbackAcrossBoundary) {
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{10, 20});
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, 999, true);
+
+  EXPECT_TRUE(reasoner_generator->AcceptToken(1));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(2));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(20));
+
+  // Roll back both constrained tokens and the reasoning boundary itself.
+  EXPECT_NO_THROW(reasoner_generator->Rollback(3));
+  EXPECT_TRUE(reasoner_generator->IsInReasoningPhase());
+
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(10));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(20));
+}
+
+TEST_F(GenerationControllerTest, ThinkEndTokenIsConstrainedWhenReasoningIsDisabled) {
+  auto inner_generator = std::make_shared<MockStructuredGenerator>(std::vector<int>{999});
+  auto reasoner_generator = std::make_shared<ReasoningStructuredGenerator>(inner_generator, 999, false);
+
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+  EXPECT_FALSE(reasoner_generator->IsInReasoningPhase());
+  EXPECT_NO_THROW(reasoner_generator->Rollback(1));
+  EXPECT_TRUE(reasoner_generator->AcceptToken(999));
+}
+
+TEST_F(GenerationControllerTest, StructuralTagBypassesLegacyReasoningWrapper) {
+  VocabInfo vocab_info;
+  vocab_info.think_end_token_id = 999;
+  auto factory = std::make_shared<StructuredGeneratorFactory>(vocab_info);
+  const std::vector<int> expected_output_tokens = {1};
+  factory->RegisterCreator(StructuredConstraintType::REGEX,
+                           std::make_unique<MockGeneratorCreator>(expected_output_tokens));
+  factory->RegisterCreator(StructuredConstraintType::STRUCTURAL_TAG,
+                           std::make_unique<MockGeneratorCreator>(expected_output_tokens));
+
+  auto regex_generator = factory->CreateGenerator(
+      StructuredGeneratorConfig(StructuredConstraintType::REGEX, "[0-9]+"), true);
+  EXPECT_NE(std::dynamic_pointer_cast<ReasoningStructuredGenerator>(regex_generator), nullptr);
+
+  auto structural_tag_generator = factory->CreateGenerator(
+      StructuredGeneratorConfig(StructuredConstraintType::STRUCTURAL_TAG,
+                                R"({"type":"structural_tag","format":{"type":"const_string","value":"1"}})"),
+      true);
+  EXPECT_EQ(std::dynamic_pointer_cast<ReasoningStructuredGenerator>(structural_tag_generator), nullptr);
 }
 
 // 测试 FindJumpForwardTokens - 推理阶段不支持跳跃前进

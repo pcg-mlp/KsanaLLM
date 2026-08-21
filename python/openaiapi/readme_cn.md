@@ -174,7 +174,12 @@ curl -X POST "http://localhost:8080/v1/chat/completions" \
 
 ```
 
-tool_choice 为 required 时，需要约束解码的支持，已在开发计划中
+对于已接入 XGrammar 模型 Structural Tag 的 ToolParser，`tool_choice=required`、
+指定函数以及 `tools[].function.strict=true` 已支持模型原生协议约束。需要在服务启动时
+配置 `--enable-auto-tool-choice` 和对应的 `--tool-call-parser`。
+
+XGrammar v0.2.5 的组件关系、Strict 完整链路、模型映射和扩展要求请参阅
+[XGrammar 结构化生成维护说明](../../csrc/runtime/structured_generation/README.md)。
 
 ## 其他功能
 

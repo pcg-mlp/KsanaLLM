@@ -3,6 +3,7 @@
 ==============================================================================*/
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -13,9 +14,10 @@ namespace ksana_llm {
 /*!
  * \brief Wrapper for structured generators that handles reasoning content.
  *
- * This wrapper delays the activation of the underlying constraint generator
- * until the reasoning phase is complete (detected by think_end_token_id).
- * During the reasoning phase, all tokens are accepted without constraint.
+ * Delays the inner constraint generator until think_end_token_id is accepted.
+ * Reasoning tokens and think_end are not forwarded to inner; only the
+ * constrained suffix is. Rollback therefore peels newest-first across the
+ * three accepted segments documented on the counters below.
  */
 class ReasoningStructuredGenerator : public StructuredGeneratorInterface {
  public:
@@ -37,8 +39,10 @@ class ReasoningStructuredGenerator : public StructuredGeneratorInterface {
   bool AcceptToken(int token_id) override;
   bool FillNextTokenBitmask(void* next_token_bitmask) override;
   void Rollback(int rollback_token_num) override;
+  void Reset() override;
   bool FindJumpForwardTokens(std::vector<int>& jump_tokens) override;
   bool IsTerminated() const override;
+  bool IsCompleted() const override;
   bool IsValid() const override;
   StructuredConstraintType GetConstraintType() const override;
 
@@ -51,7 +55,13 @@ class ReasoningStructuredGenerator : public StructuredGeneratorInterface {
  private:
   std::shared_ptr<StructuredGeneratorInterface> inner_generator_;
   int think_end_token_id_;
-  bool is_in_reasoning_;
+  const bool start_in_reasoning_;
+  bool is_in_reasoning_;  // bitmask / jump / terminated; restored when think_end is peeled
+  // Accepted segments, oldest → newest. Rollback peels the reverse order so
+  // inner->Rollback() only covers generation_token_count_.
+  size_t reasoning_token_count_ = 0;   // unconstrained body, not sent to inner
+  bool reasoning_end_seen_ = false;    // single think_end token, not sent to inner
+  size_t generation_token_count_ = 0;  // constrained tokens, sent to inner
 };
 
 }  // namespace ksana_llm

@@ -415,6 +415,10 @@ class KsanaLLMEngine:
                                                          "enable_structured_output", False),
             json_schema=_get_sampling_value(sampling_config,
                                             "json_schema", ""),
+            regex=_get_sampling_value(sampling_config, "regex", ""),
+            grammar=_get_sampling_value(sampling_config, "grammar", ""),
+            structural_tag=_get_sampling_value(sampling_config,
+                                               "structural_tag", ""),
             num_beams=_get_sampling_value(sampling_config,
                                           "num_beams", 1),
             num_return_sequences=_get_sampling_value(sampling_config,
@@ -528,6 +532,15 @@ class KsanaLLMEngine:
         )
         sampling_config.json_schema = _get_generation_value(
             generation_config, "json_schema", ""
+        )
+        sampling_config.regex = _get_generation_value(
+            generation_config, "regex", ""
+        )
+        sampling_config.grammar = _get_generation_value(
+            generation_config, "grammar", ""
+        )
+        sampling_config.structural_tag = _get_generation_value(
+            generation_config, "structural_tag", ""
         )
         sampling_config.length_penalty = _get_generation_value(
             generation_config, "length_penalty", 1.0

@@ -26,6 +26,9 @@ SamplingConfig WireToSamplingConfig(const SamplingConfigWire& w) {
   sc.stop_strings = w.stop_strings;
   sc.ignore_eos = w.ignore_eos;
   sc.json_schema = w.json_schema;
+  sc.regex = w.regex;
+  sc.grammar = w.grammar;
+  sc.structural_tag = w.structural_tag;
   sc.enable_structured_output = w.enable_structured_output;
   sc.enable_thinking = w.enable_thinking;
   sc.ptp_token_num = w.ptp_token_num;

@@ -8,16 +8,18 @@ namespace ksana_llm {
  * \\brief The type of structured generation constraint.
  */
 enum class StructuredConstraintType {
-  NONE,  // No constraint
-  JSON,  // JSON schema constraint
-  REGEX  // Regular expression constraint
+  NONE,            // No constraint
+  JSON,            // JSON schema constraint
+  REGEX,           // Regular expression constraint
+  GRAMMAR,         // EBNF grammar constraint
+  STRUCTURAL_TAG,  // XGrammar structural tag constraint
 };
 /*!
  * \\brief Configuration for structured generator creation.
  */
 struct StructuredGeneratorConfig {
   StructuredConstraintType constraint_type = StructuredConstraintType::NONE;
-  std::string constraint_spec;  // JSON schema, regex etc.
+  std::string constraint_spec;  // JSON schema, regex, EBNF grammar, or structural tag JSON.
   StructuredGeneratorConfig() = default;
   StructuredGeneratorConfig(StructuredConstraintType type, const std::string& spec)
       : constraint_type(type), constraint_spec(spec) {
@@ -74,6 +76,9 @@ class StructuredGeneratorInterface {
    */
   virtual void Rollback(int rollback_token_num) = 0;
 
+  /*! \brief Reset the generator to its initial state. */
+  virtual void Reset() = 0;
+
   /*!
    * \\brief Try to find the jump-forward tokens for jump-forward decoding.
    * \\param jump_tokens The vector to store the jump-forward tokens.
@@ -86,6 +91,8 @@ class StructuredGeneratorInterface {
    * \\return Whether the generator is terminated.
    */
   virtual bool IsTerminated() const = 0;
+  /*! \brief Check whether the constraint is complete before a stop token. */
+  virtual bool IsCompleted() const = 0;
   /*!
    * \\brief Check if the current generation is valid according to the constraint.
    * \\return Whether the current generation satisfies the constraint.

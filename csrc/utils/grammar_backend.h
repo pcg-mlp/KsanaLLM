@@ -29,12 +29,16 @@ class GrammarBackend {
 
   // Pure virtual methods that must be implemented by derived classes
   virtual std::shared_ptr<CompiledGrammar> CompileJSONSchema(const std::string& schema) = 0;
+  virtual std::shared_ptr<CompiledGrammar> CompileRegex(const std::string& regex) = 0;
+  virtual std::shared_ptr<CompiledGrammar> CompileGrammar(const std::string& grammar) = 0;
+  virtual std::shared_ptr<CompiledGrammar> CompileStructuralTag(const std::string& structural_tag) = 0;
   virtual std::shared_ptr<GrammarMatcherWrapper> CreateMatcher(std::shared_ptr<CompiledGrammar> grammar) = 0;
   virtual const xgrammar::TokenizerInfo& GetTokenizerInfo() const = 0;
   virtual bool IsInitialized() const = 0;
 
-  // Factory method to create appropriate backend implementation
-  // Returns nullptr if creation fails.
+  // Create the backend with unique ownership. Callers decide whether the
+  // backend should subsequently be shared. Returns nullptr on unsupported
+  // platforms.
   static std::unique_ptr<GrammarBackend> Create(const VocabInfo& vocab_info);
 
  protected:

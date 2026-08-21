@@ -43,7 +43,9 @@ from openaiapi.openai_protocol import (
 from openaiapi.request_converter import RequestConverter
 from openaiapi.transformers_utils.chat_utils import ChatTemplateContentFormatOption
 from openaiapi.tool_parsers import ToolParser, ToolParserManager
+from openaiapi.tool_parsers.structural_tag import uses_model_tool_structural_tag
 from openaiapi.reasoning import ReasoningParser, ReasoningParserManager
+from openaiapi.utils import get_enable_thinking_from_request
 from openaiapi.transformers_utils.chat_utils import (
     AnyTokenizer, make_tool_call_id, get_history_tool_calls_cnt)
 from utilize.utils import partial_json_loads
@@ -124,41 +126,6 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         formatted_messages = [self._format_message(msg.role, msg.content) for msg in messages]
         formatted_messages.append("Assistant:")
         return "\n".join(formatted_messages)
-    
-    # Reference:
-    # https://github.com/sgl-project/sglang/blob/v0.5.9/python/sglang/srt/entrypoints/openai/serving_chat.py#L1210
-    def _get_enable_thinking_from_request(self, request: ChatCompletionRequest) -> bool:
-        """Extracts the think flag from request chat_template_kwargs.
-
-        NOTE: This parameter is only useful for models that support enable_thinking
-              (for qwen3, glm45) or thinking (for deepseek_v3) flag.
-
-        Args:
-            request_obj: The request object (or an item from a list of requests).
-        Returns:
-            The boolean value indicates whether the thinking process is enabled.
-        """
-        if not self.config.reasoning_parser:
-            return False
-        if self.config.reasoning_parser in ["deepseek_v3", "deepseek_v4"]:
-            # Models that require explicit enable thinking (thinking=True)
-            return (
-                request.chat_template_kwargs is not None
-                and request.chat_template_kwargs.get("thinking") is True
-            )
-        if self.config.reasoning_parser in ["kimi_k2"]:
-            # Models that thinking by default, and can be disabled by setting thinking=False
-            return (
-                not request.chat_template_kwargs
-                or request.chat_template_kwargs.get("thinking") is not False
-            )
-        if self.config.reasoning_parser in ["qwen3", "glm45"]:
-            # Models that thinking by default, and can be disabled by setting enable_thinking=False
-            return (
-                not request.chat_template_kwargs
-                or request.chat_template_kwargs.get("enable_thinking") is not False
-            )
-        return True
 
     def _convert_to_ksana_request(self, request: ChatCompletionRequest) -> Dict[str, Any]:
 
@@ -252,7 +219,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             current_output_token=current_output_token,
             num_output_top_logprobs=num_output_top_logprobs
         )
-    
+
     async def _chat_completion_stream_generator(
         self,
         ksana_output_iterator: AsyncGenerator,
@@ -291,6 +258,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         tool_choice_auto = (
             not tool_choice_function_name
             and self._should_stream_with_auto_tool_parsing(request))
+        # Model tool structural tag (required/named, or auto+strict): output is the
+        # full model-native protocol (not legacy bare JSON), so parse with ToolParser.
+        uses_model_structural_tag = self._uses_model_structural_tag(request)
 
         # Judge if we need to judge accumulated tokens
         previous_token_ids = []
@@ -307,7 +277,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         
         previous_texts = [""] * num_choices
         all_previous_token_ids = [[]] * num_choices
-        if tool_choice_auto or self.reasoning_parser:
+        if tool_choice_auto or uses_model_structural_tag or self.reasoning_parser:
             # For reasoning parser and tool call all enabled
             added_content_delta_arr = [False] * num_choices
             reasoning_end_arr = [False] * num_choices
@@ -318,13 +288,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
 
         if self.reasoning_parser:
             reasoning_parser = self.reasoning_parser()
-            reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or 
-                                              self._get_enable_thinking_from_request(request))
+            reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or
+                                              get_enable_thinking_from_request(request, self.config.reasoning_parser))
 
-        if tool_choice_auto and self.tool_parser:
-            tool_parsers: list[Optional[ToolParser]] = [
-                self.tool_parser() for _ in range(num_choices)
-            ]
+        if (tool_choice_auto or uses_model_structural_tag) and self.tool_parser:
+            tool_parsers: list[Optional[ToolParser]] = []
+            for _ in range(num_choices):
+                parser = self.tool_parser()
+                parser.model_structural_tag_enabled = uses_model_structural_tag
+                tool_parsers.append(parser)
         else:
             tool_parsers = [None] * num_choices
 
@@ -489,7 +461,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         logger.debug(f"previous_text: {previous_text}")
                         logger.debug(f"delta_text: {delta_text}")
                         # handle streaming deltas for tools with named tool_choice
-                        if tool_choice_function_name:
+                        # Skip when native structural tag is active; fall through to
+                        # the shared model ToolParser path below.
+                        if tool_choice_function_name and not uses_model_structural_tag:
                             if (self.reasoning_parser and reasoning_parser._in_reasoning
                                     and not reasoning_parser.is_reasoning_end(
                                         previous_token_ids)):
@@ -539,7 +513,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 delta_message = DeltaMessage(tool_calls=[
                                     delta_tool_call,
                                 ])
-                        elif request and request.tool_choice == "required":
+                        elif (request and request.tool_choice == "required"
+                              and not uses_model_structural_tag):
                             fn_name_returned = function_name_returned[i]
                             if self.reasoning_parser:
                                 delta_message = (
@@ -589,8 +564,10 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                     history_tool_call_cnt += 1
                                 yield f"data: {json.dumps(chunk_data, ensure_ascii=False)}\n"
                                 continue  # 对于 required 模式，工具调用是唯一输出
-                        # auto tool choice and reasoning parser enabled, extract reasoning content
-                        elif tool_choice_auto and self.reasoning_parser:
+                        # auto / native structural-tag + reasoning: shared ToolParser path
+                        # TODO(ethanyczeng): abstract tool-call routing and refactor.
+                        elif ((tool_choice_auto or uses_model_structural_tag)
+                              and self.reasoning_parser):
                             assert reasoning_parser is not None
                             assert tool_parser_instance is not None
                             assert added_content_delta_arr is not None
@@ -660,8 +637,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                                 else:
                                     delta_message = DeltaMessage(content=delta_text)
 
-                        # when only tool calls
-                        elif tool_choice_auto:
+                        # when only tool calls (auto or native structural-tag)
+                        elif tool_choice_auto or uses_model_structural_tag:
                             assert tool_parser_instance is not None
                             delta_message = (
                                 tool_parser_instance.extract_tool_calls_streaming(
@@ -689,6 +666,15 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         
                         else:
                             delta_message = DeltaMessage(content = delta_text)
+
+                        # EOS: emit withheld start-marker prefix as content; incomplete tool sections stay unflushed.
+                        if (is_finished and uses_model_structural_tag):
+                            final_delta = tool_parser_instance.flush_streaming(current_text)
+                            if final_delta:
+                                if delta_message and delta_message.content:
+                                    delta_message.content += final_delta.content
+                                elif delta_message is None:
+                                    delta_message = final_delta
                         
                         previous_num_tokens[i] += len(output_tokenids)
 
@@ -779,10 +765,22 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
             # if there are still finish_reason not sent,
             for i in range(num_choices):
                 if not finish_reason_sent[i]:
+                    tool_parser_instance = tool_parsers[i]
+                    # Same prefix flush if this choice never hit is_finished in the main loop.
+                    if (uses_model_structural_tag):
+                        final_delta = tool_parser_instance.flush_streaming(previous_texts[i])
+                        if final_delta:
+                            chunk = await self._generate_stream_chunk(
+                                request_id, model_name, tokenizer,
+                                delta_message=final_delta,
+                                choice_index=i,
+                            )
+                            if chunk:
+                                yield chunk
+
                     finish_reason = "stop"
                     # check if tool parser is used
                     if tool_parsers and tool_parsers[i] is not None:
-                        tool_parser_instance = tool_parsers[i]
                         if hasattr(tool_parser_instance, 'prev_tool_call_arr') \
                             and len(tool_parser_instance.prev_tool_call_arr) > 0:
                             finish_reason = "tool_calls"
@@ -919,7 +917,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 ksana_request["sampling_config"]["max_new_tokens"] = max_new_tokens if max_new_tokens > 0 else 0
                 if self.reasoning_parser:
                     enable_thinking = (self.reasoning_parser()._in_reasoning or
-                                       self._get_enable_thinking_from_request(request))
+                                       get_enable_thinking_from_request(request, self.config.reasoning_parser))
                     ksana_request["sampling_config"]["enable_thinking"] = enable_thinking
                     logger.debug("ksana_request enable_thinking: %s",
                                  ksana_request["sampling_config"]["enable_thinking"])
@@ -1035,6 +1033,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         total_prompt_tokens = 0
         total_completion_tokens = 0
         role = self.get_chat_request_role(request) if request else "assistant"
+        # Model tool structural tag output is the full model-native protocol,
+        # not legacy bare JSON; route those requests to ToolParser below.
+        uses_model_structural_tag = bool(request and self._uses_model_structural_tag(request))
         cached_tokens_list = [0] * len(all_outputs)
 
         # aggregate plugin_timing_metrics across outputs (take max)
@@ -1125,8 +1126,9 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                 if self.reasoning_parser is not None:
                     try:
                         reasoning_parser = self.reasoning_parser()
-                        reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or 
-                                                          self._get_enable_thinking_from_request(request))
+                        reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or
+                                                          get_enable_thinking_from_request(request,
+                                                                reasoning_parser._in_reasoning))
                     except RuntimeError as e:
                         logger.exception("Error in reasoning parser creation.")
                         continue
@@ -1147,8 +1149,11 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         content=content
                     )
 
-                elif request.tool_choice and type (
-                    request.tool_choice) is ChatCompletionNamedToolChoiceParam:
+                # Skip legacy named when native structural tag is active; fall
+                # through to the shared model ToolParser path below.
+                elif (isinstance(request.tool_choice,
+                                 ChatCompletionNamedToolChoiceParam)
+                      and not uses_model_structural_tag):
                     message = ChatMessage(
                         role=role,
                         reasoning_content=reasoning_content,
@@ -1167,7 +1172,8 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                     history_tool_call_cnt += 1
                     finish_reason = "tool_calls"
 
-                elif request.tool_choice and request.tool_choice == "required":
+                elif (request.tool_choice and request.tool_choice == "required"
+                      and not uses_model_structural_tag):
                     # temporary tool call class
                     # TODO(ethanyczeng): support Mistral tool call class 
                     if content is not None:
@@ -1208,38 +1214,41 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         content=content
                     )
 
-                elif request.tools and (request.tool_choice == "auto" or request.tool_choice is None) \
-                     and self.config.enable_auto_tool_choice and self.tool_parser:
-                    # auto tool choice enabled
-                    try:
-                        tool_parser = self.tool_parser()
-                    except RuntimeError as e:
-                        logger.error(f"Tool parser failed: {e}")
+                # auto or native structural-tag required/named: shared ToolParser
+                # TODO(ethanyczeng): abstract tool-call routing and refactor.
+                elif (request.tools and self.config.enable_auto_tool_choice and
+                      self.tool_parser and
+                      (request.tool_choice in ("auto", None) or
+                       uses_model_structural_tag)):
+                    if content is None:
                         message = ChatMessage(
                             role=role,
                             reasoning_content=reasoning_content,
                             content=content
                         )
-
-                    tool_call_info = tool_parser.extract_tool_calls(
-                        content if content is not None else "", request=request)
-                    
-                    if tool_call_info.tools_called:
-                        self.post_process_tool_calls(tool_call_info.tool_calls, history_tool_call_cnt)
-                        message = ChatMessage(
-                            role=role,
-                            reasoning_content=reasoning_content,
-                            content=tool_call_info.content,
-                            tool_calls=tool_call_info.tool_calls
-                        )
-                        history_tool_call_cnt += len(tool_call_info.tool_calls)
-                        finish_reason = "tool_calls"
                     else:
-                        message = ChatMessage(
-                            role=role,
-                            reasoning_content=reasoning_content,
-                            content=content
-                        )
+                        tool_parser = self.tool_parser()
+                        tool_parser.model_structural_tag_enabled = uses_model_structural_tag
+                        tool_call_info = tool_parser.extract_tool_calls(
+                            content, request=request)
+                        if tool_call_info.tools_called:
+                            self.post_process_tool_calls(tool_call_info.tool_calls, history_tool_call_cnt)
+                            message = ChatMessage(
+                                role=role,
+                                reasoning_content=reasoning_content,
+                                content=tool_call_info.content,
+                                tool_calls=tool_call_info.tool_calls
+                            )
+                            history_tool_call_cnt += len(tool_call_info.tool_calls)
+                            finish_reason = "tool_calls"
+                        else:
+                            message = ChatMessage(
+                                role=role,
+                                reasoning_content=reasoning_content,
+                                content=(tool_call_info.content
+                                            if uses_model_structural_tag
+                                            else content)
+                            )
                 
                 else:
                     message = ChatMessage(
@@ -1384,6 +1393,19 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
         """
         return (request.tools and self.tool_parser and self.config.enable_auto_tool_choice
                 and request.tool_choice in ['auto', None])
+
+    def _uses_model_structural_tag(self,
+                                   request: ChatCompletionRequest) -> bool:
+        """Whether this request will attach a model-native tool structural tag."""
+        return uses_model_tool_structural_tag(
+            request,
+            enable_auto_tool_choice=bool(
+                getattr(self.config, "enable_auto_tool_choice", False)),
+            tool_parser_name=getattr(self.config, "tool_call_parser", None),
+            structural_tag_model=(
+                getattr(self.tool_parser, "structural_tag_model", None)
+                if self.tool_parser else None),
+        )
 
     @staticmethod
     def _bracket_level(text: str) -> int:

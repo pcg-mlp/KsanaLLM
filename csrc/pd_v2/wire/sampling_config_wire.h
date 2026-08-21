@@ -42,6 +42,9 @@ struct SamplingConfigWire {
   bool ignore_eos = false;
 
   std::string json_schema;
+  std::string regex;
+  std::string grammar;
+  std::string structural_tag;
   bool enable_structured_output = false;
   bool enable_thinking = true;
 
@@ -50,7 +53,8 @@ struct SamplingConfigWire {
   int32_t ptp_token_num = -1;
 
   MSGPACK_DEFINE_MAP(topk, topp, temperature, repetition_penalty, max_new_tokens, stop_token_ids, stop_strings,
-                     ignore_eos, json_schema, enable_structured_output, enable_thinking, ptp_token_num);
+                     ignore_eos, json_schema, regex, grammar, structural_tag, enable_structured_output,
+                     enable_thinking, ptp_token_num);
 };
 
 }  // namespace pd_v2

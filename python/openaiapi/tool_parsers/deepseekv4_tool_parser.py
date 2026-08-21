@@ -28,6 +28,8 @@ class DeepSeekV4ToolParser(DeepSeekV32ToolParser):
     ```
     """
 
+    structural_tag_model = "deepseek_v4"
+
     def __init__(self):
         super().__init__()
         self.bot_token = "<｜DSML｜tool_calls>"

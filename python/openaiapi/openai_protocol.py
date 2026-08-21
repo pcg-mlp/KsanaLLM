@@ -64,6 +64,26 @@ class OpenAIBaseModel(BaseModel):
         return result
 
 
+class StructuredOutputsParams(OpenAIBaseModel):
+    """A single model-agnostic constraint for XGrammar guided decoding."""
+
+    json_schema: Optional[Union[str, Dict[str, Any]]] = Field(
+        default=None, alias="json")
+    regex: Optional[str] = None
+    grammar: Optional[str] = None
+    structural_tag: Optional[Union[str, Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def validate_constraint(self):
+        constraints = (self.json_schema, self.regex, self.grammar,
+                       self.structural_tag)
+        if sum(value is not None for value in constraints) != 1:
+            raise ValueError(
+                "structured_outputs must contain exactly one of json, regex, "
+                "grammar, or structural_tag")
+        return self
+
+
 class OpenAIRequestModel(OpenAIBaseModel):
     # KsanaLLM 通用扩展参数
     input_tokens: Optional[List[int]] = Field(None, description="预处理的 token 列表")
@@ -74,6 +94,7 @@ class OpenAIRequestModel(OpenAIBaseModel):
     decoder_no_repeat_ngram_size: Optional[int] = None
     stop_strings: Optional[List[str]] = None
     structured_output_regex: Optional[str] = None
+    structured_outputs: Optional[StructuredOutputsParams] = None
     model_type: Optional[str] = None
     use_chat_template: Optional[bool] = None
     do_sample: Optional[bool] = None
@@ -140,6 +161,9 @@ class JsonSchemaResponseFormat(BaseModel):
     description: Optional[str] = None
     # use alias to workaround pydantic conflict
     schema_: Optional[Dict[str, object]] = Field(alias="schema", default=None)
+    # OpenAI response-format metadata. It defaults to false at the protocol
+    # boundary and is deliberately not mapped to XGrammar's compiler
+    # strict_mode, which is a separate backend policy.
     strict: Optional[bool] = False
 
 
@@ -158,12 +182,18 @@ class StructuralTagResponseFormat(BaseModel):
     triggers: list[str]
 
 
+class CompleteStructuralTagResponseFormat(BaseModel):
+    type: Literal["structural_tag"]
+    format: Any
+
+
 class ResponseFormat(BaseModel):
     type: Literal["text", "json_object", "json_schema"]
     json_schema: Optional[JsonSchemaResponseFormat] = None
 
 
-AnyResponseFormat = Union[ResponseFormat, StructuralTagResponseFormat]
+AnyResponseFormat = Union[ResponseFormat, StructuralTagResponseFormat,
+                          CompleteStructuralTagResponseFormat]
 
 
 class StreamOptions(BaseModel):
@@ -186,6 +216,8 @@ class FunctionDefinition(BaseModel):
     name: str
     description: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = None
+    # OpenAI per-tool schema-adherence switch. Consumers must read it from
+    # each tools[i].function; it is unrelated to XGrammar JSON compilation.
     strict: bool = False
 
 
@@ -237,7 +269,7 @@ class ChatCompletionRequest(OpenAIRequestModel):
     max_completion_tokens: Optional[int] = None
     n: Optional[int] = 1
     presence_penalty: Optional[float] = 0.0
-    response_format: Optional[ResponseFormat] = None
+    response_format: Optional[AnyResponseFormat] = None
     # This is a KsanaLLM specific extension, used to control structured output option
     enable_structured_output: bool = False 
     seed: Optional[int] = Field(None, ge=_LONG_INFO.min, le=_LONG_INFO.max)
@@ -788,6 +820,3 @@ class DetokenizeRequest(BaseModel):
 
 class DetokenizeResponse(BaseModel):
     prompt: str
-
-
-

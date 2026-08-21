@@ -128,6 +128,8 @@ class Glm47MoeToolParser(ToolParser):
     This is robust against MTP where delta_text contains multiple tokens.
     """
 
+    structural_tag_model = "glm_4_7"
+
     tool_call_start_token: str = "<tool_call>"
     tool_call_end_token: str = "</tool_call>"
 
@@ -229,7 +231,7 @@ class Glm47MoeToolParser(ToolParser):
     def adjust_request(self, request: ChatCompletionRequest) -> ChatCompletionRequest:
         """Adjust request parameters for tool call token handling."""
         request = super().adjust_request(request)
-        if request.tools and request.tool_choice == "auto":
+        if request.tools and request.tool_choice != "none":
             # Ensure tool call tokens (<tool_call>, </tool_call>) are not skipped
             # during decoding. Even though they are not marked as special tokens,
             # setting skip_special_tokens=False ensures proper handling in

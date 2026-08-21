@@ -74,6 +74,8 @@ class DeepSeekV32ToolParser(ToolParser):
     Reference: DeepSeek V3.2 format specification
     """
 
+    structural_tag_model = "deepseek_v3_2"
+
     def __init__(self):
         super().__init__()
         self.eos_token = "<｜end▁of▁sentence｜>"
@@ -89,7 +91,7 @@ class DeepSeekV32ToolParser(ToolParser):
 
     def adjust_request(self, request):
         request = super().adjust_request(request)
-        if request.tools and request.tool_choice == "auto":
+        if request.tools and request.tool_choice != "none":
             # Ensure tool call tokens
             # (<｜DSML｜function_calls>, </｜DSML｜function_calls>)
             # are not skippedduring decoding.

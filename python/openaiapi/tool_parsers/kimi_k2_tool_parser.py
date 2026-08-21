@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 
 @ToolParserManager.register_module(["kimi_k2"])
 class KimiK2ToolParser(ToolParser):
+    structural_tag_model = "kimi"
 
     tool_calls_start_token: str = "<|tool_calls_section_begin|>"
     tool_calls_end_token: str = "<|tool_calls_section_end|>"
@@ -62,6 +63,16 @@ class KimiK2ToolParser(ToolParser):
             raise RuntimeError(
                 "Kimi-K2 Tool parser could not locate tool call start/end "
                 "tokens in the tokenizer!")
+
+    def adjust_request(
+            self, request: ChatCompletionRequest) -> ChatCompletionRequest:
+        request = super().adjust_request(request)
+        if request.tools and request.tool_choice != "none":
+            # Kimi tool delimiters are tokenizer special tokens.  Keep them in
+            # decoded text so both streaming and full-response parsers can see
+            # the native protocol enforced by XGrammar.
+            request.skip_special_tokens = False
+        return request
 
     def extract_tool_start_ids(self, input_ids: Sequence[int]) -> Sequence[int]:
 
@@ -134,6 +145,10 @@ class KimiK2ToolParser(ToolParser):
         logger.debug("previous_text: %s", previous_text)
         logger.debug("delta_text: %s", delta_text)
         logger.debug("delta_token_ids: %s", delta_token_ids)
+
+        if self.model_structural_tag_enabled:
+            return self.extract_structural_tag_streaming(
+                previous_text, current_text, request)
 
         # preprocess to parser "xxx<｜tool▁call▁end｜><｜tool▁call▁begin｜>xxx" case
         if self.temp_text:

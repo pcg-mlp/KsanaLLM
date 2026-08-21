@@ -19,19 +19,23 @@ namespace ksana_llm {
  */
 class GrammarStructuredGenerator : public StructuredGeneratorInterface {
  public:
-  explicit GrammarStructuredGenerator(std::shared_ptr<CompiledGrammar> compiled_grammar);
+  GrammarStructuredGenerator(std::shared_ptr<CompiledGrammar> compiled_grammar,
+                             StructuredConstraintType constraint_type);
   virtual ~GrammarStructuredGenerator() = default;
 
   // StructuredGeneratorInterface implementation
   bool AcceptToken(int token_id) override;
   bool FillNextTokenBitmask(void* next_token_bitmask) override;
   void Rollback(int rollback_token_num) override;
+  void Reset() override;
   bool FindJumpForwardTokens(std::vector<int>& jump_tokens) override;
   bool IsTerminated() const override;
+  bool IsCompleted() const override;
   bool IsValid() const override;
   StructuredConstraintType GetConstraintType() const override;
 
  private:
   std::shared_ptr<GrammarMatcherWrapper> matcher_;
+  StructuredConstraintType constraint_type_;
 };
 }  // namespace ksana_llm

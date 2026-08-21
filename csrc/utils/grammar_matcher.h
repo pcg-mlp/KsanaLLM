@@ -33,7 +33,9 @@ class GrammarMatcherWrapper {
   virtual bool FillNextTokenBitmask(void* bitmask_data, int batch_index = 0) = 0;
   virtual bool AcceptToken(int token_id) = 0;
   virtual void Rollback(int rollback_token_num) = 0;
+  virtual void Reset() = 0;
   virtual bool IsTerminated() const = 0;
+  virtual bool IsCompleted() const = 0;
   virtual bool IsInitialized() const = 0;
 
   // Factory method to create appropriate matcher implementation

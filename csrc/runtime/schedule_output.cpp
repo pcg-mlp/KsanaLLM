@@ -146,6 +146,15 @@ static Status SerializeSamplingConfig(const SamplingConfig& sampling_config, voi
   // json_schema
   SerializeString(sampling_config.json_schema, ptr, offset);
 
+  // regex
+  SerializeString(sampling_config.regex, ptr, offset);
+
+  // grammar
+  SerializeString(sampling_config.grammar, ptr, offset);
+
+  // structural_tag
+  SerializeString(sampling_config.structural_tag, ptr, offset);
+
   // enable_structured_output
   SerializePod<bool>(sampling_config.enable_structured_output, ptr, offset);
 
@@ -216,6 +225,15 @@ static Status DeserializeSamplingConfig(SamplingConfig& sampling_config, const v
 
   // json_schema
   sampling_config.json_schema = DeserializeString(ptr, offset);
+
+  // regex
+  sampling_config.regex = DeserializeString(ptr, offset);
+
+  // grammar
+  sampling_config.grammar = DeserializeString(ptr, offset);
+
+  // structural_tag
+  sampling_config.structural_tag = DeserializeString(ptr, offset);
 
   // enable_structured_output
   sampling_config.enable_structured_output = DeserializePod<bool>(ptr, offset);

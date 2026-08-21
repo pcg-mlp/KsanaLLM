@@ -23,7 +23,9 @@ class GrammarMatcherWrapperNvidia : public GrammarMatcherWrapper {
   bool FillNextTokenBitmask(void* bitmask_data, int batch_index = 0) override;
   bool AcceptToken(int token_id) override;
   void Rollback(int rollback_token_num) override;
+  void Reset() override;
   bool IsTerminated() const override;
+  bool IsCompleted() const override;
   bool IsInitialized() const override { return matcher_ != nullptr; }
 
  private:

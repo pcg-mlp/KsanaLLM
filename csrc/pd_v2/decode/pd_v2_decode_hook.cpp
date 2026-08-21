@@ -50,6 +50,9 @@ SamplingConfigWire PdV2DecodeHook::MakeWireSamplingConfig(const SamplingConfig& 
   wire.stop_strings = sc.stop_strings;
   wire.ignore_eos = sc.ignore_eos;
   wire.json_schema = sc.json_schema;
+  wire.regex = sc.regex;
+  wire.grammar = sc.grammar;
+  wire.structural_tag = sc.structural_tag;
   wire.enable_structured_output = sc.enable_structured_output;
   wire.enable_thinking = sc.enable_thinking;
   wire.ptp_token_num = sc.ptp_token_num;

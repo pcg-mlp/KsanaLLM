@@ -285,7 +285,10 @@ class MockGrammarMatcher : public GrammarMatcherWrapper {
 
   bool FillNextTokenBitmask(void* bitmask_data, int batch_index = 0) override { return true; }
   bool IsTerminated() const override { return false; }
+  bool IsCompleted() const override { return false; }
   bool IsInitialized() const override { return true; }
+
+  void Reset() override {}
 
   void Rollback(int rollback_token_num) override {
     // Mock implementation: do nothing for testing
@@ -600,8 +603,13 @@ class MockStructuredGeneratorForDraft : public StructuredGeneratorInterface {
 
   bool FillNextTokenBitmask(void* next_token_bitmask) override { return true; }
   void Rollback(int rollback_token_num) override { idx_ -= rollback_token_num; }
+  void Reset() override {
+    idx_ = 0;
+    terminated_ = false;
+  }
   bool FindJumpForwardTokens(std::vector<int>& jump_tokens) override { return false; }
   bool IsTerminated() const override { return terminated_; }
+  bool IsCompleted() const override { return idx_ == allowed_tokens_.size(); }
   bool IsValid() const override { return true; }
   StructuredConstraintType GetConstraintType() const override { return StructuredConstraintType::JSON; }
 

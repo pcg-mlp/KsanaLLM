@@ -156,6 +156,9 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("stop_strings", &ksana_llm::SamplingConfig::stop_strings)
       .def_readwrite("enable_structured_output", &ksana_llm::SamplingConfig::enable_structured_output)
       .def_readwrite("json_schema", &ksana_llm::SamplingConfig::json_schema)
+      .def_readwrite("regex", &ksana_llm::SamplingConfig::regex)
+      .def_readwrite("grammar", &ksana_llm::SamplingConfig::grammar)
+      .def_readwrite("structural_tag", &ksana_llm::SamplingConfig::structural_tag)
       .def_readwrite("enable_thinking", &ksana_llm::SamplingConfig::enable_thinking)
       .def_readwrite("ptp_token_num", &ksana_llm::SamplingConfig::ptp_token_num);
 

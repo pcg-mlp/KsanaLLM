@@ -55,6 +55,14 @@ GrammarBackendNvidia::~GrammarBackendNvidia() {}
 
 std::shared_ptr<CompiledGrammar> GrammarBackendNvidia::CompileJSONSchema(const std::string& schema) {
   std::lock_guard<std::mutex> lock(mutex_);
+  KLLM_LOG_DEBUG << "Compiling JSON schema constraint: spec_size=" << schema.size() << ", spec=" << schema;
+  // Keep XGrammar's native JSON Schema compiler in strict mode. This option is
+  // an XGrammar compilation policy: it closes unspecified object properties
+  // and array items where the schema does not state otherwise. It is not the
+  // OpenAI `response_format.json_schema.strict` or per-tool
+  // `tools[i].function.strict` field, so API-layer values must not be threaded
+  // into this backend option. Structural Tag compiles embedded schemas using
+  // its own XGrammar-defined strict behavior.
   auto compiled_grammar = std::make_shared<CompiledGrammar>(compiler_->CompileJSONSchema(schema,  // schema
                                                                                          true,    // any_whitespace
                                                                                          std::nullopt,  // indent
@@ -64,6 +72,34 @@ std::shared_ptr<CompiledGrammar> GrammarBackendNvidia::CompileJSONSchema(const s
   KLLM_LOG_DEBUG << "JSON schema compilation completed successfully";
   KLLM_LOG_DEBUG << "Compiled grammar memory usage: " << compiled_grammar->MemorySizeBytes()
                  << " bytes (strict_mode=true, any_whitespace=true)";
+  return compiled_grammar;
+}
+
+std::shared_ptr<CompiledGrammar> GrammarBackendNvidia::CompileRegex(const std::string& regex) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  KLLM_LOG_DEBUG << "Compiling regex constraint: spec_size=" << regex.size() << ", spec=" << regex;
+  auto compiled_grammar = std::make_shared<CompiledGrammar>(compiler_->CompileRegex(regex));
+  KLLM_LOG_DEBUG << "Regex compilation completed successfully: compiled_grammar_memory="
+                 << compiled_grammar->MemorySizeBytes() << " bytes";
+  return compiled_grammar;
+}
+
+std::shared_ptr<CompiledGrammar> GrammarBackendNvidia::CompileGrammar(const std::string& grammar) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  KLLM_LOG_DEBUG << "Compiling EBNF grammar constraint: spec_size=" << grammar.size() << ", spec=" << grammar;
+  auto compiled_grammar = std::make_shared<CompiledGrammar>(compiler_->CompileGrammar(grammar));
+  KLLM_LOG_DEBUG << "EBNF grammar compilation completed successfully: compiled_grammar_memory="
+                 << compiled_grammar->MemorySizeBytes() << " bytes";
+  return compiled_grammar;
+}
+
+std::shared_ptr<CompiledGrammar> GrammarBackendNvidia::CompileStructuralTag(const std::string& structural_tag) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  KLLM_LOG_DEBUG << "Compiling structural tag constraint: spec_size=" << structural_tag.size()
+                 << ", spec=" << structural_tag;
+  auto compiled_grammar = std::make_shared<CompiledGrammar>(compiler_->CompileStructuralTag(structural_tag));
+  KLLM_LOG_DEBUG << "Structural tag compilation completed successfully: compiled_grammar_memory="
+                 << compiled_grammar->MemorySizeBytes() << " bytes";
   return compiled_grammar;
 }
 

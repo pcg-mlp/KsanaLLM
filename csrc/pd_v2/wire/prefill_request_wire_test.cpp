@@ -52,6 +52,9 @@ SamplingConfigWire MakeSamplingConfig() {
   cfg.stop_strings = {"</s>", "END"};
   cfg.ignore_eos = false;
   cfg.json_schema = R"({"type":"object","properties":{"x":{"type":"integer"}}})";
+  cfg.regex = R"([A-Z]{3})";
+  cfg.grammar = R"(root ::= "yes" | "no")";
+  cfg.structural_tag = R"({"type":"structural_tag","format":{"type":"const_string","value":"ok"}})";
   cfg.enable_structured_output = true;
   cfg.enable_thinking = false;
   cfg.ptp_token_num = 3;
@@ -68,6 +71,9 @@ void ExpectSamplingConfigEq(const SamplingConfigWire& a, const SamplingConfigWir
   EXPECT_EQ(a.stop_strings, b.stop_strings);
   EXPECT_EQ(a.ignore_eos, b.ignore_eos);
   EXPECT_EQ(a.json_schema, b.json_schema);
+  EXPECT_EQ(a.regex, b.regex);
+  EXPECT_EQ(a.grammar, b.grammar);
+  EXPECT_EQ(a.structural_tag, b.structural_tag);
   EXPECT_EQ(a.enable_structured_output, b.enable_structured_output);
   EXPECT_EQ(a.enable_thinking, b.enable_thinking);
   EXPECT_EQ(a.ptp_token_num, b.ptp_token_num);

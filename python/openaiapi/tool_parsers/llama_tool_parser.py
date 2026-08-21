@@ -38,6 +38,8 @@ class Llama3JsonToolParser(ToolParser):
     are all set
     """
 
+    structural_tag_model = "llama"
+
     tool_call_start_token: str = "<|python_tag|>"
 
     tool_call_start_token_id: Optional[int] = None

@@ -61,8 +61,11 @@ struct SamplingConfig {
   // In generation phasse, when stop strings are meet, the request will be stopped and truncated
   std::vector<std::string> stop_strings;
 
-  // The JSON string for guided Encoding generation.
+  // Structured output constraints. At most one may be set for a request.
   std::string json_schema;
+  std::string regex;
+  std::string grammar;
+  std::string structural_tag;
   bool enable_structured_output = false;
 
   // The current flag is used for controlling structured output.

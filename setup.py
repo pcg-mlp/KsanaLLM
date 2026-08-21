@@ -334,6 +334,22 @@ class BuildExt(build_ext_orig):
             dst_dir = extdir.parent / "ksana_llm" / need_dir
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
+        # KsanaLLM links the XGrammar C++ runtime directly.  Only its pure
+        # Python model structural-tag builders are needed by the OpenAI request
+        # layer, so copy the exact files from the same pinned FetchContent
+        # checkout instead of installing a second native XGrammar package.
+        xgrammar_python_src = (build_temp / "third_party" / "xgrammar" /
+                               "python" / "xgrammar")
+        xgrammar_python_dst = (extdir.parent / "ksana_llm" / "openaiapi" /
+                               "_xgrammar")
+        for module_name in ("structural_tag.py", "openai_tool_call_schema.py",
+                            "builtin_structural_tag.py"):
+            src_file = xgrammar_python_src / module_name
+            if not src_file.exists():
+                raise FileNotFoundError(
+                    f"Pinned XGrammar Python module is missing: {src_file}")
+            copy_file(str(src_file), str(xgrammar_python_dst / module_name))
+
         # Copy endpoint configuration files if they exist
         for endpoint in implemented_endpoints:
             if endpoint_status[endpoint]:

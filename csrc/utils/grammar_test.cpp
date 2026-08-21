@@ -89,6 +89,70 @@ TEST_F(GrammarBackendTest, CompileJSONSchemaTest) {
 #endif
 }
 
+TEST_F(GrammarBackendTest, CompileAllConstraintTypesTest) {
+#ifdef ENABLE_CUDA
+  if (!grammar_backend_ || !grammar_backend_->IsInitialized()) {
+    GTEST_SKIP() << "GrammarBackend not available, skipping test";
+  }
+
+  const auto regex = grammar_backend_->CompileRegex(R"([a-z]+)");
+  const auto grammar = grammar_backend_->CompileGrammar(R"(root ::= "abc")");
+  const auto structural_tag = grammar_backend_->CompileStructuralTag(
+      R"({"type":"structural_tag","format":{"type":"const_string","value":"abc"}})");
+
+  ASSERT_NE(regex, nullptr);
+  ASSERT_NE(grammar, nullptr);
+  ASSERT_NE(structural_tag, nullptr);
+  EXPECT_GT(regex->MemorySizeBytes(), 0);
+  EXPECT_GT(grammar->MemorySizeBytes(), 0);
+  EXPECT_GT(structural_tag->MemorySizeBytes(), 0);
+#else
+  GTEST_SKIP() << "XGrammar is not supported on non-CUDA platforms";
+#endif
+}
+
+TEST_F(GrammarBackendTest, CompileModelToolStructuralTagTest) {
+#ifdef ENABLE_CUDA
+  if (!grammar_backend_ || !grammar_backend_->IsInitialized()) {
+    GTEST_SKIP() << "GrammarBackend not available, skipping test";
+  }
+
+  // This is the same nested format emitted by XGrammar's glm_4_7 model
+  // builder: model delimiters plus a per-tool JSON Schema using glm_xml style.
+  const auto structural_tag = grammar_backend_->CompileStructuralTag(R"({
+    "type": "structural_tag",
+    "format": {
+      "type": "triggered_tags",
+      "triggers": ["<tool_call>"],
+      "tags": [{
+        "type": "tag",
+        "begin": "<tool_call>get_weather",
+        "content": {
+          "type": "json_schema",
+          "json_schema": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+          },
+          "style": "glm_xml",
+          "any_order": false,
+          "max_whitespace_cnt": null
+        },
+        "end": "</tool_call>"
+      }],
+      "at_least_one": false,
+      "stop_after_first": false,
+      "excludes": []
+    }
+  })");
+
+  ASSERT_NE(structural_tag, nullptr);
+  EXPECT_GT(structural_tag->MemorySizeBytes(), 0);
+#else
+  GTEST_SKIP() << "XGrammar is not supported on non-CUDA platforms";
+#endif
+}
+
 TEST_F(GrammarBackendTest, CreateMatcherTest) {
 #ifdef ENABLE_CUDA
   if (!grammar_backend_ || !grammar_backend_->IsInitialized()) {

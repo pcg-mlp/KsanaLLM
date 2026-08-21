@@ -21,6 +21,9 @@ class GrammarBackendNvidia : public GrammarBackend {
 
   // Implement pure virtual methods from base class
   std::shared_ptr<CompiledGrammar> CompileJSONSchema(const std::string& schema) override;
+  std::shared_ptr<CompiledGrammar> CompileRegex(const std::string& regex) override;
+  std::shared_ptr<CompiledGrammar> CompileGrammar(const std::string& grammar) override;
+  std::shared_ptr<CompiledGrammar> CompileStructuralTag(const std::string& structural_tag) override;
   std::shared_ptr<GrammarMatcherWrapper> CreateMatcher(std::shared_ptr<CompiledGrammar> grammar) override;
   const xgrammar::TokenizerInfo& GetTokenizerInfo() const override;
   bool IsInitialized() const override { return initialized_; }
