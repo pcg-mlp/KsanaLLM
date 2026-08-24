@@ -64,9 +64,14 @@ if(USE_MOONCAKE_REAL_STORE)
         ${PROJECT_SOURCE_DIR}/csrc/utils/status.cpp
     )
 
+    # 仅 $ORIGIN：whl 把 libasio/libloguru 打进同目录，运行时无需 LD_LIBRARY_PATH
     set_target_properties(mooncake_connector PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         CXX_STANDARD 20
+        BUILD_RPATH "\$ORIGIN;\$ORIGIN/../lib"
+        INSTALL_RPATH "\$ORIGIN;\$ORIGIN/../lib"
+        INSTALL_RPATH_USE_LINK_PATH OFF
+        BUILD_WITH_INSTALL_RPATH TRUE
     )
 
     target_compile_definitions(mooncake_connector PRIVATE

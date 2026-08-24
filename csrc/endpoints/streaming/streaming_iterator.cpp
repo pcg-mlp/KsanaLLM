@@ -98,11 +98,20 @@ bool StreamingIterator::AddOutput(ksana_llm::KsanaPythonOutput& ksana_python_out
   }
 
   // Snapshot access-log timestamps so Python can compute waiting/ttft/tpot/total.
-  SnapshotTimestamps(ksana_python_output);
+  bool all_reqs_finished = !request_->finisheds.empty();
+  for (bool req_finished : request_->finisheds) {
+    all_reqs_finished = all_reqs_finished && req_finished;
+  }
+  SnapshotTimestamps(ksana_python_output, all_reqs_finished);
   return true;
 }
 
-void StreamingIterator::SnapshotTimestamps(ksana_llm::KsanaPythonOutput& ksana_python_output) const {
+void StreamingIterator::SnapshotTimestamps(ksana_llm::KsanaPythonOutput& ksana_python_output,
+                                           bool wait_put_done) const {
+  if (wait_put_done) {
+    request_->WaitGlobalCachePutDone();
+  }
+
   ksana_python_output.arrive_time_us = request_->timestamp_in_us;
   ksana_python_output.scheduled_time_us = request_->scheduled_time_us.load();
   ksana_python_output.first_token_time_us = request_->first_token_time_us.load();
@@ -130,6 +139,21 @@ void StreamingIterator::SnapshotTimestamps(ksana_llm::KsanaPythonOutput& ksana_p
     if (request_->req_ctx->count("mtp_draft_tokens")) {
       ksana_python_output.draft_tokens = std::stoi(request_->req_ctx->at("mtp_draft_tokens"));
     }
+  }
+
+  ksana_python_output.global_cache_ext_tokens = request_->global_cache_ext_tokens.load(std::memory_order_relaxed);
+  ksana_python_output.global_cache_get_us = request_->global_cache_get_us.load(std::memory_order_relaxed);
+  ksana_python_output.global_cache_put_fa_blocks = request_->global_cache_put_fa_blocks.load(std::memory_order_relaxed);
+  ksana_python_output.global_cache_put_swa_blocks =
+      request_->global_cache_put_swa_blocks.load(std::memory_order_relaxed);
+  const uint64_t put_done = request_->global_cache_put_done_time_us.load(std::memory_order_relaxed);
+  const uint64_t finish = ksana_python_output.finish_time_us;
+  if (request_->global_cache_put_pending.load(std::memory_order_acquire)) {
+    ksana_python_output.global_cache_put_after_finish_ms = -1.0;
+  } else if (put_done > 0 && finish > 0 && put_done > finish) {
+    ksana_python_output.global_cache_put_after_finish_ms = static_cast<double>(put_done - finish) / 1000.0;
+  } else {
+    ksana_python_output.global_cache_put_after_finish_ms = 0.0;
   }
 }
 

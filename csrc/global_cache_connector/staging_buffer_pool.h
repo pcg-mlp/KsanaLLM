@@ -30,10 +30,17 @@ class StagingBufferPool {
  public:
   StagingBufferPool(size_t block_count, size_t block_size)
       : block_size_(block_size), total_bytes_(block_count * block_size) {
+    int cur_dev = -1;
+    cudaGetDevice(&cur_dev);
+
     cudaError_t err = cudaHostAlloc(&base_ptr_, total_bytes_, cudaHostAllocDefault);
     if (err != cudaSuccess || base_ptr_ == nullptr) {
-      KLLM_LOG_ERROR << "StagingBufferPool: cudaHostAlloc failed, size=" << total_bytes_
-                     << ", error=" << cudaGetErrorString(err);
+      const cudaError_t peek_after = cudaPeekAtLastError();
+      KLLM_LOG_ERROR << "cudaHostAlloc failed, block_count=" << block_count << " block_size=" << block_size
+                     << " total_bytes=" << total_bytes_ << " cur_dev=" << cur_dev << " err=" << static_cast<int>(err)
+                     << "(" << cudaGetErrorString(err) << ")"
+                     << " peek_after=" << cudaGetErrorString(peek_after) << " base_ptr=" << base_ptr_
+                     << " flag=cudaHostAllocDefault";
       throw std::runtime_error("StagingBufferPool: cudaHostAlloc failed");
     }
     memset(base_ptr_, 0, total_bytes_);

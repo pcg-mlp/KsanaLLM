@@ -20,7 +20,9 @@ namespace ksana_llm {
 
 class IpcFuncProxy {
  public:
-  IpcFuncProxy(size_t executor_num, bool is_engine, int executor_id, bool initialize_device = true);
+  // long_task_thread_num: heavy IPC（如 GlobalCacheQuery）出队并行度，默认 4。
+  IpcFuncProxy(size_t executor_num, bool is_engine, int executor_id, bool initialize_device = true,
+               size_t long_task_thread_num = 4);
   ~IpcFuncProxy();
 
   // Unlink shared memory after all executors attached.
@@ -47,6 +49,8 @@ class IpcFuncProxy {
       ipc_func_info.response = std::make_shared<ResponseType>();
       ipc_func_info.callback = std::make_shared<CallbackType>();
       ipc_func_info.mutex = std::make_shared<std::mutex>();
+      ipc_func_info.create_request = []() { return std::shared_ptr<IpcRequest>(std::make_shared<RequestType>()); };
+      ipc_func_info.create_response = []() { return std::shared_ptr<IpcResponse>(std::make_shared<ResponseType>()); };
 
       if (executor_id == -1) {
         ipc_shared_func_infos_[func_id] = ipc_func_info;
@@ -97,7 +101,8 @@ class IpcFuncProxy {
   }
 
  private:
-  void SendIpcRequest(const IpcRequest* request, IpcContext* context);
+  // 失败返回 false（如 channel 已 Stop）；sync 调用方须据此唤醒 notifier。
+  bool SendIpcRequest(const IpcRequest* request, IpcContext* context);
   void SendIpcResponse(const IpcResponse* response, IpcContext* context);
 
   // Execute all packets, including received and callback, executor_id with -1 for broadcast.
@@ -163,6 +168,9 @@ class IpcFuncProxy {
 
   // The threads used to execute heavy long task only.
   std::vector<std::unique_ptr<std::thread>> ipc_long_task_exec_threads_;
+
+  // heavy IPC 出队并行度（构造时传入，已与 fetch_thread_num 对齐）。
+  size_t long_task_thread_num_ = 4;
 
   // The serialized packet that need to executed.
   BlockingQueue<IpcTask> ipc_long_task_queue_;

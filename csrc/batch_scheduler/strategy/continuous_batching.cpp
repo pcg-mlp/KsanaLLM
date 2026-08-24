@@ -143,14 +143,14 @@ Status ContinuousBatchingStrategy::RecomputeMockRequest(std::shared_ptr<InferReq
 bool ContinuousBatchingStrategy::CheckRequestFinish(const std::shared_ptr<InferRequest> req) {
 #ifdef CLEAR_CACHE
   // For testing purposes only
-  // When a specific input is received, free all cached blocks.
   // TODO(robertyuan): Remove this to right place
   if (req->input_tokens.size() == 2 && req->input_tokens[0] == 0 && req->input_tokens[1] == 0) {
-    size_t free_block_num;
-    auto prefix_cache_manager_ptr = dynamic_cast<PrefixCacheManager *>(cache_manager_.get());
+    size_t freed_fa = 0;
+    size_t freed_swa = 0;
+    auto *prefix_cache_manager_ptr = dynamic_cast<PrefixCacheManager *>(cache_manager_.get());
     if (prefix_cache_manager_ptr != nullptr) {
-      prefix_cache_manager_ptr->FreeCachedBlocks(1e8, free_block_num);
-      KLLM_LOG_WARNING << "cache_manager free " << free_block_num << " blocks.";
+      prefix_cache_manager_ptr->ClearAllCachedBlocksForTest(freed_fa, freed_swa);
+      KLLM_LOG_WARNING << "CLEAR_CACHE freed FA blocks=" << freed_fa << ", leftover SWA swept=" << freed_swa;
     }
   }
 #endif
@@ -633,13 +633,28 @@ void ContinuousBatchingStrategy::ProcessDecodingQueue() {
     // TODO(robertyuan): optimize choice to balance wasted computing and decoding in future
     if ((recomputing_waiting_task_num == 0) && (batch_state_->async_stoped_reqs.size() == 0) &&
         (batch_state_->async_recomputed_reqs.size() == 0) && (batch_state_->decoding_queue.size() > 1)) {
+      // 触发 preempt（recompute）：打印决策上下文，便于事后分析"为什么调度器选择 preempt"。
+      KLLM_LOG_WARNING << "ProcessRunningQueue PREEMPT triggered: req_id=" << req->req_id
+                       << ", req_step_block_num=" << req_step_block_num
+                       << ", planning_seq_len=" << req->GetPlanningSequenceLen()
+                       << ", alloc_msg=" << status.GetMessage()
+                       << " | usable=" << cache_manager_->GetUsableBlockNumber()
+                       << ", decoding_q=" << batch_state_->decoding_queue.size()
+                       << ", waiting_q=" << batch_state_->waiting_queue.size()
+                       << ", running=" << batch_state_->schedule_output->running_reqs.size();
       RecomputeRequest(req);
       RemoveRequestFromQueue(batch_state_->decoding_queue, req);
       ++it;
       continue;
     }
 
-    KLLM_LOG_SCHEDULER << "Allocate blocks error, info: " << status.GetMessage();
+    KLLM_LOG_WARNING << "ProcessRunningQueue allocate blocks error (no preempt): req_id=" << req->req_id
+                     << ", req_step_block_num=" << req_step_block_num << ", info=" << status.GetMessage()
+                     << " | usable=" << cache_manager_->GetUsableBlockNumber()
+                     << ", recomputing_waiting=" << recomputing_waiting_task_num
+                     << ", async_stopped=" << batch_state_->async_stoped_reqs.size()
+                     << ", async_recomputed=" << batch_state_->async_recomputed_reqs.size()
+                     << ", decoding_q=" << batch_state_->decoding_queue.size();
     alloc_failed_req_num++;
     ++it;
   }
@@ -940,6 +955,10 @@ void ContinuousBatchingStrategy::ProcessTransferQueue() {
 
 void ContinuousBatchingStrategy::Schedule(std::vector<std::shared_ptr<InferRequest>> &waiting_reqs) {
   batch_state_->ResetInfoBeforeSchedule();
+  // put-done 可能在 IPC 线程入队；在 scheduler 线程统一 Drain，避免并发改 SWA LFU。
+  if (global_cache_put_tracker_ != nullptr) {
+    global_cache_put_tracker_->DrainPutCompletions();
+  }
   scheduler_ticktok_->SetThreadIndex(dp_group_id_);
   if (dp_group_id_ == 0) {
     scheduler_shared_counter_->step_batch_size.Reset(0);

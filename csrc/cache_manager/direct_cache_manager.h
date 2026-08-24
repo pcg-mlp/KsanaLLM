@@ -128,6 +128,15 @@ class DirectCacheManager : public CacheManagerInterface,
                              size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids, bool& block_merged,
                              std::vector<int>& swa_req_block_ids, std::vector<size_t>& swa_block_idx_offsets) override;
 
+  // Release SWA blocks bound to FA block indices below keep_start_block_idx.
+  // See CacheManagerInterface::DropUnbackedSwaBlocks for the full contract.
+  Status DropUnbackedSwaBlocks(int64_t req_id, size_t keep_start_block_idx, std::vector<int>& swa_req_block_ids,
+                               std::vector<size_t>& swa_block_idx_offsets) override;
+
+  // DirectCacheManager 不做跨请求共享，滑出窗口的 SWA 可立即回收；hold 为空操作。
+  void BeginSwaPutHold(int64_t /*req_id*/) override {}
+  void EndSwaPutHold(int64_t /*req_id*/) override {}
+
   void UpdateFlexibleCache(int64_t req_id, const std::vector<int>& token_ids, int shared_token_num,
                            std::vector<FlexibleCachedCopyTask>& flexible_cached_copy_tasks,
                            size_t& req_flexible_cache_len) override {}

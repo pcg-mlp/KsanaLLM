@@ -27,6 +27,19 @@ class GlobalCacheQueryDoneRequest : public IpcRequest {
   // 全局 cache 中缓存的生成 token(s)（全命中时有效，含 generated + draft）
   std::vector<int> cached_tokens;
   bool has_cached_tokens = false;
+  // 单卡各阶段耗时（us），供 engine 在 fetch_e2e 对齐多卡
+  int64_t wait_us = -1;        // enqueue → Call 开始（IPC/long-task 排队）
+  int64_t qf_us = -1;          // QueryAndFetch
+  int64_t token_us = -1;       // QueryFirstTokens（仅卡 0，其它为 0）
+  int64_t report_us = -1;      // ReportGlobalCacheQueryDone Invoke
+  int64_t call_us = -1;        // Call 入口 → report 前
+  int64_t report_wall_us = 0;  // 发起 report 时的 wall clock，engine 算回报延迟
+
+  // SWA 对齐后的命中 token 数；0 表示无 SWA 对齐结果（未启用 SWA，或没找到合法边界）。
+  size_t swa_aligned_hit_len = 0;
+
+  // 实际写入了全局 SWA 内容的 FA block 索引。
+  std::vector<size_t> swa_filled_block_idxs;
 };
 
 class GlobalCacheQueryDoneResponse : public IpcResponse {

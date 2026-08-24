@@ -58,6 +58,10 @@ struct TestState {
     if (!result) {
       KLLM_LOG_WARNING << "WaitForInvocation timeout, expected: " << expected_count << ", actual: " << invoke_count;
     }
+    lock.unlock();
+    // Call/Callback 内 notify 早于 SendIpcResponse；若随后立刻 Destroy，会 Stop channel，
+    // 导致对端 sync Invoke 永久卡在 WaitingUntilIpcFuncFinished。
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
   void Notify() {

@@ -58,6 +58,9 @@ class MockCacheManager : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
+  MOCK_METHOD(Status, DropUnbackedSwaBlocks, (int64_t, size_t, std::vector<int>&, std::vector<size_t>&), (override));
+  MOCK_METHOD(void, BeginSwaPutHold, (int64_t), (override));
+  MOCK_METHOD(void, EndSwaPutHold, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };

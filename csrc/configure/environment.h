@@ -182,6 +182,8 @@ class Environment {
     schedule_config_parser_.SetGlobalCacheConnectorConfig(config);
   }
 
+  int GetLongTaskThreadNum() const { return schedule_config_parser_.GetLongTaskThreadNum(); }
+
   // pd_v2 runtime config (process-internal). Returns RET_CONFIG_NOT_FOUND
   // unless setting.connector.backend == "v2". See
   // csrc/pd_v2/configure/pd_v2_runtime_config.h.

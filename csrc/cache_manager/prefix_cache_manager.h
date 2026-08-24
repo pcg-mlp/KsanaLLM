@@ -3,10 +3,11 @@
 ==============================================================================*/
 #pragma once
 
+#include <unordered_set>
+
 #include "cache_manager/base_cache_manager.h"
 #include "cache_manager/cache_manager_interface.h"
 #include "cache_manager/swa_cache_manager.h"
-
 #include "configure/environment.h"
 #include "runtime/request_state.h"
 #include "runtime/threadpool.h"
@@ -86,6 +87,10 @@ struct PrefixCachedRequest {
   // Must always have the same length as swa_window_fa_block_ids.
   // Replaces the old scalar swa_window_start_block_idx to support non-contiguous windows.
   std::vector<size_t> swa_window_block_idxs;
+
+  // Legacy: FA ids parked during put hold (newer path keeps them in swa_window_* until
+  // EndSwaPutHold). Still drained on EndSwaPutHold for compatibility.
+  std::vector<size_t> swa_put_held_fa_block_ids;
 
   // Whether the request is in remote_loading state.
   // Set to true after GetRequestPrefixBlockNumber(need_align_swa=false).
@@ -196,12 +201,24 @@ class PrefixCacheManager : public CacheManagerInterface,
                              size_t shareable_kvcache_token_num, std::vector<int>& req_block_ids, bool& block_merged,
                              std::vector<int>& swa_req_block_ids, std::vector<size_t>& swa_block_idx_offsets) override;
 
+  // Release SWA blocks bound to FA block indices below keep_start_block_idx.
+  // See CacheManagerInterface::DropUnbackedSwaBlocks for the full contract.
+  Status DropUnbackedSwaBlocks(int64_t req_id, size_t keep_start_block_idx, std::vector<int>& swa_req_block_ids,
+                               std::vector<size_t>& swa_block_idx_offsets) override;
+
+  // Park / release SWA blocks sliding out of the window while a global cache put is in flight.
+  // See CacheManagerInterface for why this is required.
+  void BeginSwaPutHold(int64_t req_id) override;
+  void EndSwaPutHold(int64_t req_id) override;
+
   // Update internal state after request finished.
   void DestroyFinishedRequest(int64_t req_id) override;
 
   // Free at least block_num cached blocks that could resued, reserve some blocks if needed.
   bool FreeCachedBlocks(size_t block_num, size_t& free_block_num,
                         const std::vector<PrefixCachedBlock*>& reserved_blocks = {});
+
+  void ClearAllCachedBlocksForTest(size_t& freed_fa_block_num, size_t& freed_swa_block_num);
 
   bool IsPrefixCachingEnabled() override;
 
@@ -319,6 +336,10 @@ class PrefixCacheManager : public CacheManagerInterface,
  private:
   // SWA cache manager; null when SWA is not configured.
   std::unique_ptr<SWACacheManager> swa_cache_manager_;
+
+  // Requests with an in-flight global cache put; their SWA blocks are parked on slide-out
+  // rather than reclaimed. See BeginSwaPutHold.
+  std::unordered_set<int64_t> swa_put_hold_reqs_;
 
   // The root block of block tree, not contain any memory block.
   // The tree struct only contain computed blocks, non-computed block is maintain by cached request itself.

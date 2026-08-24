@@ -708,4 +708,69 @@ TEST_F(RequestTest, StreamingIteratorAddOutputCopiesTimestamps) {
   EXPECT_EQ(snapshot2.finish_time_us, 333u);
 }
 
+namespace {
+
+struct StreamingPutWaitFixture {
+  std::shared_ptr<KsanaPythonInput> ksana_python_input;
+  std::shared_ptr<Request> request;
+};
+
+StreamingPutWaitFixture MakeStreamingRequestForPutWaitTest() {
+  StreamingPutWaitFixture fixture;
+  fixture.ksana_python_input = std::make_shared<KsanaPythonInput>();
+  fixture.ksana_python_input->input_tokens = {1, 2, 3};
+  fixture.ksana_python_input->sampling_config.logprobs_num = 0;
+
+  fixture.request = std::make_shared<Request>(fixture.ksana_python_input, nullptr);
+  fixture.request->abort_waiter = std::make_shared<Waiter>(0);
+  fixture.request->output_group[0] =
+      std::make_tuple(std::vector<int>{1, 2, 3, 4}, std::vector<std::vector<std::pair<int, float>>>(), 0.0f);
+  fixture.request->global_cache_put_pending.store(true, std::memory_order_release);
+  return fixture;
+}
+
+}  // namespace
+
+// put 未完成时，流式中间 chunk 不应在 AddOutput 里阻塞等待。
+TEST_F(RequestTest, StreamingIteratorIntermediateChunkDoesNotWaitPutDone) {
+  auto fixture = MakeStreamingRequestForPutWaitTest();
+  fixture.request->finisheds = {false};
+
+  StreamingIterator iterator(fixture.request, fixture.ksana_python_input);
+
+  const auto start = std::chrono::steady_clock::now();
+  KsanaPythonOutput output;
+  EXPECT_TRUE(iterator.AddOutput(output));
+  const auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+  EXPECT_LT(elapsed_ms, 200);
+  EXPECT_EQ(output.global_cache_put_after_finish_ms, -1.0);
+  EXPECT_TRUE(fixture.request->global_cache_put_pending.load(std::memory_order_acquire));
+}
+
+// 最后一个 chunk / 显式 SnapshotTimestamps 仍会等待 put 完成。
+TEST_F(RequestTest, StreamingIteratorFinalSnapshotWaitsPutDone) {
+  auto fixture = MakeStreamingRequestForPutWaitTest();
+  fixture.request->finisheds = {true};
+
+  StreamingIterator iterator(fixture.request, fixture.ksana_python_input);
+
+  std::thread notify_thread([request = fixture.request]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    request->NotifyGlobalCachePutDone();
+  });
+
+  const auto start = std::chrono::steady_clock::now();
+  KsanaPythonOutput output;
+  EXPECT_TRUE(iterator.AddOutput(output));
+  notify_thread.join();
+  const auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+  EXPECT_GE(elapsed_ms, 120);
+  EXPECT_FALSE(fixture.request->global_cache_put_pending.load(std::memory_order_acquire));
+  EXPECT_EQ(output.global_cache_put_after_finish_ms, 0.0);
+}
+
 }  // namespace ksana_llm

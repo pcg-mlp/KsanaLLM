@@ -735,7 +735,7 @@ class KsanaLLMEngine:
     @staticmethod
     def _format_access_log_timing(output, output_tokens: int) -> str:
         """Format C++ scheduler timestamps into waiting/ttft/tpot/total fields,
-        plus draft hit rate and prefix cache hit tokens.
+        plus draft hit rate, prefix cache hit tokens, and global-cache get/put metrics.
 
         Always emits the same field layout; missing data renders as 0 (timestamps /
         counts) or -1.00 (deltas / hit rate) so log parsers see a fixed schema across
@@ -746,6 +746,9 @@ class KsanaLLMEngine:
                     "ttft_ms=-1.00 tpot_ms=-1.00 total_ms=-1.00 "
                     "draft_hit_rate=-1.00 draft_hit_tokens=0 draft_tokens=0 "
                     "prefix_cache_hit_tokens=0 "
+                    "global_cache_ext_tokens=0 global_cache_get_us=0 "
+                    "global_cache_put_fa_blocks=0 global_cache_put_swa_blocks=0 "
+                    "global_cache_put_after_finish_ms=0.00 "
                     "blocks_alloc_us=0 prefill_dispatch_us=0 prefill_complete_us=0 prefill_peer=- "
                     "pf_prefix_cache_hit_tokens=0 admit_ms=-1.00 remote_rtt_ms=-1.00 "
                     "pf_queue_ms=0.00 pf_compute_ms=0.00 pf_send_ms=0.00 kv_transfer_ms=-1.00 "
@@ -776,11 +779,22 @@ class KsanaLLMEngine:
         draft_hit_rate = draft_hit_tokens / draft_tokens if draft_tokens > 0 else -1.0
         prefix_cache_hit_tokens = getattr(output, "prefix_cache_hit_tokens", 0)
 
+        global_cache_ext_tokens = getattr(output, "global_cache_ext_tokens", 0)
+        global_cache_get_us = getattr(output, "global_cache_get_us", 0)
+        global_cache_put_fa_blocks = getattr(output, "global_cache_put_fa_blocks", 0)
+        global_cache_put_swa_blocks = getattr(output, "global_cache_put_swa_blocks", 0)
+        global_cache_put_after_finish_ms = getattr(output, "global_cache_put_after_finish_ms", 0.0)
+
         return (f"arrive_us={arrive} waiting_ms={waiting_ms:.2f} "
                 f"ttft_ms={ttft_ms:.2f} tpot_ms={tpot_ms:.2f} total_ms={total_ms:.2f} "
                 f"draft_hit_rate={draft_hit_rate:.2f} draft_hit_tokens={draft_hit_tokens} "
                 f"draft_tokens={draft_tokens} "
                 f"prefix_cache_hit_tokens={prefix_cache_hit_tokens} "
+                f"global_cache_ext_tokens={global_cache_ext_tokens} "
+                f"global_cache_get_us={global_cache_get_us} "
+                f"global_cache_put_fa_blocks={global_cache_put_fa_blocks} "
+                f"global_cache_put_swa_blocks={global_cache_put_swa_blocks} "
+                f"global_cache_put_after_finish_ms={global_cache_put_after_finish_ms:.2f} "
                 f"{KsanaLLMEngine._format_pd_v2_access_fields(output)}")
 
     async def generate(

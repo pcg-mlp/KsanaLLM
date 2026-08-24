@@ -7,10 +7,12 @@
 // to isolate kernel correctness from Tensor/Stream construction overhead.
 
 #include <cuda_runtime.h>
+
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
+#include "device/device_utils.h"
 #include "test.h"
 
 namespace ksana_llm {
@@ -329,6 +331,46 @@ TEST_F(BatchMemoryD2DTest, NonTargetBlocksUntouched) {
   cudaFree(dev_dst);
   cudaFree(dev_src_list);
   cudaFree(dev_dst_list);
+}
+
+// ---- MemcpyAsyncT 失败诊断路径 ---------------------------------------------
+
+class MemcpyAsyncTest : public testing::Test {
+ protected:
+  void SetUp() override {
+    int device_count = 0;
+    if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count < 1) {
+      GTEST_SKIP() << "No CUDA device available";
+    }
+    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
+  }
+};
+
+TEST_F(MemcpyAsyncTest, ZeroCountIsNoop) {
+  Stream stream;
+  MemcpyAsync(nullptr, nullptr, /*count=*/0, MEMCPY_HOST_TO_DEVICE, stream);
+  stream.Destroy();
+}
+
+TEST_F(MemcpyAsyncTest, NullDstLogsAndAborts) {
+  EXPECT_DEATH(
+      {
+        Stream stream;
+        std::vector<char> host(4, 0);
+        MemcpyAsync(/*dst=*/nullptr, host.data(), host.size(), MEMCPY_HOST_TO_DEVICE, stream);
+      },
+      "");
+}
+
+TEST_F(MemcpyAsyncTest, NullSrcLogsAndAborts) {
+  EXPECT_DEATH(
+      {
+        Stream stream;
+        void* dst = nullptr;
+        Malloc(&dst, 4);
+        MemcpyAsync(dst, /*src=*/nullptr, /*count=*/4, MEMCPY_HOST_TO_DEVICE, stream);
+      },
+      "");
 }
 
 }  // namespace ksana_llm

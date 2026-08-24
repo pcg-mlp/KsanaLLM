@@ -5,7 +5,9 @@
 
 #include <sys/stat.h>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -271,6 +273,18 @@ class Request {
   // The hits nums of prefix caching.
   int prefix_cache_hit_tokens = 0;
 
+  // Global cache access-log metrics (written by fetcher / put-tracker, read at access-log time).
+  std::atomic<int> global_cache_ext_tokens{0};     // tokens extended beyond local prefix by global get
+  std::atomic<int64_t> global_cache_get_us{0};     // submit → all devices done (us)
+  std::atomic<int> global_cache_put_fa_blocks{0};  // FA：远端 miss 且 BatchPut 成功的 block 数（跨卡累加）
+  std::atomic<int> global_cache_put_swa_blocks{0};  // SWA：远端 miss 且 BatchPut 成功的 block 数（跨卡求和）
+  std::atomic<uint64_t> global_cache_put_done_time_us{0};  // all-device put done; 0 = no put / unknown
+  std::atomic<bool> global_cache_put_pending{false};       // true while put registered and not finished
+
+  // Wait until put completes (or timeout). Used by access-log snapshot so put_after_finish_ms is accurate.
+  void WaitGlobalCachePutDone(int timeout_ms = 30000) const;
+  void NotifyGlobalCachePutDone();
+
   // The finish status of this request.
   Status finish_status;
 
@@ -341,6 +355,10 @@ class Request {
   std::atomic<bool> prefill_entering_forward{false};
 
  private:
+  // Protects Wait/Notify for global_cache_put_pending.
+  mutable std::mutex global_cache_put_mu_;
+  mutable std::condition_variable global_cache_put_cv_;
+
   // The id generator
   inline static IdGenerator id_generator_;
 };
@@ -359,6 +377,15 @@ struct KsanaPythonOutput {
 
   // The hits nums of prefix caching.
   int prefix_cache_hit_tokens = 0;
+
+  // Global cache metrics for ACCESS log (copied from Request).
+  int global_cache_ext_tokens = 0;
+  int64_t global_cache_get_us = 0;
+  int global_cache_put_fa_blocks = 0;
+  int global_cache_put_swa_blocks = 0;
+  // ms from finish_time to put_done when put finished after the request; 0 if put already done
+  // (or no put); -1 if put still pending after wait timeout.
+  double global_cache_put_after_finish_ms = 0.0;
 
   // Cumulative draft acceptance stats over the request lifetime, for access-log hit-rate.
   int draft_hit_tokens = 0;  // accepted draft tokens

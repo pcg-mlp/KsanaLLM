@@ -650,6 +650,15 @@ void PrefixCacheManager::FreeCachedBlockRecursively(PrefixCachedBlock* cached_bl
   free_num += 1;
 }
 
+void PrefixCacheManager::ClearAllCachedBlocksForTest(size_t& freed_fa_block_num, size_t& freed_swa_block_num) {
+  // FreeCachedBlocks 会按 FA 树回收，并对解绑的 FA 调 FreeSWABlock；再扫一遍兜底残留 SWA。
+  FreeCachedBlocks(static_cast<size_t>(1e8), freed_fa_block_num);
+  freed_swa_block_num = 0;
+  if (swa_cache_manager_ != nullptr) {
+    freed_swa_block_num = swa_cache_manager_->FreeAllBlocks();
+  }
+}
+
 bool PrefixCacheManager::FreeCachedBlocks(size_t block_num, size_t& free_block_num,
                                           const std::vector<PrefixCachedBlock*>& reserved_blocks) {
   free_block_num = 0;
@@ -706,9 +715,13 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
                                                          bool disable_swa_block_num_adjust,
                                                          std::vector<int>& new_fa_block_ids,
                                                          std::vector<int>& new_swa_fa_offsets) {
-  KLLM_CHECK_WITH_INFO(fa_block_num >= minimum_swa_block_num,
-                       FormatStr("FA block num (%zu) should be no less than minimum SWA block num (%zu).", fa_block_num,
-                                 minimum_swa_block_num));
+  // SWA 只能绑在本轮新分配的 FA 上；调用方若算出 minimum_swa > fa_block_num，属参数错误。
+  // 这里返回 Status 而不是 abort，避免线上误算直接打崩整个 serving。
+  if (fa_block_num < minimum_swa_block_num) {
+    return Status(RET_INVALID_ARGUMENT,
+                  FormatStr("FA block num (%zu) should be no less than minimum SWA block num (%zu).", fa_block_num,
+                            minimum_swa_block_num));
+  }
 
   // ── SWA resource check BEFORE any allocation (pure query, no state change) ──
   // Query which new FA block positions should receive SWA blocks.
@@ -748,6 +761,36 @@ Status PrefixCacheManager::AllocateRequestBlocksInternal(PrefixCachedRequest* ca
     free_ok = FreeCachedBlocks(needed_blocks, free_block_num, reserved_blocks);
   }
   if (needed_blocks > 0 && !free_ok) {
+    // 失败时打印完整 cache 状态，便于定位"明明 free_block_num 充足却分配失败"的根因。
+    // 重点看 reusable 块为何无法被驱逐（reserved / active 引用分布）。
+    size_t reusable_blocked_by_active = 0;
+    size_t reusable_truly_free = 0;
+    size_t reusable_in_reserved = 0;
+    for (PrefixCachedBlock* cb : reusable_cached_blocks_) {
+      const bool in_reserved = !reserved_blocks.empty() &&
+                               std::find(reserved_blocks.begin(), reserved_blocks.end(), cb) != reserved_blocks.end();
+      if (in_reserved) {
+        ++reusable_in_reserved;
+      } else if (!cb->active_requests.empty()) {
+        ++reusable_blocked_by_active;
+      } else {
+        ++reusable_truly_free;
+      }
+    }
+    const size_t host_free = block_allocator_group_->GetHostBlockAllocator()->GetFreeBlockNumber();
+    // 调度侧可恢复：decode OOM 压力下部分 req 分不到 block 是预期路径，最终由 preempt/recompute 消化。
+    KLLM_LOG_WARNING << "AllocateRequestBlocks FAILED: req_id=" << req_id
+                     << ", req_state=" << static_cast<int>(cached_request->req_state)
+                     << ", req_block_num_already_held=" << req_block_ids.size()
+                     << ", block_num_requested=" << fa_block_num << ", needed_from_reusable=" << needed_blocks
+                     << ", actually_freed=" << free_block_num << " | free_cached=" << free_cached_blocks_.size()
+                     << ", reusable_total=" << reusable_cached_blocks_.size()
+                     << ", reusable_truly_free=" << reusable_truly_free
+                     << ", reusable_blocked_by_active=" << reusable_blocked_by_active
+                     << ", reusable_in_reserved=" << reusable_in_reserved
+                     << " | timed_total=" << timed_cached_blocks_.size()
+                     << ", reserved_blocks=" << reserved_blocks.size() << ", cached_reqs=" << cached_requests_.size()
+                     << ", host_free=" << host_free;
     return Status(RET_OUT_OF_DEVICE_MEMORY, FormatStr("AllocateRequestBlocksInternal: not enough FA blocks "
                                                       "(needed=%zu, free=%zu).",
                                                       fa_block_num, free_cached_blocks_.size()));
@@ -862,9 +905,11 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   }
   PrefixCachedRequest* cached_request = it->second.get();
 
-  // Compute minimum_swa_block_num the same way as DirectCacheManager:
-  // min(new FA blocks beyond current SWA right-boundary, one full sliding window).
-  // This ensures we only require the tail-coverage SWA blocks, not one per new FA block.
+  // Compute minimum_swa_block_num：
+  // - gap = 当前 FA 右端相对已有 SWA 右端的缺口（含本轮新 FA）
+  // - 但 AllocateRequestBlocksInternal 只能给「本轮新 FA」绑 SWA，因此必须再被 block_num 封顶。
+  //   否则 DropUnbacked / 非连续 SWA 留下缺口后，decode 再 Allocate(0) 会算出 minimum_swa>=1 并
+  //   触发非法参数（历史上是 KLLM_CHECK abort 打崩 serving）。
   const size_t sliding_window_blocks =
       (cache_manager_config_.sliding_window_size > 0 && cache_manager_config_.block_token_num > 0)
           ? (cache_manager_config_.sliding_window_size + cache_manager_config_.block_token_num - 1) /
@@ -874,8 +919,9 @@ Status PrefixCacheManager::AllocateRequestBlocks(int64_t req_id, size_t block_nu
   const size_t cur_swa_end =
       cached_request->swa_window_block_idxs.empty() ? 0 : cached_request->swa_window_block_idxs.back() + 1;
   const size_t new_fa_total = cached_request->cached_blocks.size() + block_num;
+  const size_t swa_gap = (new_fa_total > cur_swa_end) ? (new_fa_total - cur_swa_end) : 0;
   const size_t minimum_swa_block_num = (swa_cache_manager_ != nullptr && sliding_window_blocks > 0)
-                                           ? std::min(new_fa_total - cur_swa_end, sliding_window_blocks)
+                                           ? std::min({swa_gap, sliding_window_blocks, block_num})
                                            : 0;
 
   // Allocate new FA blocks; SWA binding is determined by GetAllocatableSWACache inside.
@@ -1212,6 +1258,9 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
     return;
   }
 
+  // put 仍在飞时寄存的 SWA 必须先释放，避免 Destroy 后泄漏；重复 End 是空操作。
+  EndSwaPutHold(req_id);
+
   PrefixCachedRequest& cached_request = *it->second.get();
 
   // G5: Sub-state branching for remote-loading cleanup.
@@ -1259,8 +1308,12 @@ void PrefixCacheManager::DestroyFinishedRequest(int64_t req_id) {
     }
   }
 
+  const size_t released_block_count = cached_request.cached_blocks.size();
   cached_requests_.erase(it);
-  KLLM_LOG_DEBUG << "DestroyFinishedRequest req " << req_id << " removed from cached requests.";
+  KLLM_LOG_SCHEDULER << "DestroyFinishedRequest req " << req_id << " released, blocks=" << released_block_count
+                     << ", free=" << free_cached_blocks_.size() << ", reusable=" << reusable_cached_blocks_.size()
+                     << ", timed=" << timed_cached_blocks_.size() << ", cached_reqs=" << cached_requests_.size()
+                     << ", usable=" << GetUsableBlockNumber() << ", device_used=" << GetDeviceUsedBlockNumber();
 }
 
 Status PrefixCacheManager::MergeFilledCachedBlocks(PrefixCachedRequest* cached_request, size_t block_index,
@@ -1293,7 +1346,11 @@ Status PrefixCacheManager::AppendFilledCachedBlock(PrefixCachedRequest* cached_r
     MergeFilledCachedBlocks(cached_request, block_index, dst_cached_block, cached_block, req_block_ids);
     // The new FA block is being merged into an existing tree node; its SWA block
     // is no longer needed (the existing node's SWA block will be used instead).
-    if (swa_cache_manager_ != nullptr) {
+    //
+    // src 无 SWA 绑定时整段跳过：此时 dst 也保持无 SWA，语义即「该位置不是合法命中终点」。
+    // 全局 cache 命中范围内的 SWA 会被 DropUnbackedSwaBlocks 释放，非连续 SWA 模式下中段
+    // FA block 本来也不绑 SWA；这两种情况若继续往下走会让 Transfer 因前置条件 1 失败而 abort。
+    if (swa_cache_manager_ != nullptr && swa_cache_manager_->GetSWAMemoryBlockId(cached_block->block_id) >= 0) {
       const size_t src_fa_block_id = cached_block->block_id;
       const size_t dst_fa_block_id = dst_cached_block->block_id;
       const int dst_mem_id = swa_cache_manager_->GetSWAMemoryBlockId(dst_fa_block_id);
@@ -1418,10 +1475,16 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
     // swa_window_block_idxs[i] holds the FA global index for ids[i].
     auto& ids = cached_request->swa_window_fa_block_ids;
     auto& idxs = cached_request->swa_window_block_idxs;
-    while (!ids.empty() && idxs.front() < swa_left_block) {
-      swa_cache_manager_->SetReclaimable(req_id, ids.front());
-      ids.erase(ids.begin());
-      idxs.erase(idxs.begin());
+    const bool put_hold = swa_put_hold_reqs_.count(req_id) > 0;
+    // put hold 期间不能把滑出窗口的 SWA 从请求列表摘掉：executor 的 put 快照读的就是
+    // swa_kv_cache_blocks / offsets。摘掉后 DSv4（W≈1）只剩尾部不满块，满块选点为空。
+    // 也不 SetReclaimable，避免异步 D2H 读到被回收的显存。真正的滑窗回收放到 EndSwaPutHold。
+    if (!put_hold) {
+      while (!ids.empty() && idxs.front() < swa_left_block) {
+        swa_cache_manager_->SetReclaimable(req_id, ids.front());
+        ids.erase(ids.begin());
+        idxs.erase(idxs.begin());
+      }
     }
 
     // Rebuild swa_req_block_ids and swa_block_idx_offsets from the per-block index arrays.
@@ -1437,6 +1500,124 @@ Status PrefixCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
   }
 
   return Status();
+}
+
+Status PrefixCacheManager::DropUnbackedSwaBlocks(int64_t req_id, size_t keep_start_block_idx,
+                                                 std::vector<int>& swa_req_block_ids,
+                                                 std::vector<size_t>& swa_block_idx_offsets) {
+  if (swa_cache_manager_ == nullptr) {
+    return Status();
+  }
+
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    return Status(RET_RUNTIME_FAILED, FormatStr("DropUnbackedSwaBlocks: req %d is not found.", req_id));
+  }
+  PrefixCachedRequest* cached_request = it->second.get();
+
+  auto& ids = cached_request->swa_window_fa_block_ids;
+  auto& idxs = cached_request->swa_window_block_idxs;
+  if (ids.size() != idxs.size()) {
+    return Status(RET_RUNTIME_FAILED,
+                  FormatStr("DropUnbackedSwaBlocks: req %d swa window size mismatch, ids=%zu, idxs=%zu.", req_id,
+                            ids.size(), idxs.size()));
+  }
+
+  std::vector<size_t> kept_ids;
+  std::vector<size_t> kept_idxs;
+  size_t freed_num = 0;
+  size_t released_num = 0;
+  for (size_t i = 0; i < idxs.size(); ++i) {
+    if (idxs[i] >= keep_start_block_idx) {
+      kept_ids.push_back(ids[i]);
+      kept_idxs.push_back(idxs[i]);
+      continue;
+    }
+
+    // 先摘掉本请求的持有关系，否则下面的 FreeSWABlock 会因 active_req_ids 非空而报 lifecycle warn。
+    swa_cache_manager_->SetReclaimable(req_id, ids[i]);
+    ++released_num;
+
+    // 树上的共享 block 可能被其它请求引用，只能交还给 reclaimable 池；本请求新分配的
+    // block（全局命中范围内那些从未写入 SWA 内容的）直接释放，把配额还给 SWA 池。
+    const bool is_shareable =
+        idxs[i] < cached_request->cached_blocks.size() && cached_request->cached_blocks[idxs[i]]->is_shareable;
+    if (!is_shareable) {
+      swa_cache_manager_->FreeSWABlock(ids[i]);
+      ++freed_num;
+    }
+  }
+  ids.swap(kept_ids);
+  idxs.swap(kept_idxs);
+
+  swa_req_block_ids.clear();
+  swa_block_idx_offsets.clear();
+  for (size_t i = 0; i < ids.size(); ++i) {
+    const int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(ids[i]);
+    if (mem_id >= 0) {
+      swa_req_block_ids.push_back(mem_id);
+      swa_block_idx_offsets.push_back(idxs[i]);
+    }
+  }
+
+  KLLM_LOG_INFO << "DropUnbackedSwaBlocks req " << req_id << " keep_start=" << keep_start_block_idx
+                << ", released=" << released_num << ", freed=" << freed_num << ", kept=" << ids.size();
+  return Status();
+}
+
+void PrefixCacheManager::BeginSwaPutHold(int64_t req_id) {
+  if (swa_cache_manager_ == nullptr) {
+    return;
+  }
+  swa_put_hold_reqs_.insert(req_id);
+  KLLM_LOG_DEBUG << "BeginSwaPutHold req " << req_id;
+}
+
+void PrefixCacheManager::EndSwaPutHold(int64_t req_id) {
+  swa_put_hold_reqs_.erase(req_id);
+
+  if (swa_cache_manager_ == nullptr) {
+    return;
+  }
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    return;
+  }
+
+  // EndSwaPutHold 仅在 scheduler 线程经 GlobalCachePutTracker::DrainPutCompletions 调用，
+  // 与 UpdateRequestTokens 同线程，避免并发改 SWA LFU。
+  PrefixCachedRequest* cached_request = it->second.get();
+  const size_t block_token_num = cache_manager_config_.block_token_num;
+  const size_t sliding_window_size = cache_manager_config_.sliding_window_size;
+  // hold 期间跳过的滑窗回收在这里补做。shareable 用已填满块数近似即可（偏保守）。
+  const size_t shareable_token_num = cached_request->shared_block_num * block_token_num;
+  size_t swa_left_block = 0;
+  if (sliding_window_size > 0 && shareable_token_num > sliding_window_size) {
+    swa_left_block = (shareable_token_num - sliding_window_size) / block_token_num;
+  }
+
+  auto& ids = cached_request->swa_window_fa_block_ids;
+  auto& idxs = cached_request->swa_window_block_idxs;
+  size_t released = 0;
+  while (!ids.empty() && !idxs.empty() && idxs.front() < swa_left_block) {
+    swa_cache_manager_->SetReclaimable(req_id, ids.front());
+    ids.erase(ids.begin());
+    idxs.erase(idxs.begin());
+    ++released;
+  }
+
+  // 兼容旧路径：若仍有显式寄存列表，一并回收。
+  auto& held = cached_request->swa_put_held_fa_block_ids;
+  for (size_t fa_block_id : held) {
+    swa_cache_manager_->SetReclaimable(req_id, fa_block_id);
+    ++released;
+  }
+  held.clear();
+
+  if (released > 0) {
+    KLLM_LOG_SCHEDULER << "EndSwaPutHold req " << req_id << ", released=" << released
+                       << ", swa_left_block=" << swa_left_block;
+  }
 }
 
 void PrefixCacheManager::AppendCachedBlockToTimedList(PrefixCachedBlock* cached_block) {

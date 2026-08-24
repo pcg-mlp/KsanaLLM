@@ -727,3 +727,78 @@ TEST_F(DirectCacheManagerTest, NoSwa_UpdateRequestTokens_UnknownReqId) {
                                                  out_swa_block_ids, out_swa_offsets);
   EXPECT_FALSE(s.OK());
 }
+
+// ---------------------------------------------------------------------------
+// DropUnbackedSwaBlocks
+// ---------------------------------------------------------------------------
+
+TEST_F(DirectCacheManagerTest, DropUnbackedSwaBlocks_NoSwaIsNoop) {
+  SetUpNoSwa();
+  std::vector<int> swa_req_block_ids = {1};
+  std::vector<size_t> swa_block_idx_offsets = {0};
+  EXPECT_TRUE(
+      cache_manager_
+          ->DropUnbackedSwaBlocks(/*req_id=*/1, /*keep_start_block_idx=*/0, swa_req_block_ids, swa_block_idx_offsets)
+          .OK());
+  EXPECT_EQ(swa_req_block_ids.size(), 1u);
+}
+
+TEST_F(DirectCacheManagerTest, DropUnbackedSwaBlocks_UnknownReqFails) {
+  SetUpWithSwa(/*sliding_window_size=*/32, /*swa_block_num=*/16, /*device_block_num=*/16, /*block_token_num=*/16);
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  EXPECT_FALSE(cache_manager_
+                   ->DropUnbackedSwaBlocks(/*req_id=*/12345, /*keep_start_block_idx=*/0, swa_req_block_ids,
+                                           swa_block_idx_offsets)
+                   .OK());
+}
+
+TEST_F(DirectCacheManagerTest, DropUnbackedSwaBlocks_FreesBlocksBeforeKeepStart) {
+  SetUpWithSwa(/*sliding_window_size=*/32, /*swa_block_num=*/16, /*device_block_num=*/16, /*block_token_num=*/16);
+
+  const int64_t req_id = RegisterRequest(1);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id, /*block_num=*/4, req_block_ids, swa_req_block_ids,
+                                          swa_block_idx_offsets, mamba_kv_cache_block_id)
+                  .OK());
+  ASSERT_EQ(swa_req_block_ids.size(), 4u);
+  EXPECT_EQ(swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 12u);
+
+  // 只保留 idx >= 2 的 SWA block，前两块应释放回池。
+  ASSERT_TRUE(cache_manager_
+                  ->DropUnbackedSwaBlocks(req_id, /*keep_start_block_idx=*/2, swa_req_block_ids, swa_block_idx_offsets)
+                  .OK());
+
+  ASSERT_EQ(swa_req_block_ids.size(), 2u);
+  ASSERT_EQ(swa_block_idx_offsets.size(), 2u);
+  EXPECT_EQ(swa_block_idx_offsets[0], 2u);
+  EXPECT_EQ(swa_block_idx_offsets[1], 3u);
+  EXPECT_EQ(swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), 14u);
+}
+
+TEST_F(DirectCacheManagerTest, DropUnbackedSwaBlocks_KeepAllWhenStartIsZero) {
+  SetUpWithSwa(/*sliding_window_size=*/32, /*swa_block_num=*/16, /*device_block_num=*/16, /*block_token_num=*/16);
+
+  const int64_t req_id = RegisterRequest(2);
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offsets;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id, /*block_num=*/3, req_block_ids, swa_req_block_ids,
+                                          swa_block_idx_offsets, mamba_kv_cache_block_id)
+                  .OK());
+  ASSERT_EQ(swa_req_block_ids.size(), 3u);
+  const size_t free_before = swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber();
+
+  ASSERT_TRUE(cache_manager_
+                  ->DropUnbackedSwaBlocks(req_id, /*keep_start_block_idx=*/0, swa_req_block_ids, swa_block_idx_offsets)
+                  .OK());
+
+  EXPECT_EQ(swa_req_block_ids.size(), 3u);
+  EXPECT_EQ(swa_block_allocator_group_->GetDeviceBlockAllocator(0)->GetFreeBlockNumber(), free_before);
+}

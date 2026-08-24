@@ -61,6 +61,24 @@ struct GlobalCacheConnectorConfig {
   int block_token_num = 0;
   size_t block_byte_size = 0;
 
+  // Put 热 key 时间窗（秒）：仅当同一 block key 在窗口内再次出现才允许 Put；首次一律跳过。
+  // 0 = 关闭频率过滤（保持原行为）。例如 3600=1 小时，1800=30 分钟。
+  int64_t put_hotkey_window_sec = 0;
+
+  // ========== SWA (sliding window attention) 全局 cache 配置 ==========
+  // SWA block 未压缩，字节数远大于主 KV block（DSv4 实测约 7.6 倍），全量存储会让
+  // 全局 cache 占用翻倍，因此按「尾部 N 密存 + 前段等分中位点稀存」的策略选点。
+
+  // N：尾部密集存储的 block 个数。
+  int swa_tail_block_num = 4;
+
+  // 前段（去掉尾部 N 之后）等分成多少份；默认 5。首尾两段不上传，只取中间 parts-2 份的中位点。
+  int swa_front_equal_parts = 5;
+
+  // SWA block 字节数，与主 KV 的 block_byte_size 不同，需要独立的 staging pool。
+  // 由 executor 创建 connector 时按 SWA block allocator 的配置填充；0 表示未启用 SWA。
+  size_t swa_block_byte_size = 0;
+
   bool IsDecodeRole() const { return role == "decode"; }
   bool IsPrefillRole() const { return role == "prefill"; }
   bool IsStandalone() const { return role.empty(); }
@@ -83,9 +101,51 @@ struct GlobalCacheConnectorConfig {
     result += "  max_step_tokens: " + std::to_string(max_step_tokens) + "\n";
     result += "  block_token_num: " + std::to_string(block_token_num) + "\n";
     result += "  block_byte_size: " + std::to_string(block_byte_size) + "\n";
+    result += "  put_hotkey_window_sec: " + std::to_string(put_hotkey_window_sec) + "\n";
+    result += "  swa_tail_block_num: " + std::to_string(swa_tail_block_num) + "\n";
+    result += "  swa_front_equal_parts: " + std::to_string(swa_front_equal_parts) + "\n";
+    result += "  swa_block_byte_size: " + std::to_string(swa_block_byte_size) + "\n";
     result += "}";
     return result;
   }
+};
+
+/**
+ * @brief QueryAndFetch 的 SWA 侧输入上下文；nullptr 表示该请求不涉及 SWA。
+ *
+ * SWA block 存在与否决定了「命中点是否合法」：恢复计算时 attention 需要窗口内的
+ * SWA 内容，且 DSv4 里 compress_ratio == 0 的层的全部持久状态只在 SWA block 里。
+ * 因此命中边界必须落在「末 swa_window_block_num 个位置都有 SWA」的地方。
+ */
+struct GlobalCacheSwaContext {
+  // 本地已分配的 SWA block 在设备上的指针，与 local_swa_block_idxs 一一对应。
+  // 拉取到的全局 SWA 内容只能写进这些位置，因此它同时是「命中点有落点」的判据。
+  std::vector<void*> swa_block_ptrs;
+
+  // swa_block_ptrs[i] 对应的 FA block 全局索引，升序。
+  std::vector<size_t> local_swa_block_idxs;
+
+  size_t swa_block_byte_size = 0;
+
+  // W = ceil(sliding_window_size / block_token_num)，与本地 prefix 匹配用的同一个公式。
+  size_t swa_window_block_num = 1;
+
+  // 命中长度上限（token 数），由 engine 按 seq_len - 1 传入。
+  // 必须在求边界之前参与约束：事后再截断会把命中点推到没有拉 SWA 的位置上。
+  size_t max_hit_token_num = 0;
+
+  int64_t req_id = -1;
+};
+
+/**
+ * @brief QueryAndFetch 的 SWA 侧输出。
+ */
+struct GlobalCacheSwaResult {
+  // 对齐后的命中 token 数（block 对齐）。0 表示没有可用的全局命中。
+  size_t swa_aligned_hit_len = 0;
+
+  // 实际写入了全局 SWA 内容的 FA block 索引。
+  std::vector<size_t> filled_block_idxs;
 };
 
 }  // namespace ksana_llm

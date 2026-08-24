@@ -1458,6 +1458,7 @@ TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorFullConfig) {
   EXPECT_EQ(config.timeout_ms, 3000);
   EXPECT_EQ(config.max_retry, 5);
   EXPECT_EQ(config.fetch_thread_num, 8);
+  EXPECT_EQ(parser_->GetLongTaskThreadNum(), 8);  // 默认 long_task=4，与 fetch=8 对齐到 8
   EXPECT_EQ(config.role, "prefill");
   EXPECT_EQ(config.protocol, "rdma");
   EXPECT_EQ(config.rdma_devices, "mlx5_0");
@@ -1511,11 +1512,101 @@ TEST_F(ScheduleConfigParserTest, GlobalCacheConnectorDefaults) {
   EXPECT_EQ(config.timeout_ms, 5000);
   EXPECT_EQ(config.max_retry, 3);
   EXPECT_EQ(config.fetch_thread_num, 4);
+  EXPECT_EQ(parser_->GetLongTaskThreadNum(), 4);
   EXPECT_EQ(config.role, "");
   EXPECT_EQ(config.protocol, "tcp");
+  EXPECT_EQ(config.rdma_devices, "");
   EXPECT_EQ(config.master_server_addr, "127.0.0.1:50051");
-  EXPECT_EQ(config.global_segment_size, 16u * 1024 * 1024);
-  EXPECT_EQ(config.local_buffer_size, 16u * 1024 * 1024);
+  EXPECT_EQ(config.global_segment_size, 100ULL * 1024 * 1024 * 1024);
+  EXPECT_EQ(config.local_buffer_size, 67108864ULL);
+  EXPECT_EQ(config.swa_tail_block_num, 2);
+}
+
+TEST_F(ScheduleConfigParserTest, LongTaskAndFetchThreadNumAlignToMax) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  ipc:\n";
+  file << "    long_task_thread_num: 8\n";
+  file << "  global_cache_connector:\n";
+  file << "    service_endpoint: \"localhost:9999\"\n";
+  file << "    fetch_thread_num: 4\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  GlobalCacheConnectorConfig config;
+  ASSERT_TRUE(parser_->GetGlobalCacheConnectorConfig(config).OK());
+  EXPECT_EQ(config.fetch_thread_num, 8);
+  EXPECT_EQ(parser_->GetLongTaskThreadNum(), 8);
+}
+
+TEST_F(ScheduleConfigParserTest, LongTaskThreadNumParsedWithoutGlobalCache) {
+  std::filesystem::path temp_dir = std::filesystem::temp_directory_path();
+  std::string filename = "schedule_config_test_" + std::to_string(test_file_counter_++) + ".yaml";
+  std::filesystem::path temp_file_path = temp_dir / filename;
+  temp_files_.push_back(temp_file_path.string());
+
+  std::filesystem::path model_dir = temp_dir / ("test_model_dir_" + std::to_string(test_file_counter_));
+  temp_dirs_.push_back(model_dir.string());
+  if (std::filesystem::exists(model_dir)) std::filesystem::remove_all(model_dir);
+  std::filesystem::create_directory(model_dir);
+
+  std::ofstream file(temp_file_path);
+  ASSERT_TRUE(file.is_open());
+
+  file << "setting:\n";
+  file << "  global:\n";
+  file << "    tensor_para_size: 1\n";
+  file << "  batch_scheduler:\n";
+  file << "    max_token_len: 4096\n";
+  file << "    max_step_tokens: 4096\n";
+  file << "    max_batch_size: 32\n";
+  file << "  block_manager:\n";
+  file << "    block_token_num: 16\n";
+  file << "    reserved_device_memory_ratio: 0.01\n";
+  file << "  ipc:\n";
+  file << "    long_task_thread_num: 8\n";
+  file << "model_spec:\n";
+  file << "  base_model:\n";
+  file << "    model_dir: \"" << model_dir.string() << "\"\n";
+  file.close();
+
+  YamlReader yaml_reader;
+  ASSERT_TRUE(yaml_reader.LoadFile(temp_file_path.string()).OK());
+  ModelConfig model_config;
+  ASSERT_TRUE(parser_->ParseScheduleConfig(yaml_reader, model_config).OK());
+
+  // 未配 global cache 时 fetch 仍为结构体默认 4，与 long_task=8 对齐后两侧均为 8。
+  EXPECT_EQ(parser_->GetLongTaskThreadNum(), 8);
+  GlobalCacheConnectorConfig unused_config;
+  EXPECT_FALSE(parser_->GetGlobalCacheConnectorConfig(unused_config).OK());
 }
 
 // ==================== swa_block_num_ratio 配置解析与自动调整测试 ====================

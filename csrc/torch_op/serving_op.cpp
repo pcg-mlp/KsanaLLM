@@ -219,6 +219,12 @@ PYBIND11_MODULE(libtorch_serving, m) {
       .def_readwrite("response", &ksana_llm::KsanaPythonOutput::response)
       .def_readwrite("embedding", &ksana_llm::KsanaPythonOutput::embedding)
       .def_readwrite("prefix_cache_hit_tokens", &ksana_llm::KsanaPythonOutput::prefix_cache_hit_tokens)
+      .def_readwrite("global_cache_ext_tokens", &ksana_llm::KsanaPythonOutput::global_cache_ext_tokens)
+      .def_readwrite("global_cache_get_us", &ksana_llm::KsanaPythonOutput::global_cache_get_us)
+      .def_readwrite("global_cache_put_fa_blocks", &ksana_llm::KsanaPythonOutput::global_cache_put_fa_blocks)
+      .def_readwrite("global_cache_put_swa_blocks", &ksana_llm::KsanaPythonOutput::global_cache_put_swa_blocks)
+      .def_readwrite("global_cache_put_after_finish_ms",
+                     &ksana_llm::KsanaPythonOutput::global_cache_put_after_finish_ms)
       .def_readwrite("draft_hit_tokens", &ksana_llm::KsanaPythonOutput::draft_hit_tokens)
       .def_readwrite("draft_tokens", &ksana_llm::KsanaPythonOutput::draft_tokens)
       .def_readwrite("finish_status", &ksana_llm::KsanaPythonOutput::finish_status)

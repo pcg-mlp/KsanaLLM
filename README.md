@@ -274,6 +274,60 @@ cmake ../csrc/global_cache_connector/ \
 make -j$(nproc)
 ```
 
+**Enable Global Cache at runtime**
+
+Build alone is not enough. Serving must turn on the hook, configure the connector in yaml, and align Mooncake ports.
+
+1. **Environment**
+
+```bash
+export ENABLE_GLOBAL_CACHE_HOOK=1
+# Optional: absolute path to mooncake_master if it is not on PATH
+# export MOONCAKE_MASTER_BIN=/path/to/Mooncake/build/mooncake-store/src/mooncake_master
+```
+
+When `ENABLE_GLOBAL_CACHE_HOOK=1`, serving auto-starts a local `mooncake_master` if the RPC port is free (skips if already listening).
+
+2. **Yaml** (`setting.global_cache_connector`)
+
+- Set a non-empty `service_endpoint` (empty → connector disabled).
+- Use event-driven scheduler: `setting.batch_scheduler.scheduler_type: 1`.
+- Keep `service_endpoint` / `master_server_addr` ports consistent with serving CLI (defaults `8080` / `50051`).
+
+Minimal example (see full commented block in `examples/ksana_llm.yaml`):
+
+```yaml
+setting:
+  batch_scheduler:
+    scheduler_type: 1
+  global_cache_connector:
+    service_endpoint: "http://127.0.0.1:8080/metadata"
+    master_server_addr: "127.0.0.1:50051"
+    backend_type: "mooncake"   # or mooncake-mock
+    protocol: "tcp"            # tcp | rdma
+    # rdma_devices: ""         # empty = auto; for RDMA set e.g. mlx5_0
+```
+
+3. **Launch serving**
+
+```bash
+export ENABLE_GLOBAL_CACHE_HOOK=1
+python serving_server.py \
+    --config_file /path/to/your_config.yaml \
+    --port 8080 \
+    --mooncake-http-port 8080 \
+    --mooncake-rpc-port 50051
+```
+
+| Item | Role |
+|---|---|
+| `ENABLE_GLOBAL_CACHE_HOOK=1` | Enable query/put hook; may auto-start local master |
+| `service_endpoint` non-empty | Construct / enable Global Cache Connector |
+| `scheduler_type: 1` | Required with the global-cache hook path |
+| `--mooncake-http-port` / `--mooncake-rpc-port` | Must match yaml `service_endpoint` / `master_server_addr` |
+
+More env vars and field notes: [`docs/ksana_env_guide.md`](docs/ksana_env_guide.md).
+
 ### 4. Run
 
 #### 4.1 Single

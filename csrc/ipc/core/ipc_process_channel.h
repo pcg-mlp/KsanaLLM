@@ -6,6 +6,8 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <mutex>
+#include <vector>
 
 #include "ipc/core/ipc_func_types.h"
 
@@ -80,6 +82,11 @@ class alignas(64) IpcProcessChannel {
 
   // we should create or just attach ipc resource.
   bool is_engine_ = false;
+
+  // 本进程内写端串行化：WaitWritable 在 Unlock(mutex) 与 wrlock 之间存在 TOCTOU，
+  // 多线程并发写会把 used_slot_num 推过 CHANNEL_SLOT_NUM，覆盖未读 slot。
+  // 同向 channel 通常只有一个写进程，进程内 mutex 即可关闭该窗口。
+  std::mutex local_write_mutex_;
 };
 
 }  // namespace ksana_llm

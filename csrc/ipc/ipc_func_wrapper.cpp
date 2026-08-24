@@ -38,15 +38,18 @@
 #include "ipc/functions/reset_pipeline_config.h"
 #include "ipc/functions/set_ep_communication_config.h"
 #include "profiler/profile_event.h"
+#include "profiler/timer.h"
 #include "utils/random_generator.h"
 #include "utils/status.h"
 
 namespace ksana_llm {
 
-IpcFuncWrapper::IpcFuncWrapper(size_t executor_num, bool is_engine, int executor_id) {
+IpcFuncWrapper::IpcFuncWrapper(size_t executor_num, bool is_engine, int executor_id, bool initialize_device,
+                               size_t long_task_thread_num) {
   executor_id_ = executor_id;
   executor_num_ = executor_num;
-  ipc_func_proxy_ = std::make_shared<IpcFuncProxy>(executor_num, is_engine, executor_id);
+  ipc_func_proxy_ =
+      std::make_shared<IpcFuncProxy>(executor_num, is_engine, executor_id, initialize_device, long_task_thread_num);
   SetIpcFunctions();
 }
 
@@ -904,7 +907,10 @@ Status IpcFuncWrapper::ConnectorGetNcclCommInfo(const std::string& group_key, in
 
 Status IpcFuncWrapper::DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,
                                                 size_t local_cached_len, int block_size,
-                                                const std::vector<int>& kv_cache_block_ids) {
+                                                const std::vector<int>& kv_cache_block_ids,
+                                                const std::vector<int>& swa_kv_cache_block_ids,
+                                                const std::vector<size_t>& swa_block_idx_offsets,
+                                                size_t swa_window_block_num, size_t max_cached_len) {
   std::shared_ptr<IpcContext> ipc_context =
       CreateEngine2ExecutorContext(IPC_FUNC_GLOBAL_CACHE_QUERY, executor_id, /*is_async=*/true, /*is_oneway=*/true,
                                    /*share_callable=*/false, /*share_callback=*/false, /*is_heavy=*/true);
@@ -914,6 +920,11 @@ Status IpcFuncWrapper::DispatchGlobalCacheQuery(int executor_id, int64_t req_id,
   request->local_cached_len = local_cached_len;
   request->block_size = block_size;
   request->kv_cache_block_ids = kv_cache_block_ids;
+  request->swa_kv_cache_block_ids = swa_kv_cache_block_ids;
+  request->swa_block_idx_offsets = swa_block_idx_offsets;
+  request->swa_window_block_num = swa_window_block_num;
+  request->max_cached_len = max_cached_len;
+  request->enqueue_wall_us = ProfileTimer::GetCurrentTimeInUs();
 
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
   return Status();
@@ -921,7 +932,10 @@ Status IpcFuncWrapper::DispatchGlobalCacheQuery(int executor_id, int64_t req_id,
 
 Status IpcFuncWrapper::ReportGlobalCacheQueryDone(int64_t req_id, int device_id, const std::vector<int>& matched_ranges,
                                                   bool success, const std::vector<int>& cached_tokens,
-                                                  bool has_cached_tokens) {
+                                                  bool has_cached_tokens, int64_t wait_us, int64_t qf_us,
+                                                  int64_t token_us, int64_t report_us, int64_t call_us,
+                                                  int64_t report_wall_us, size_t swa_aligned_hit_len,
+                                                  const std::vector<size_t>& swa_filled_block_idxs) {
   std::shared_ptr<IpcContext> ipc_context = CreateExecutor2EngineContext(
       IPC_FUNC_GLOBAL_CACHE_QUERY_DONE, executor_id_, /*is_async=*/true, /*is_oneway=*/true,
       /*share_callable=*/false, /*share_callback=*/false);
@@ -932,6 +946,14 @@ Status IpcFuncWrapper::ReportGlobalCacheQueryDone(int64_t req_id, int device_id,
   request->success = success;
   request->cached_tokens = cached_tokens;
   request->has_cached_tokens = has_cached_tokens;
+  request->wait_us = wait_us;
+  request->qf_us = qf_us;
+  request->token_us = token_us;
+  request->report_us = report_us;
+  request->call_us = call_us;
+  request->report_wall_us = report_wall_us;
+  request->swa_aligned_hit_len = swa_aligned_hit_len;
+  request->swa_filled_block_idxs = swa_filled_block_idxs;
 
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
   return Status();
@@ -940,10 +962,12 @@ Status IpcFuncWrapper::ReportGlobalCacheQueryDone(int64_t req_id, int device_id,
 void IpcFuncWrapper::SetGlobalCacheQueryCallableDeps(
     std::shared_ptr<GlobalCacheConnectorInterface> connector,
     std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager, int dp_group_id,
-    std::shared_ptr<Environment> env, int device_id, const std::string& role, int timeout_ms) {
+    std::shared_ptr<Environment> env, int device_id, const std::string& role, int timeout_ms,
+    std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager) {
   auto callable = ipc_func_proxy_->GetIpcFuncCallable<GlobalCacheQueryCallable>(IPC_FUNC_GLOBAL_CACHE_QUERY, device_id);
   callable->SetGlobalCacheConnector(connector);
   callable->SetBlockAllocatorManager(block_allocator_manager, dp_group_id);
+  callable->SetSwaBlockAllocatorManager(swa_block_allocator_manager);
   callable->SetIpcFuncWrapper(this);
   callable->SetEnvironment(env);
   callable->SetDeviceId(device_id);
@@ -958,13 +982,15 @@ void IpcFuncWrapper::SetGlobalCacheQueryDoneCallableFetcher(std::shared_ptr<Glob
   }
 }
 
-Status IpcFuncWrapper::ReportGlobalCachePutDone(int device_id, int64_t req_id) {
+Status IpcFuncWrapper::ReportGlobalCachePutDone(int device_id, int64_t req_id, int fa_put_blocks, int swa_put_blocks) {
   std::shared_ptr<IpcContext> ipc_context =
       CreateExecutor2EngineContext(IPC_FUNC_GLOBAL_CACHE_PUT_DONE, executor_id_, /*is_async=*/true, /*is_oneway=*/true,
                                    /*share_callable=*/false, /*share_callback=*/false);
   std::shared_ptr<GlobalCachePutDoneRequest> request = std::make_shared<GlobalCachePutDoneRequest>();
   request->device_id = device_id;
   request->req_id = req_id;
+  request->fa_put_blocks = fa_put_blocks;
+  request->swa_put_blocks = swa_put_blocks;
 
   STATUS_CHECK_RETURN(ipc_func_proxy_->Invoke(request.get(), nullptr, ipc_context.get()));
   return Status();

@@ -66,6 +66,9 @@ class FinishPathCacheManager : public CacheManagerInterface {
                              std::vector<size_t>&) override {
     return Status();
   }
+  Status DropUnbackedSwaBlocks(int64_t, size_t, std::vector<int>&, std::vector<size_t>&) override { return Status(); }
+  void BeginSwaPutHold(int64_t) override {}
+  void EndSwaPutHold(int64_t) override {}
   void DestroyFinishedRequest(int64_t req_id) override { destroyed.push_back(req_id); }
   bool IsPrefixCachingEnabled() override { return false; }
 
@@ -792,6 +795,9 @@ class ControllableCacheManager : public CacheManagerInterface {
                              std::vector<size_t>&) override {
     return Status();
   }
+  Status DropUnbackedSwaBlocks(int64_t, size_t, std::vector<int>&, std::vector<size_t>&) override { return Status(); }
+  void BeginSwaPutHold(int64_t) override {}
+  void EndSwaPutHold(int64_t) override {}
   void DestroyFinishedRequest(int64_t) override {}
   bool IsPrefixCachingEnabled() override { return false; }
 

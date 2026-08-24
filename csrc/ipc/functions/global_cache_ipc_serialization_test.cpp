@@ -45,6 +45,7 @@ TEST_F(GlobalCacheIpcSerializationTest, QueryRequestRoundTrip) {
   req.local_cached_len = 8;
   req.block_size = 4;
   req.kv_cache_block_ids = {100, 101, 102};
+  req.enqueue_wall_us = 1710000000123;
 
   size_t bytes = 0;
   ASSERT_TRUE(req.Serialize(buf_, &bytes).OK());
@@ -58,6 +59,7 @@ TEST_F(GlobalCacheIpcSerializationTest, QueryRequestRoundTrip) {
   EXPECT_EQ(restored.local_cached_len, req.local_cached_len);
   EXPECT_EQ(restored.block_size, req.block_size);
   EXPECT_EQ(restored.kv_cache_block_ids, req.kv_cache_block_ids);
+  EXPECT_EQ(restored.enqueue_wall_us, req.enqueue_wall_us);
 }
 
 TEST_F(GlobalCacheIpcSerializationTest, QueryRequestEmptyVectors) {
@@ -110,6 +112,8 @@ TEST_F(GlobalCacheIpcSerializationTest, PutDoneRequestRoundTrip) {
   GlobalCachePutDoneRequest req;
   req.device_id = 3;
   req.req_id = 67890;
+  req.fa_put_blocks = 12;
+  req.swa_put_blocks = 4;
 
   size_t bytes = 0;
   ASSERT_TRUE(req.Serialize(buf_, &bytes).OK());
@@ -120,6 +124,8 @@ TEST_F(GlobalCacheIpcSerializationTest, PutDoneRequestRoundTrip) {
 
   EXPECT_EQ(restored.device_id, req.device_id);
   EXPECT_EQ(restored.req_id, req.req_id);
+  EXPECT_EQ(restored.fa_put_blocks, req.fa_put_blocks);
+  EXPECT_EQ(restored.swa_put_blocks, req.swa_put_blocks);
 }
 
 TEST_F(GlobalCacheIpcSerializationTest, PutDoneRequestZeroValues) {
@@ -162,6 +168,14 @@ TEST_F(GlobalCacheIpcSerializationTest, QueryDoneRequestRoundTrip) {
   req.success = true;
   req.cached_tokens = {42, 99, 7};
   req.has_cached_tokens = true;
+  req.wait_us = 12000;
+  req.qf_us = 34000;
+  req.token_us = 5000;
+  req.report_us = 1000;
+  req.call_us = 40000;
+  req.report_wall_us = 1710000000456;
+  req.swa_aligned_hit_len = 128;
+  req.swa_filled_block_idxs = {1, 2, 3};
 
   size_t bytes = 0;
   ASSERT_TRUE(req.Serialize(buf_, &bytes).OK());
@@ -176,6 +190,14 @@ TEST_F(GlobalCacheIpcSerializationTest, QueryDoneRequestRoundTrip) {
   EXPECT_EQ(restored.success, req.success);
   EXPECT_EQ(restored.cached_tokens, req.cached_tokens);
   EXPECT_EQ(restored.has_cached_tokens, req.has_cached_tokens);
+  EXPECT_EQ(restored.wait_us, req.wait_us);
+  EXPECT_EQ(restored.qf_us, req.qf_us);
+  EXPECT_EQ(restored.token_us, req.token_us);
+  EXPECT_EQ(restored.report_us, req.report_us);
+  EXPECT_EQ(restored.call_us, req.call_us);
+  EXPECT_EQ(restored.report_wall_us, req.report_wall_us);
+  EXPECT_EQ(restored.swa_aligned_hit_len, req.swa_aligned_hit_len);
+  EXPECT_EQ(restored.swa_filled_block_idxs, req.swa_filled_block_idxs);
 }
 
 TEST_F(GlobalCacheIpcSerializationTest, QueryDoneRequestEmptyResult) {

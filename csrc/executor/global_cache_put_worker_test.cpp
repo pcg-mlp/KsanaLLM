@@ -32,10 +32,15 @@ class MockPutConnector : public GlobalCacheConnectorInterface {
   MOCK_METHOD(Status, Initialize, (const GlobalCacheConnectorConfig&), (override));
   MOCK_METHOD(Status, QueryAndFetch,
               (const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-               std::vector<int>&, bool, int),
+               std::vector<int>&, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*),
               (override));
   MOCK_METHOD(Status, PutGlobalCacheBlocks,
-              (const std::vector<int>&, int, int, int, int, size_t, const std::vector<int>&, const std::vector<void*>&),
+              (const std::vector<int>&, int, int, int, int, size_t, const std::vector<int>&, const std::vector<void*>&,
+               int*),
+              (override));
+  MOCK_METHOD(Status, PutSwaBlocks,
+              (const std::vector<int>&, int, int, int, size_t, const std::vector<size_t>&, const std::vector<void*>&,
+               int*),
               (override));
   MOCK_METHOD(Status, PutFirstTokens, (const std::vector<int>&, const std::vector<int>&), (override));
   MOCK_METHOD(Status, QueryFirstTokens, (const std::vector<int>&, std::vector<int>&, bool&), (override));
@@ -96,7 +101,7 @@ TEST(PutWorkerTest, SubmitBatchPutFiltersDecodeRequests) {
   auto connector = std::make_shared<testing::NiceMock<MockPutConnector>>();
   // 不应调用 PutGlobalCacheBlocks（因为 block_allocator_manager 为空，会在 PutRequestKVCache 中 early return）
   EXPECT_CALL(*connector, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                               testing::_, testing::_))
+                                               testing::_, testing::_, testing::_))
       .Times(0);
 
   GlobalCachePutWorker worker(connector, nullptr, 0, 0, nullptr);
@@ -107,6 +112,25 @@ TEST(PutWorkerTest, SubmitBatchPutFiltersDecodeRequests) {
   worker.SubmitBatchPut({req});
 
   // 等待线程池空闲
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  worker.Stop();
+}
+
+TEST(PutWorkerTest, SubmitBatchPutSkipsIncompleteInput) {
+  auto connector = std::make_shared<testing::NiceMock<MockPutConnector>>();
+  EXPECT_CALL(*connector, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                                               testing::_, testing::_, testing::_))
+      .Times(0);
+
+  GlobalCachePutWorker worker(connector, nullptr, 0, 0, nullptr);
+  worker.Start();
+
+  auto req = MakeExecReq(310, InferStage::kContext);
+  req->input_tokens = {1, 2, 3, 4, 5, 6, 7, 8};  // 完整 input
+  req->forwarding_tokens = {1, 2, 3, 4};         // 中间 chunk，尚未算完
+  req->spec_state.forwarding_tokens_draft_num = 0;
+  worker.SubmitBatchPut({req});
+
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
   worker.Stop();
 }
@@ -280,9 +304,10 @@ class PutWorkerDeepTest : public ::testing::Test {
 // ---- SubmitBatchPut → PutRequestKVCache 完整路径 ----
 
 TEST_F(PutWorkerDeepTest, BatchPutContextRequestCallsPutBlocks) {
-  EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(std::vector<int>{1, 2, 3, 4, 5}, /*tp_size=*/1, /*tp_rank=*/0,
-                                                     /*layer_index=*/0, /*block_token_num=*/16,
-                                                     /*block_byte_size=*/4096, std::vector<int>{0, 4}, testing::_))
+  EXPECT_CALL(*mock_connector_,
+              PutGlobalCacheBlocks(std::vector<int>{1, 2, 3, 4, 5}, /*tp_size=*/1, /*tp_rank=*/0,
+                                   /*layer_index=*/0, /*block_token_num=*/16,
+                                   /*block_byte_size=*/4096, std::vector<int>{0, 4}, testing::_, testing::_))
       .WillOnce(testing::Return(Status()));
 
   GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
@@ -294,7 +319,7 @@ TEST_F(PutWorkerDeepTest, BatchPutContextRequestCallsPutBlocks) {
 
 TEST_F(PutWorkerDeepTest, BatchPutConnectorFailureDoesNotCrash) {
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .WillOnce(testing::Return(Status(RET_RUNTIME_FAILED, "put failed")));
 
   GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
@@ -306,7 +331,7 @@ TEST_F(PutWorkerDeepTest, BatchPutConnectorFailureDoesNotCrash) {
 
 TEST_F(PutWorkerDeepTest, BatchPutMixedStagesOnlyProcessesContext) {
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .Times(1)
       .WillOnce(testing::Return(Status()));
 
@@ -321,7 +346,7 @@ TEST_F(PutWorkerDeepTest, BatchPutMixedStagesOnlyProcessesContext) {
 
 TEST_F(PutWorkerDeepTest, PutKVCacheNullGroupReturnsEarly) {
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
   // dp_group_id=99 不在 bam_ 中 → GetBlockAllocatorGroup 返回 nullptr
@@ -336,7 +361,7 @@ TEST_F(PutWorkerDeepTest, PutKVCacheNullDeviceAllocatorReturnsEarly) {
   // 覆盖默认 mock：device_id=0 时返回 nullptr
   ON_CALL(*mock_group_, GetDeviceBlockAllocator(0)).WillByDefault(testing::Return(nullptr));
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
   GlobalCachePutWorker worker(mock_connector_, bam_, 0, /*device_id=*/0, nullptr);
@@ -350,7 +375,7 @@ TEST_F(PutWorkerDeepTest, PutKVCacheEmptyBlockPtrsReturnsEarly) {
   ON_CALL(*mock_dev_alloc_, GetBlockPtrs(testing::_, testing::_))
       .WillByDefault(testing::DoAll(testing::SetArgReferee<1>(std::vector<void*>{}), testing::Return(Status())));
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
   GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
@@ -362,7 +387,7 @@ TEST_F(PutWorkerDeepTest, PutKVCacheEmptyBlockPtrsReturnsEarly) {
 
 TEST_F(PutWorkerDeepTest, PutKVCacheEmptyTokensReturnsEarly) {
   EXPECT_CALL(*mock_connector_, PutGlobalCacheBlocks(testing::_, testing::_, testing::_, testing::_, testing::_,
-                                                     testing::_, testing::_, testing::_))
+                                                     testing::_, testing::_, testing::_, testing::_))
       .Times(0);
 
   GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
@@ -411,6 +436,113 @@ TEST_F(PutWorkerDeepTest, FirstTokensPutConnectorFailureDoesNotCrash) {
   auto req = MakeDeepReq(900, InferStage::kContext);
   req->generated_tokens = {42};
   worker.SubmitFirstTokensPut({req});
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  worker.Stop();
+}
+
+// ---- PutRequestSwaCache 选点策略 ----
+// SWA block 未压缩、体积远大于主 KV，全量存会让全局 cache 占用翻倍，因此只存
+// 「尾部 N 个」+「前段每隔 K 个」。这里验证选中的 block 下标集合。
+
+class PutWorkerSwaTest : public PutWorkerDeepTest {
+ protected:
+  void SetUp() override {
+    PutWorkerDeepTest::SetUp();
+    // 基类固定返回 3 个指针，SWA 选点数量不定，改成按入参个数返回。
+    ON_CALL(*mock_dev_alloc_, GetBlockPtrs(testing::_, testing::_))
+        .WillByDefault([this](const std::vector<int>& block_ids, std::vector<void*>& ptrs) {
+          ptrs.clear();
+          for (size_t i = 0; i < block_ids.size(); ++i) {
+            ptrs.push_back(&fake_mem_[i % 16]);
+          }
+          return Status();
+        });
+  }
+
+  // 造一个 block_num 个满块、SWA 落点覆盖全部 block 的 prefill 请求。
+  std::shared_ptr<ExecutorInferRequest> MakeSwaReq(int64_t req_id, size_t block_num) {
+    std::vector<int> tokens(block_num * 16);
+    for (size_t i = 0; i < tokens.size(); ++i) {
+      tokens[i] = static_cast<int>(i + 1);
+    }
+    auto req = MakeDeepReq(req_id, InferStage::kContext, tokens);
+    for (size_t i = 0; i < block_num; ++i) {
+      req->swa_kv_cache_blocks.push_back(static_cast<int>(100 + i));
+      req->swa_kv_cache_block_idx_offsets.push_back(i);
+    }
+    return req;
+  }
+
+  std::vector<size_t> RunAndCaptureSelectedIdxs(const std::shared_ptr<ExecutorInferRequest>& req, int tail_block_num,
+                                                int front_equal_parts) {
+    std::vector<size_t> selected;
+    ON_CALL(*mock_connector_, PutSwaBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                                           testing::_, testing::_))
+        .WillByDefault(testing::DoAll(testing::SaveArg<5>(&selected), testing::Return(Status())));
+
+    GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
+    worker.SetSwaConfig(bam_, tail_block_num, front_equal_parts);
+    worker.Start();
+    worker.SubmitBatchPut({req});
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    worker.Stop();
+    return selected;
+  }
+};
+
+TEST_F(PutWorkerSwaTest, SelectsTailDensePlusFrontEqualMids) {
+  // 10 个满块，N=2 → front_len=8；parts=5 → 跳过首尾，中间 3 份中点 = 2,4,5；+tail 8,9。
+  auto selected = RunAndCaptureSelectedIdxs(MakeSwaReq(1000, 10), /*tail_block_num=*/2, /*front_equal_parts=*/5);
+  EXPECT_EQ(selected, (std::vector<size_t>{2, 4, 5, 8, 9}));
+}
+
+TEST_F(PutWorkerSwaTest, TailCoversAllWhenBlockNumSmallerThanTail) {
+  auto selected = RunAndCaptureSelectedIdxs(MakeSwaReq(1100, 3), /*tail_block_num=*/8, /*front_equal_parts=*/5);
+  EXPECT_EQ(selected, (std::vector<size_t>{0, 1, 2}));
+}
+
+TEST_F(PutWorkerSwaTest, FrontPartsThreeUploadsMiddleOnly) {
+  // parts=3 → 只上传中间 1 份中点；4 满块 N=1 → front_len=3，中点 mid=(3*3)/6=1；+tail 3。
+  auto selected = RunAndCaptureSelectedIdxs(MakeSwaReq(1200, 4), /*tail_block_num=*/1, /*front_equal_parts=*/3);
+  EXPECT_EQ(selected, (std::vector<size_t>{1, 3}));
+}
+
+// 只有满块的前缀哈希才能被其它请求命中，不满的尾块必须排除在外。
+TEST_F(PutWorkerSwaTest, SkipsPartialTailBlock) {
+  auto req = MakeSwaReq(1300, 3);
+  req->forwarding_tokens.push_back(999);  // 48 + 1 token → 第 4 个 block 不满
+  req->input_tokens = req->forwarding_tokens;
+  req->swa_kv_cache_blocks.push_back(103);
+  req->swa_kv_cache_block_idx_offsets.push_back(3);
+
+  auto selected = RunAndCaptureSelectedIdxs(req, /*tail_block_num=*/8, /*front_equal_parts=*/5);
+  EXPECT_EQ(selected, (std::vector<size_t>{0, 1, 2}));
+}
+
+TEST_F(PutWorkerSwaTest, NoPutWhenSwaConfigAbsent) {
+  EXPECT_CALL(*mock_connector_, PutSwaBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                                             testing::_, testing::_))
+      .Times(0);
+
+  GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
+  worker.Start();
+  worker.SubmitBatchPut({MakeSwaReq(1400, 4)});
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  worker.Stop();
+}
+
+TEST_F(PutWorkerSwaTest, NoPutWhenOffsetsSizeMismatch) {
+  EXPECT_CALL(*mock_connector_, PutSwaBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                                             testing::_, testing::_))
+      .Times(0);
+
+  auto req = MakeSwaReq(1500, 4);
+  req->swa_kv_cache_block_idx_offsets.pop_back();
+
+  GlobalCachePutWorker worker(mock_connector_, bam_, 0, 0, nullptr);
+  worker.SetSwaConfig(bam_, 2, 5);
+  worker.Start();
+  worker.SubmitBatchPut({req});
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
   worker.Stop();
 }

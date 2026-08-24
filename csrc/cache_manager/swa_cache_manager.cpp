@@ -193,6 +193,18 @@ void SWACacheManager::IncrementHitCount(size_t fa_block_id) {
   }
 }
 
+size_t SWACacheManager::FreeAllBlocks() {
+  std::vector<size_t> fa_block_ids;
+  fa_block_ids.reserve(swa_blocks_.size());
+  for (const auto& kv : swa_blocks_) {
+    fa_block_ids.push_back(kv.first);
+  }
+  for (size_t fa_block_id : fa_block_ids) {
+    FreeSWABlock(fa_block_id);
+  }
+  return fa_block_ids.size();
+}
+
 void SWACacheManager::FreeSWABlock(size_t fa_block_id) {
   auto it = swa_blocks_.find(fa_block_id);
   if (it == swa_blocks_.end()) {

@@ -129,6 +129,32 @@ setting:
     # host内存池大小（单位GB），0表示不启用内存池
     host_pool_size_gb: 0
 
+  # 全局 KV cache（Mooncake）。未配置 service_endpoint 时不启用。
+  # 启用时需 scheduler_type=1，并设置 ENV ENABLE_GLOBAL_CACHE_HOOK=1；
+  # serving 会按 --mooncake-http-port / --mooncake-rpc-port 拉起本地 master（已监听则跳过），
+  # 下列端口须与 CLI 对齐（默认 8080 / 50051）。
+  # global_cache_connector:
+  #   service_endpoint: "http://127.0.0.1:8080/metadata"
+  #   master_server_addr: "127.0.0.1:50051"
+  #   backend_type: "mooncake"           # 或 mooncake-mock
+  #   protocol: "tcp"                    # tcp | rdma
+  #   rdma_devices: ""                   # 默认空；RDMA 时写如 mlx5_0
+  #   global_segment_size: 107374182400  # 默认 100GiB；小内存节点请显式下调
+  #   local_buffer_size: 67108864        # 默认 64MiB
+  #   fetch_thread_num: 4
+  #   timeout_ms: 5000
+  #   # Put 热 key 门控：同 key 在窗口内第二次才上传；0=关闭
+  #   put_hotkey_window_sec: 0
+  #   # SWA 稀疏上传：尾部 N 密存 + 前段等分中位点稀存（非 SWA 模型可省略）
+  #   swa_tail_block_num: 2              # 默认 2，至少 1
+  #   swa_front_equal_parts: 5           # 默认 5，至少 3
+  #   # role: ""                         # "" | prefill | decode
+
+  # IPC heavy long-task 出队并行度（与 global_cache_connector 解耦）。
+  # 启动时若与 fetch_thread_num 不一致，两侧都会抬到 max，避免 H2D stream 1:1 绑定失败。
+  # ipc:
+  #   long_task_thread_num: 4
+
   # 选择attention计算中的backend
   attn_backend:
     enable_blocked_multi_token_forwarding_kv: false

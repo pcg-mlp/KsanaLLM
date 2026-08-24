@@ -4,8 +4,10 @@
 #pragma once
 
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
+
 #include "utils/status.h"
 
 #define SHARED_MEMORY_NAME "/ksana_llm_shm"
@@ -96,6 +98,9 @@ struct IpcFuncInfo {
   std::shared_ptr<IpcCallable> callable;
   std::shared_ptr<IpcCallback> callback;
   std::shared_ptr<std::mutex> mutex;
+  // heavy 且非 share 时：每次执行新建 request/response，避免多 long-task 线程抢同一把锁
+  std::function<std::shared_ptr<IpcRequest>()> create_request;
+  std::function<std::shared_ptr<IpcResponse>()> create_response;
 };
 
 // The serialized ipc packet, request or response, include contex.

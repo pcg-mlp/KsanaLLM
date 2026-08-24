@@ -14,6 +14,8 @@ Status GlobalCachePutDoneRequest::Serialize(void* ptr, size_t* bytes) const {
   size_t offset = 0;
   SerializePod<int>(device_id, ptr, offset);
   SerializePod<int64_t>(req_id, ptr, offset);
+  SerializePod<int>(fa_put_blocks, ptr, offset);
+  SerializePod<int>(swa_put_blocks, ptr, offset);
   *bytes = offset;
   return Status();
 }
@@ -22,6 +24,8 @@ Status GlobalCachePutDoneRequest::Deserialize(const void* ptr) {
   size_t offset = 0;
   device_id = DeserializePod<int>(ptr, offset);
   req_id = DeserializePod<int64_t>(ptr, offset);
+  fa_put_blocks = DeserializePod<int>(ptr, offset);
+  swa_put_blocks = DeserializePod<int>(ptr, offset);
   return Status();
 }
 
@@ -29,10 +33,11 @@ Status GlobalCachePutDoneCallable::Call(const IpcRequest* request, IpcResponse* 
   const GlobalCachePutDoneRequest* real_req = reinterpret_cast<const GlobalCachePutDoneRequest*>(request);
 
   KLLM_LOG_SCHEDULER << "received put done notification, device_id=" << real_req->device_id
-                     << ", req_id=" << real_req->req_id;
+                     << ", req_id=" << real_req->req_id << ", fa_put_blocks=" << real_req->fa_put_blocks
+                     << ", swa_put_blocks=" << real_req->swa_put_blocks;
 
   if (tracker_) {
-    tracker_->OnDevicePutDone(real_req->device_id, real_req->req_id);
+    tracker_->OnDevicePutDone(real_req->device_id, real_req->req_id, real_req->fa_put_blocks, real_req->swa_put_blocks);
   } else {
     KLLM_LOG_WARNING << "tracker not set";
   }

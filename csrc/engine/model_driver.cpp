@@ -454,6 +454,9 @@ Status ModelDriver::HandleSchedule() {
     {
       std::lock_guard<std::mutex> guard(schedule_result_map_mutex_);
       schedule_result_map_[schedule_output->schedule_id] = schedule_result;
+      KLLM_LOG_DEBUG << "schedule_result insert schedule_id=" << schedule_output->schedule_id
+                     << ", map_size=" << schedule_result_map_.size()
+                     << ", num_reqs=" << schedule_output->running_reqs.size();
     }
 
     // A1 优化：原 HandleScheduleOutputSend 线程在此被裁掉，直接发起 IPC dispatch，
@@ -482,7 +485,11 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
   size_t schedule_id = sampling_output->schedule_id;
   auto it = schedule_result_map_.find(schedule_id);
   if (it == schedule_result_map_.end()) {
-    KLLM_LOG_FATAL << "UpdateSamplingOutput error, schedule_id " << schedule_id << " not found.";
+    // 高压下同 schedule_id 二次消费时勿 FATAL 打挂进程
+    KLLM_LOG_ERROR << "schedule_result missing schedule_id=" << schedule_id
+                   << ", map_size=" << schedule_result_map_.size()
+                   << ", sampling_result_size=" << sampling_output->sampling_result.size()
+                   << " (skip duplicate/stale sampling)";
     return;
   }
 
@@ -551,6 +558,7 @@ void ModelDriver::UpdateSamplingOutput(std::shared_ptr<SamplingOutput> sampling_
     schedule_processor_->UpdateWithGenerationResult(schedule_result->generation_output_group);
   }
   schedule_result_map_.erase(it);
+  KLLM_LOG_DEBUG << "schedule_result erase schedule_id=" << schedule_id << ", map_size=" << schedule_result_map_.size();
 }
 
 Status ModelDriver::HandleScheduleUpdate() {

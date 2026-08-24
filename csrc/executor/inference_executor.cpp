@@ -311,7 +311,17 @@ Status InferenceExecutor::Initialize() {
     global_cache_config.device_id = context_->device->GetDeviceId();
     global_cache_config.device_count = context_->global->GetAttentionTensorParallelSize();
     global_cache_config.block_byte_size = runtime_config.attn_backend_config.block_size;
+    // SWA block 字节数与主 KV 不同，connector 需要它建独立的 staging pool。
+    if (swa_block_allocator_manager_) {
+      auto swa_group = swa_block_allocator_manager_->GetBlockAllocatorGroup(dp_group_id);
+      if (swa_group) {
+        global_cache_config.swa_block_byte_size = swa_group->GetBlockAllocatorGroupConfig().block_size;
+      }
+    }
     global_cache_connector_ = GlobalCacheConnectorFactory::CreateConnector(global_cache_config);
+    KLLM_CHECK_WITH_INFO(
+        global_cache_connector_ != nullptr,
+        FormatStr("Failed to create/initialize global cache connector for device %d", context_->device->GetDeviceId()));
     if (global_cache_connector_) {
       int device_id = context_->device->GetDeviceId();
       // pd_v2 节点自动覆盖 role: 与 engine 侧 fetcher_role 保持一致, 让 QueryCallable /
@@ -325,13 +335,30 @@ Status InferenceExecutor::Initialize() {
           effective_role = "pd_v2_decode";
         }
       }
+      // decode 角色会在 connector 内部循环重试直到全命中，这与 SWA 的「命中边界必须对齐到
+      // 有 SWA 的位置」冲突：重试期间边界会变，拉到的 SWA 与最终命中长度不再对应。
+      // 不静默降级，直接报错退出。
+      if (swa_block_allocator_manager_) {
+        KLLM_CHECK_WITH_INFO(effective_role != "decode" && effective_role != "pd_v2_decode",
+                             FormatStr("global cache + SWA is not supported for role '%s'.", effective_role.c_str()));
+        if (context_->global->GetWorldSize() > 1) {
+          KLLM_LOG_WARNING << "global cache + SWA with world_size > 1: block key has no pipeline rank, "
+                              "multiple pipeline nodes will overwrite each other's entries.";
+        }
+      }
+
       ipc_func_wrapper_->SetGlobalCacheQueryCallableDeps(global_cache_connector_, block_allocator_manager_, dp_group_id,
                                                          env_, device_id, effective_role,
-                                                         global_cache_config.timeout_ms);
+                                                         global_cache_config.timeout_ms, swa_block_allocator_manager_);
 
       // 创建 GlobalCachePutWorker 并注入到 ModelRunner
       auto global_cache_put_worker = std::make_shared<GlobalCachePutWorker>(
-          global_cache_connector_, block_allocator_manager_, dp_group_id, device_id, ipc_func_wrapper_, effective_role);
+          global_cache_connector_, block_allocator_manager_, dp_group_id, device_id, ipc_func_wrapper_, effective_role,
+          global_cache_config.fetch_thread_num);
+      if (swa_block_allocator_manager_) {
+        global_cache_put_worker->SetSwaConfig(swa_block_allocator_manager_, global_cache_config.swa_tail_block_num,
+                                              global_cache_config.swa_front_equal_parts);
+      }
       global_cache_put_worker->Start();
       model_runner_->SetGlobalCachePutWorker(global_cache_put_worker);
 

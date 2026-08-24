@@ -322,6 +322,8 @@ Status ModelRunner::HandleExecute() {
     }
 
     if (global_cache_put_worker_) {
+      // 全局 cache Put 与计算流无关：先等本步计算流写完 KV，再提交独立 put 线程做 D2H。
+      StreamSynchronize(context_->device->GetPrimaryComputeStream());
       global_cache_put_worker_->SubmitBatchPut(model_input->schedule_output->executor_running_reqs);
     }
 

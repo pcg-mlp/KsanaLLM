@@ -408,6 +408,14 @@ class InferRequest {
 
   int mamba_kv_cache_block_id = -1;
 
+  // SWA-aligned global cache hit length (tokens), set by GlobalCacheFetcher when a global
+  // cache hit extended the prefix past the local prefix-cache hit.  0 means no such hit.
+  //
+  // Handed to GlobalCacheQueryHook, which is the only place that has both this value and a
+  // cache manager: the SWA blocks in [local_hit, this - W) received no content from the global
+  // store and must be dropped before UpdateRequestTokens marks them valid.
+  size_t global_swa_aligned_hit_len = 0;
+
   // The max token number of one block.
   size_t block_token_num;
 
@@ -449,6 +457,16 @@ class InferRequest {
   // Prefill node can report it and KsanaPythonOutput / StreamingIterator read it back.
   int &prefix_cache_hit_tokens;
 
+  // Global cache access-log metrics (references to Request atomics).
+  std::atomic<int> &global_cache_ext_tokens;
+  std::atomic<int64_t> &global_cache_get_us;
+  std::atomic<int> &global_cache_put_fa_blocks;
+  std::atomic<int> &global_cache_put_swa_blocks;
+  std::atomic<uint64_t> &global_cache_put_done_time_us;
+  std::atomic<bool> &global_cache_put_pending;
+  // Keep Request alive for put-tracker to stamp metrics after InferRequest leaves the schedule.
+  std::shared_ptr<Request> request_ptr;
+
   // Incremental decoded str used in stop strings
   std::string incremental_decoded_str;
 
@@ -457,6 +475,10 @@ class InferRequest {
 
   // Whether dispatch infer request in patch mode.
   bool patch_transfer = false;
+
+  // GlobalCacheQueryHook 已 SubmitRequest、各卡 Query/H2D 尚未全部完成。
+  // 此窗口内 abort 不得立刻 Stop/Free（H2D 仍可能写入本 req 的 KV）；等查询完成后再 FailAndEnd。
+  bool awaiting_global_cache_query = false;
 
  public:
   // Init or Recompute, copy output_tokens to prefilling_tokens_
@@ -532,6 +554,15 @@ class InferRequest {
   bool IsStopped() const { return is_stopped_; }
   void Stop() { is_stopped_ = true; }
   void Restart() { is_stopped_ = false; }
+
+  // 调度器统一判定：req 是否已经处于"不应再继续推进"的状态。
+  // 包含两种来源：
+  //   1) is_stopped_ —— 调度器内部 Stop() 流程已经把请求标记为停止；
+  //   2) aborted   —— 客户端断开/取消（StreamingIterator 等异步设置）。
+  // 历史上 EventDrivenScheduler 多处只检查 IsStopped() 不检查 aborted，导致客户端断开后
+  // inflight req 既没被 ResetInflightTask 也没被 emit kStopRequest，造成调度死锁。
+  // 所有调度路径中决定 skip / drop event / 不再投入 batch 的判断都应统一使用此方法。
+  bool IsStoppedOrAborted() const { return is_stopped_ || aborted; }
 
  private:
   bool is_stopped_ = false;

@@ -228,6 +228,25 @@ class BuildExt(build_ext_orig):
                 endpoint_status[endpoint] = False
                 cmake_options[option_name] = "OFF"
 
+        # 默认打进真实 Mooncake Store 插件；可用 CMAKE_ARGS=-DUSE_MOONCAKE_REAL_STORE=OFF 关闭
+        cmake_options["USE_MOONCAKE_REAL_STORE"] = "ON"
+        if "-DUSE_MOONCAKE_REAL_STORE=OFF" in cmake_args:
+            cmake_options["USE_MOONCAKE_REAL_STORE"] = "OFF"
+
+        # 有预装 Mooncake 时走 MOONCAKE_SOURCE_ROOT，避免 FetchContent 从头编译
+        # 优先环境变量 / CMAKE_ARGS，否则用本机约定路径 /data/mcinstall/Mooncake
+        if cmake_options.get("USE_MOONCAKE_REAL_STORE") == "ON":
+            has_mc_src_arg = any(a.startswith("-DMOONCAKE_SOURCE_ROOT=") for a in cmake_args)
+            if not has_mc_src_arg:
+                mc_src = os.environ.get("MOONCAKE_SOURCE_ROOT", "/data/mcinstall/Mooncake")
+                if os.path.isdir(mc_src):
+                    cmake_options["MOONCAKE_SOURCE_ROOT"] = mc_src
+                    has_mc_build_arg = any(a.startswith("-DMOONCAKE_BUILD_ROOT=") for a in cmake_args)
+                    if not has_mc_build_arg:
+                        mc_build = os.environ.get("MOONCAKE_BUILD_ROOT", os.path.join(mc_src, "build"))
+                        if os.path.isfile(os.path.join(mc_build, "mooncake-store", "src", "libmooncake_store.a")):
+                            cmake_options["MOONCAKE_BUILD_ROOT"] = mc_build
+
         # Convert the cmake_options dictionary into command-line arguments
         cmake_args.extend([f"-D{key}={value}" for key, value in cmake_options.items()])
 
@@ -235,9 +254,11 @@ class BuildExt(build_ext_orig):
         build_args = ["--config", config]
 
         # Only build the targets that actually get packaged. torch_serving pulls
-        # in all static libs + loguru + tbb transitively; endpoint .so's are
-        # dlopen'd at runtime so they must be listed explicitly.
+        # in all static libs + loguru + tbb transitively; endpoint .so's and
+        # mooncake_connector are dlopen'd at runtime so they must be listed explicitly.
         build_targets = ["torch_serving"]
+        if cmake_options.get("USE_MOONCAKE_REAL_STORE") == "ON":
+            build_targets.append("mooncake_connector")
         for endpoint in implemented_endpoints:
             if endpoint_status[endpoint] and endpoint != "triton":
                 build_targets.append(f"{endpoint}_endpoint")
@@ -260,7 +281,7 @@ class BuildExt(build_ext_orig):
 
         # After building, copy the necessary files to the package directory
         self.copy_built_libraries(extdir, build_temp, cwd, implemented_endpoints, endpoint_status)
-        self.copy_python_files_and_dirs(extdir, cwd, implemented_endpoints, endpoint_status)
+        self.copy_python_files_and_dirs(extdir, build_temp, cwd, implemented_endpoints, endpoint_status)
 
     def copy_built_libraries(self, extdir, build_temp, cwd, implemented_endpoints, endpoint_status):
         """
@@ -284,6 +305,7 @@ class BuildExt(build_ext_orig):
             "libloguru.so",
             "libglobal_cache_connector.so.1",
             "libmooncake_store.so",
+            "libmooncake_connector.so",
         ]
 
         # Include endpoint libraries that are enabled
@@ -315,13 +337,23 @@ class BuildExt(build_ext_orig):
                 dst_lib_package = package_lib_dir / target_lib   # other libs in /ksana_llm/lib/
             copy_file(str(src_lib), str(dst_lib_package))
 
+        # Mooncake connector 依赖的 libasio.so（同目录 $ORIGIN 可解析）
+        mc_build = os.environ.get("MOONCAKE_BUILD_ROOT", "")
+        if not mc_build:
+            mc_src = os.environ.get("MOONCAKE_SOURCE_ROOT", "/data/mcinstall/Mooncake")
+            mc_build = os.path.join(mc_src, "build")
+        asio_so = pathlib.Path(mc_build) / "mooncake-asio" / "libasio.so"
+        if asio_so.exists():
+            copy_file(str(asio_so), str(package_lib_dir / "libasio.so"))
+            copy_file(str(asio_so), str(deps_lib / "libasio.so"))
+
         # Copy deepseek-ai deepgemm package
         src_dir = build_temp / "third_party" / "DeepGEMM" / "deep_gemm"
         dst_dir = extdir.parent / "ksana_llm" / "deepseek_deep_gemm"
         if src_dir.exists():
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
-    def copy_python_files_and_dirs(self, extdir, cwd, implemented_endpoints, endpoint_status):
+    def copy_python_files_and_dirs(self, extdir, build_temp, cwd, implemented_endpoints, endpoint_status):
         """
         Copy the required Python files and directories into the package.
         """
@@ -342,6 +374,7 @@ class BuildExt(build_ext_orig):
                                "python" / "xgrammar")
         xgrammar_python_dst = (extdir.parent / "ksana_llm" / "openaiapi" /
                                "_xgrammar")
+        xgrammar_python_dst.mkdir(parents=True, exist_ok=True)
         for module_name in ("structural_tag.py", "openai_tool_call_schema.py",
                             "builtin_structural_tag.py"):
             src_file = xgrammar_python_src / module_name

@@ -250,6 +250,7 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
   }
 
   // Remove blocks from request.
+  size_t released_block_count = cached_request->cached_blocks.size();
   cached_request->cached_blocks.clear();
 
   // Release all SWA blocks via SWACacheManager.
@@ -272,6 +273,9 @@ void DirectCacheManager::DestroyFinishedRequest(int64_t req_id) {
   }
 
   cached_requests_.erase(it);
+  KLLM_LOG_SCHEDULER << "DestroyFinishedRequest req " << req_id << " released, blocks=" << released_block_count
+                     << ", free=" << free_cached_blocks_.size() << ", cached_reqs=" << cached_requests_.size()
+                     << ", usable=" << GetUsableBlockNumber() << ", device_used=" << GetDeviceUsedBlockNumber();
 }
 
 Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector<int>& kvcached_token_ids,
@@ -330,6 +334,51 @@ Status DirectCacheManager::UpdateRequestTokens(int64_t req_id, const std::vector
     }
   }
 
+  return Status();
+}
+
+Status DirectCacheManager::DropUnbackedSwaBlocks(int64_t req_id, size_t keep_start_block_idx,
+                                                 std::vector<int>& swa_req_block_ids,
+                                                 std::vector<size_t>& swa_block_idx_offsets) {
+  if (swa_cache_manager_ == nullptr) {
+    return Status();
+  }
+
+  auto it = cached_requests_.find(req_id);
+  if (it == cached_requests_.end()) {
+    return Status(RET_RUNTIME_FAILED, FormatStr("DropUnbackedSwaBlocks: req %d is not exist.", req_id));
+  }
+  DirectCachedRequest* cached_request = it->second.get();
+
+  // DirectCacheManager 没有 prefix 树，block 不跨请求共享，全部直接释放。
+  auto& ids = cached_request->swa_window_fa_block_ids;
+  auto& idxs = cached_request->swa_window_block_idxs;
+  std::vector<size_t> kept_ids;
+  std::vector<size_t> kept_idxs;
+  for (size_t i = 0; i < idxs.size(); ++i) {
+    if (idxs[i] >= keep_start_block_idx) {
+      kept_ids.push_back(ids[i]);
+      kept_idxs.push_back(idxs[i]);
+      continue;
+    }
+    swa_cache_manager_->SetReclaimable(req_id, ids[i]);
+    swa_cache_manager_->FreeSWABlock(ids[i]);
+  }
+  ids.swap(kept_ids);
+  idxs.swap(kept_idxs);
+
+  swa_req_block_ids.clear();
+  swa_block_idx_offsets.clear();
+  for (size_t i = 0; i < ids.size(); ++i) {
+    const int mem_id = swa_cache_manager_->GetSWAMemoryBlockId(ids[i]);
+    if (mem_id >= 0) {
+      swa_req_block_ids.push_back(mem_id);
+      swa_block_idx_offsets.push_back(idxs[i]);
+    }
+  }
+
+  KLLM_LOG_DEBUG << "DropUnbackedSwaBlocks req " << req_id << " keep_start=" << keep_start_block_idx
+                 << ", kept=" << ids.size();
   return Status();
 }
 

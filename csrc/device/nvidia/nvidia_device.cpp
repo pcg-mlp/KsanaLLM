@@ -183,7 +183,29 @@ template <>
 void MemcpyAsyncT<DEVICE_TYPE_NVIDIA>(void* dst, const void* src, size_t count, enum MemcpyKind kind,
                                       StreamT<DEVICE_TYPE_NVIDIA> stream) {
   if (count > 0) {
-    CUDA_CHECK(cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind), stream.Get()));
+    // 异步 illegal 常在后续线程的 MemcpyAsync 上滞后上报；失败时打印指针/device 以便对齐 postprocess 线程。
+    const cudaError_t peek_before = cudaPeekAtLastError();
+    const cudaError_t result = cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind), stream.Get());
+    if (result != cudaSuccess) {
+      int cur_dev = -1;
+      cudaGetDevice(&cur_dev);
+      cudaPointerAttributes dst_attr{};
+      cudaPointerAttributes src_attr{};
+      const cudaError_t dst_e = cudaPointerGetAttributes(&dst_attr, dst);
+      const cudaError_t src_e = cudaPointerGetAttributes(&src_attr, src);
+      KLLM_LOG_ERROR << "MemcpyAsync failed, err=" << cudaGetErrorString(result)
+                     << " peek_before=" << cudaGetErrorString(peek_before) << " cur_dev=" << cur_dev
+                     << " kind=" << static_cast<int>(kind) << " count=" << count << " dst=" << dst << " src=" << src
+                     << " stream=" << static_cast<const void*>(stream.Get())
+                     << " dst_attr_ok=" << (dst_e == cudaSuccess ? 1 : 0)
+                     << " dst_type=" << (dst_e == cudaSuccess ? static_cast<int>(dst_attr.type) : -1)
+                     << " dst_dev=" << (dst_e == cudaSuccess ? dst_attr.device : -1)
+                     << " src_attr_ok=" << (src_e == cudaSuccess ? 1 : 0)
+                     << " src_type=" << (src_e == cudaSuccess ? static_cast<int>(src_attr.type) : -1)
+                     << " src_dev=" << (src_e == cudaSuccess ? src_attr.device : -1);
+    }
+    CheckCUDAError(result, "cudaMemcpyAsync(dst, src, count, GetCudaMemcpyKind(kind), stream.Get())", __FILE__,
+                   __LINE__);
   }
 }
 
@@ -285,5 +307,6 @@ template <>
 void* GetRuntimeContextT<DEVICE_TYPE_NVIDIA>() {
   return nullptr;
 }
+
 
 }  // namespace ksana_llm

@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "batch_scheduler/event_driven_scheduler/continuous_batching_backend.h"
@@ -65,6 +67,12 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   dp_state.in_plan_schedule_ops.stop_req_ids.erase(req->req_id);
   dp_state.in_plan_schedule_ops.recompute_req_ids.erase(req->req_id);
 
+  // 防御性：如果 req 此刻仍有 inflight_task_（例如 stop 与回包竞态），先清掉再 Stop()。
+  // 否则该 req 在 batch.running_reqs 中残留 inflight 标记，会污染状态。
+  // 虽然 IsLaunchable 已会 skip IsStopped() 的 req，但 inflight 残留仍是不一致的状态机。
+  if (req->HasInflightTask()) {
+    req->ResetInflightTask();
+  }
   req->Stop();
 
   // Release blocks and notify clients.
@@ -94,6 +102,22 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
     }
     if (output_token_num > 1 && first_token > 0 && finish >= first_token) {
       REPORT_METRIC("tpot_us", (finish - first_token) / (output_token_num - 1));
+    }
+
+    // ACCESS 对齐：prefix 总量（hook 路径下可能含全局扩展后的 prefill_start_offset）
+    // 与计数器 prefix_cache_hit_token_num（仅本地查询瞬间）不同，这里按请求结束时的成员上报分布。
+    if (req->prefix_cache_hit_tokens > 0) {
+      REPORT_METRIC("access_prefix_cache_hit_tokens", req->prefix_cache_hit_tokens);
+    }
+    {
+      const int global_ext = req->global_cache_ext_tokens.load(std::memory_order_relaxed);
+      if (global_ext > 0) {
+        REPORT_METRIC("access_global_cache_ext_tokens", global_ext);
+      }
+      const int64_t get_us = req->global_cache_get_us.load(std::memory_order_relaxed);
+      if (get_us > 0) {
+        REPORT_METRIC("access_global_cache_get_us", get_us);
+      }
     }
 
     // pd_v2 Decode-side phase metrics; only for requests that actually went through a remote
@@ -132,7 +156,11 @@ void EventDrivenScheduleProcessor::HandleStopRequest(const std::shared_ptr<Infer
   }
 
   if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
+    KLLM_LOG_SCHEDULER << "HandleStopRequest: immediate release, req_id=" << req->req_id << ", dp_idx=" << dp_idx;
     dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  } else {
+    KLLM_LOG_SCHEDULER << "HandleStopRequest: deferred release (put pending), req_id=" << req->req_id
+                       << ", dp_idx=" << dp_idx;
   }
   req->kv_cache_blocks.clear();
   req->Notify();
@@ -187,7 +215,11 @@ void EventDrivenScheduleProcessor::HandleHookFailAndEnd(const std::shared_ptr<In
   }
   StampOnce(req->finish_time_us);
   if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req_id, dp_idx)) {
+    KLLM_LOG_SCHEDULER << "HandleHookFailAndEnd: immediate release, req_id=" << req_id << ", dp_idx=" << dp_idx;
     dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req_id);
+  } else {
+    KLLM_LOG_SCHEDULER << "HandleHookFailAndEnd: deferred release (put pending), req_id=" << req_id
+                       << ", dp_idx=" << dp_idx;
   }
   req->kv_cache_blocks.clear();
   if (!already_finished) {
@@ -209,8 +241,9 @@ void EventDrivenScheduleProcessor::HandleRecomputeRequest(const std::shared_ptr<
     return;
   }
 
-  if (req->IsStopped()) {
-    KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " is stopped, drop recompute event";
+  // 同步排除 aborted 请求：客户端已取消的请求不应再被 recompute。
+  if (req->IsStoppedOrAborted()) {
+    KLLM_LOG_SCHEDULER << "req_id=" << req->req_id << " is stopped/aborted, drop recompute event";
     return;
   }
 
@@ -285,7 +318,11 @@ void EventDrivenScheduleProcessor::HandlePdV2DecodeRestart(const std::shared_ptr
   // workers to free their copy (recomputed_req_ids). The peer-written KV is
   // discarded entirely — we will re-fetch it from a peer Prefill after restart.
   if (!global_cache_put_tracker_ || !global_cache_put_tracker_->DeferDestructionIfNeeded(req->req_id, dp_idx)) {
+    KLLM_LOG_SCHEDULER << "pd_v2 recompute restart: immediate release, req_id=" << req->req_id << ", dp_idx=" << dp_idx;
     dp_cache_managers_[dp_idx]->DestroyFinishedRequest(req->req_id);
+  } else {
+    KLLM_LOG_INFO << "pd_v2 recompute restart: deferred release (put pending), req_id=" << req->req_id
+                  << ", dp_idx=" << dp_idx;
   }
   req->kv_cache_blocks.clear();
   req->swa_kv_cache_blocks.clear();
@@ -363,7 +400,33 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
   };
 
   KLLM_LOG_DEBUG << "ApplyBackendEventsToState: " << backend_events.size() << " events";
-  for (const auto& ev : backend_events) {
+
+  // 剔除与 recompute/stop 冲突的 kMoveToDecode 事件。
+  // 同一请求在同一轮 Schedule 中可能同时产生 kMoveToDecode（prefill 完成）和
+  // kRecomputeRequest（内存不足），若不剔除，recompute 放回 prefilling 后
+  // kMoveToDecode 会将请求错误地移入 decoding，导致 cache manager 状态不一致。
+  std::vector<ScheduleBackendEvent> filtered_events;
+  {
+    std::unordered_set<int64_t> invalidated_req_ids;
+    for (const auto& ev : backend_events) {
+      if ((ev.type == ScheduleBackendEventType::kRecomputeRequest ||
+           ev.type == ScheduleBackendEventType::kStopRequest) &&
+          ev.req_ptr) {
+        invalidated_req_ids.insert(ev.req_ptr->req_id);
+      }
+    }
+    for (const auto& ev : backend_events) {
+      if (ev.type == ScheduleBackendEventType::kMoveToDecode && ev.req_ptr &&
+          invalidated_req_ids.count(ev.req_ptr->req_id)) {
+        KLLM_LOG_SCHEDULER << "Drop kMoveToDecode for req_id=" << ev.req_ptr->req_id
+                           << " (conflicts with recompute/stop)";
+        continue;
+      }
+      filtered_events.push_back(ev);
+    }
+  }
+
+  for (const auto& ev : filtered_events) {
     const size_t dp_idx = ev.dp_idx;
     std::shared_ptr<InferRequest> req = ev.req_ptr;
     if (req == nullptr) {
@@ -409,12 +472,6 @@ bool EventDrivenScheduleProcessor::ApplyBackendEventsToState(const std::vector<S
       has_resource_released = true;
     }
   }
-  // pd_v2: KV blocks may have just been freed (Stop / Recompute / Swapout).
-  // Wake hooks that hold deferred-admission queues so they retry alloc on
-  // the EDS thread (via async_callback_ → event_queue_ → next loop turn →
-  // UpdateAsyncResult). Currently only GlobalCacheQueryHook (pd_v2 Decode role)
-  // implements this; others use the default no-op. The hook itself
-  // short-circuits when its queue is empty, so the call is cheap on V1-only paths.
   if (has_resource_released && schedule_hook_manager_) {
     schedule_hook_manager_->OnEvent(HookEvent(HookEventType::kBlocksFreed));
   }
@@ -529,8 +586,7 @@ Status EventDrivenScheduleProcessor::AddInferRequest(std::vector<std::shared_ptr
 
     return finish_status;
   }
-  // Maintain global req_id -> req_ptr index as early as possible.
-  // This is required because async hook next_steps may only contain req_id.
+
   {
     std::lock_guard<std::mutex> guard(infer_request_mutex_);
     for (const auto& req : infer_request_group) {
@@ -690,15 +746,23 @@ void EventDrivenScheduleProcessor::AsyncSchedulerLoop() {
   constexpr size_t kPendingSchedulePollMs = 50;
   while (!terminated_) {
     SchedEvent event;
+    const bool put_has_pending_completions =
+        global_cache_put_tracker_ != nullptr && global_cache_put_tracker_->HasPendingCompletions();
     {
       PROFILE_EVENT_SCOPE(sched_loop_wait, "Engine.AsyncSchedulerLoop.Wait");
-      event = pending_get_schedule_result_ ? event_queue_.Get(kPendingSchedulePollMs) : event_queue_.Get();
+      event = (pending_get_schedule_result_ || put_has_pending_completions) ? event_queue_.Get(kPendingSchedulePollMs)
+                                                                            : event_queue_.Get();
     }
     if (terminated_) {
       break;
     }
     if (event.IsEmpty()) {
-      // Empty event: either Stop() wakeup or a pending-schedule poll timeout.
+      // Empty event: Stop() wakeup、put-done 唤醒、或 poll timeout。
+      // put 完成项必须在 scheduler 线程 Drain，避免与 UpdateRequestTokens 并发改 SWA LFU。
+      if (!terminated_ && global_cache_put_tracker_ != nullptr) {
+        std::lock_guard<std::mutex> guard(infer_request_mutex_);
+        global_cache_put_tracker_->DrainPutCompletions();
+      }
       // On timeout, re-run scheduling and re-attempt the gated launch so the
       // engine recovers as soon as IsLaunchable() turns true.
       if (!terminated_ && pending_get_schedule_result_) {
@@ -708,11 +772,14 @@ void EventDrivenScheduleProcessor::AsyncSchedulerLoop() {
           RunScheduleForBatches();
         }
       }
-      continue;  // 空事件仅用于 Stop() 时唤醒 Get() 或 pending 轮询超时
+      continue;  // 空事件仅用于 Stop() 时唤醒 Get() 或轮询超时
     }
     PROFILE_EVENT_SCOPE(sched_loop_iter, "Engine.AsyncSchedulerLoop.iter");
     {
       std::lock_guard<std::mutex> guard(infer_request_mutex_);
+      if (global_cache_put_tracker_ != nullptr) {
+        global_cache_put_tracker_->DrainPutCompletions();
+      }
       DispatchEvent(event);
 
       while (true) {
@@ -997,6 +1064,7 @@ void EventDrivenScheduleProcessor::RunScheduleForBatches() {
       has_resource_released |= ApplyBackendEventsToState(backend_events);
     }
   } while (has_resource_released);
+  // master 侧 ReportEventDrivenState 已覆盖原 ReportTotalState 的运维监控字段。
   ReportEventDrivenState();
 }
 
@@ -1022,7 +1090,7 @@ bool EventDrivenScheduleProcessor::TryBuildAndLaunchScheduleResult(ScheduleConte
         std::string inflight_ids;
         for (const auto& dp_batch : planning_batch->dp_batches) {
           for (const auto& r : dp_batch.running_reqs) {
-            if (r.second != nullptr && !r.second->IsStopped() && r.second->HasInflightTask()) {
+            if (r.second != nullptr && !r.second->IsStoppedOrAborted() && r.second->HasInflightTask()) {
               ++inflight_cnt;
               if (inflight_ids.size() < 256) {
                 inflight_ids += std::to_string(r.first) + ",";
@@ -1210,6 +1278,10 @@ void EventDrivenScheduleProcessor::SetWorkloadBalancer(std::shared_ptr<WorkloadB
 
 void EventDrivenScheduleProcessor::SetGlobalCachePutTracker(std::shared_ptr<GlobalCachePutTracker> tracker) {
   global_cache_put_tracker_ = std::move(tracker);
+  if (global_cache_put_tracker_ != nullptr) {
+    // put-done IPC 入队后唤醒 AsyncSchedulerLoop，尽快 Drain（空事件即可）。
+    global_cache_put_tracker_->SetSchedulerWake([this]() { event_queue_.Put(SchedEvent{}); });
+  }
   KLLM_LOG_SCHEDULER << "GlobalCachePutTracker set for EventDrivenScheduleProcessor";
 }
 

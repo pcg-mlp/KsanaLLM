@@ -16,12 +16,14 @@
 
 #include "batch_scheduler/planning_workload_estimator.h"
 #include "batch_scheduler/request_finish_checker.h"
+#include "cache_manager/prefix_cache_manager.h"
 #include "configure/environment.h"
 #include "configure/schedule_config_parser.h"
 #include "profiler/reporter.h"
 #include "runtime/schedule_output.h"
 #include "runtime/speculative/common/spec_scheduling_info.h"
 #include "runtime/speculative/common/speculative_resource_profile.h"
+#include "utils/logger.h"
 #include "utils/ret_code.h"
 #include "utils/singleton.h"
 
@@ -176,6 +178,18 @@ void ContinuousBatchingBackend::UpdateWithGenerationResult(size_t multi_batch_id
         continue;
       }
 
+#ifdef CLEAR_CACHE
+      if (req->input_tokens.size() == 2 && req->input_tokens[0] == 0 && req->input_tokens[1] == 0) {
+        size_t freed_fa = 0;
+        size_t freed_swa = 0;
+        auto* prefix_cache_manager_ptr = dynamic_cast<PrefixCacheManager*>(cache_manager.get());
+        if (prefix_cache_manager_ptr != nullptr) {
+          prefix_cache_manager_ptr->ClearAllCachedBlocksForTest(freed_fa, freed_swa);
+          KLLM_LOG_WARNING << "CLEAR_CACHE freed FA blocks=" << freed_fa << ", leftover SWA swept=" << freed_swa;
+        }
+      }
+#endif
+
       if (IsRequestFinished(req, batch_scheduler_config_)) {
         req->finish_status = Status(RET_SUCCESS);
         req->finished = true;
@@ -245,7 +259,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
     DecodeDpAggregate& agg = agg_it->second;
 
     for (const auto& req : dp_state.decoding_reqs) {
-      KLLM_CHECK(req != nullptr && !req->IsStopped());
+      KLLM_CHECK(req != nullptr);
 
       // Catch reqs aborted while sitting in the decoding queue — must emit
       // kStopRequest so HandleStopRequest releases blocks and notifies
@@ -256,6 +270,11 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
                          << " dp_idx=" << dp_idx;
         EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
                       Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
+        continue;
+      }
+      // stop 路径若未及时从 decoding_reqs 剔除，跳过入批，避免硬断言打崩进程
+      if (req->IsStopped()) {
+        KLLM_LOG_WARNING << "stopped req still in decoding queue, skip: req_id=" << req->req_id << " dp_idx=" << dp_idx;
         continue;
       }
 
@@ -281,6 +300,7 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
         agg.decoding_recompute_candidate = req;
       }
 
+      // admission 用本步 query token 数，不能用整段序列长度（decode 累计会误拒）。
       const size_t max_required_token_num =
           GetMaxRequiredTokenNum(req->GetPlanningSequenceLen(), GetAggregatedSchedulingInfo());
       const size_t step_query_token_num =
@@ -290,11 +310,14 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
       const bool request_acceptable = workload_balancer_->IsRequestAcceptable(
           req, planning_batch, quota, step_query_token_num, step_query_token_num);
       if (!request_acceptable) {
-        KLLM_LOG_SCHEDULER << "Skip decoding req_id=" << req->req_id
+        KLLM_LOG_SCHEDULER << "Skip decoding req_id=" << req->req_id << ", dp_idx=" << dp_idx
                            << ": IsRequestAcceptable=false, running_req_num=" << planning_batch.GetRunningReqNum()
                            << ", max_batch_size=" << batch_scheduler_config_.max_batch_size
                            << ", max_required_token_num=" << max_required_token_num
                            << ", step_query_token_num=" << step_query_token_num
+                           << ", planning_seq_len=" << req->GetPlanningSequenceLen()
+                           << ", dp_running_step_token=" << planning_batch.dp_batches[dp_idx].running_step_token_num
+                           << ", batch_running_step_token=" << planning_batch.running_step_token_num
                            << ", sampling_token_num=" << req->sampling_token_num;
         continue;
       }
@@ -337,7 +360,8 @@ void ContinuousBatchingBackend::ProcessDecodingQueue(const ScheduleContext& cont
     }
     std::shared_ptr<InferRequest> recompute_candidate = nullptr;
     for (const auto& prefill_req : dp_state.prefilling_reqs) {
-      if (prefill_req == nullptr || prefill_req->IsStopped()) {
+      // 同步排除 aborted 请求：避免把已被客户端取消的请求误选为 recompute 候选。
+      if (prefill_req == nullptr || prefill_req->IsStoppedOrAborted()) {
         continue;
       }
       // pd_v2 state-machine invariant check: a req with pd_v2_awaiting_prefill
@@ -436,7 +460,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
         break;
       }
 
-      if (req == nullptr || req->IsStopped()) {
+      // aborted 优先 emit stop；已 stop 则跳过。勿用 IsStoppedOrAborted 短路，否则 abort 分支不可达。
+      if (req == nullptr) {
         continue;
       }
       if (req->aborted) {
@@ -444,6 +469,9 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
                          << " dp_idx=" << dp_idx;
         EmitEventOnce(ScheduleBackendEventType::kStopRequest, dp_idx, req,
                       Status(RET_REQUEST_TERMINATED, "client aborted"), events, emitted_event_keys);
+        continue;
+      }
+      if (req->IsStopped()) {
         continue;
       }
       if (dp_batch.IsInBatch(req->req_id)) {
@@ -621,7 +649,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
     std::shared_ptr<InferRequest> survivor = nullptr;
     size_t survivor_blocks = 0;
     for (const auto& prefill_req : dp_state.prefilling_reqs) {
-      if (prefill_req == nullptr || prefill_req->IsStopped() || prefill_req->kv_cache_blocks.empty()) {
+      // 同步排除 aborted 请求：避免把已被取消的请求选为 survivor。
+      if (prefill_req == nullptr || prefill_req->IsStoppedOrAborted() || prefill_req->kv_cache_blocks.empty()) {
         continue;
       }
       const size_t blocks = prefill_req->kv_cache_blocks.size();
@@ -637,7 +666,8 @@ void ContinuousBatchingBackend::ProcessPrefillingQueue(const ScheduleContext& co
 
     std::shared_ptr<InferRequest> recompute_candidate = nullptr;
     for (const auto& prefill_req : dp_state.prefilling_reqs) {
-      if (prefill_req == nullptr || prefill_req->IsStopped() || prefill_req->kv_cache_blocks.empty()) {
+      // 同步排除 aborted 请求：避免把已被取消的请求选为 recompute 候选。
+      if (prefill_req == nullptr || prefill_req->IsStoppedOrAborted() || prefill_req->kv_cache_blocks.empty()) {
         continue;
       }
       if (prefill_req->req_id == survivor->req_id) {
@@ -686,6 +716,12 @@ void ContinuousBatchingBackend::ScanAbortedPreprocessingReqs(const ScheduleConte
           KLLM_LOG_WARNING << "client aborted while awaiting prefill, defer stop: req_id=" << req->req_id
                            << " dp_idx=" << dp_idx;
         }
+        continue;
+      }
+      // 全局 cache Query/H2D 进行中：勿立刻 Stop/Free，等查询完成后再由 hook FailAndEnd 释放。
+      if (req->awaiting_global_cache_query) {
+        KLLM_LOG_WARNING << "client aborted while awaiting global cache query, defer stop: req_id=" << req->req_id
+                         << " dp_idx=" << dp_idx;
         continue;
       }
       if (in_plan_ops.stop_req_ids.count(req->req_id) > 0) {

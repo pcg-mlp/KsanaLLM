@@ -21,11 +21,6 @@ GlobalCacheQueryHook::GlobalCacheQueryHook(std::shared_ptr<GlobalCacheFetcher> f
       hook_idx_(hook_idx),
       defer_admission_on_block_full_(defer_admission_on_block_full) {
   KLLM_CHECK(fetcher_ != nullptr);
-  // 给正在 decode 的 req 预留至多每槽 1 块的 headroom (worst case: 同一 step 所有
-  // max_batch_size 个 decode req 都跨 block 边界各要 1 新块)。下限 1 防 config 未初始化时退化。
-  admission_block_reserve_ = std::max<size_t>(config.max_batch_size, 1);
-  // in-flight 并发上限 = 2 * max_batch_size (1× decoding set + 1× awaiting-prefill buffer)。
-  // 见 header 注释: bound awaiting-prefill backlog, 防 KV 块被预占抽干。
   max_inflight_reqs_ = 2 * std::max<size_t>(config.max_batch_size, 1);
 }
 
@@ -68,6 +63,14 @@ void GlobalCacheQueryHook::WakeDeferredAdmission() {
   tr.task_ret_state = 0;
   info.task_results.push_back(tr);
   async_callback_(info);
+}
+
+bool GlobalCacheQueryHook::IsInflightCapExceeded() const {
+  if (!defer_admission_on_block_full_) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lk(pending_mu_);
+  return in_flight_admitted_.size() >= max_inflight_reqs_;
 }
 
 void GlobalCacheQueryHook::ReleaseInflightSlot(int64_t req_id) {
@@ -145,37 +148,7 @@ bool GlobalCacheQueryHook::PrepareRequest(InferRequestPtr& req, std::shared_ptr<
   KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: req_id=" << req->req_id << ", seq_token_num=" << seq_token_num
                      << ", req_step_block_num=" << req_step_block_num << ", shared_token_num=" << shared_token_num;
 
-  // pd_v2 Decode admission gate: 在 AllocateRequestBlocks (会触发 O(深度) FreeCachedBlocks
-  // 驱逐扫描) 之前, 用 GetUsableBlockNumber() 廉价预检 free pool。decode 把每个 admitted req
-  // 立刻 ship 去 prefill 并预占 req_step_block_num (~278) 块, 这些块在整段 prefill 往返
-  // (compute-bound, 数分钟) 期间一直被占。无此 gate 时大量新 req 会在 alloc 上反复失败, 每次
-  // 失败都跑一遍驱逐扫描 → CPU 空转尖刺。预检把 req 在 alloc 之前就挡进
-  // pending_admission_, 同时为正在 decode 的 req 保留 admission_block_reserve_ 块 headroom,
-  // 避免新 admission 把池抽干饿死它们。只在 defer_admission_on_block_full_ 路径生效 (pd_v2
-  // Decode), V1 路径走 backend fallback, 不受影响。
-  if (defer_admission_on_block_full_) {
-    // (1) in-flight 并发上限: 把 "已准入未离场" 的 req 数 bound 在 max_inflight_reqs_,
-    // 否则 awaiting-prefill backlog 无界增长会把 KV 块预占抽干 (见 header 注释)。
-    {
-      std::lock_guard<std::mutex> lk(pending_mu_);
-      if (in_flight_admitted_.size() >= max_inflight_reqs_) {
-        KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: admission gate defer (inflight cap) req_id=" << req->req_id
-                           << ", in_flight=" << in_flight_admitted_.size() << ", cap=" << max_inflight_reqs_;
-        return false;
-      }
-    }
-
-    // (2) block-usable 预检: 在 AllocateRequestBlocks (会触发 O(深度) FreeCachedBlocks
-    // 驱逐扫描) 之前用 GetUsableBlockNumber() 廉价预检 free pool, 同时为正在 decode 的 req
-    // 保留 admission_block_reserve_ 块增量 headroom。
-    const size_t usable = cache_manager->GetUsableBlockNumber();
-    if (usable < req_step_block_num + admission_block_reserve_) {
-      KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: admission gate defer req_id=" << req->req_id << ", usable=" << usable
-                         << ", need=" << req_step_block_num << ", reserve=" << admission_block_reserve_;
-      return false;
-    }
-  }
-
+  // pd_v2 Decode in-flight 并发上限在 Process / UpdateAsyncResult 入口预检。
   Status status = cache_manager->AllocateRequestBlocks(req->req_id, req_step_block_num, req->kv_cache_blocks,
                                                        req->swa_kv_cache_blocks, req->swa_kv_cache_block_idx_offsets,
                                                        req->mamba_kv_cache_block_id);
@@ -258,6 +231,16 @@ ReqIdToNextStep GlobalCacheQueryHook::Process(const std::vector<InferRequestPtr>
     const size_t dp_idx = static_cast<size_t>(req->attn_dp_group_id);
     auto cache_manager = context.GetDpCacheManager(dp_idx);
 
+    if (IsInflightCapExceeded()) {
+      KLLM_LOG_SCHEDULER << "GlobalCacheQueryHook: admission gate defer (inflight cap) req_id=" << req->req_id;
+      {
+        std::lock_guard<std::mutex> lk(pending_mu_);
+        pending_admission_.push_back(req);
+      }
+      result[req->req_id] = NextStep{NextStepAction::kWaitAsyncResult, 0};
+      continue;
+    }
+
     bool prepared = PrepareRequest(req, cache_manager);
     if (!prepared) {
       if (defer_admission_on_block_full_) {
@@ -333,6 +316,12 @@ ReqIdToNextStep GlobalCacheQueryHook::UpdateAsyncResult(const std::vector<AsyncT
     // 尽力调度: 某个 req alloc 失败 (pool 仍满) 不阻塞后续 req, 仅把失败的 req 按原序押回
     // pending_admission_ 队尾, 继续尝试 drained 中剩余的 req, 让 pending_admission_ 尽可能被调度。
     for (auto& req : drained) {
+      if (IsInflightCapExceeded()) {
+        std::lock_guard<std::mutex> lk(pending_mu_);
+        pending_admission_.push_back(std::move(req));
+        continue;
+      }
+
       const size_t dp_idx = static_cast<size_t>(req->attn_dp_group_id);
       auto cache_manager = context.GetDpCacheManager(dp_idx);
 
@@ -342,6 +331,7 @@ ReqIdToNextStep GlobalCacheQueryHook::UpdateAsyncResult(const std::vector<AsyncT
       // 跳过的校验)。
       bool prepared = PrepareRequest(req, cache_manager);
       if (!prepared) {
+        KLLM_LOG_SCHEDULER << "pending admission retry alloc failed, req_id=" << req->req_id;
         std::lock_guard<std::mutex> lk(pending_mu_);
         pending_admission_.push_back(std::move(req));
         continue;

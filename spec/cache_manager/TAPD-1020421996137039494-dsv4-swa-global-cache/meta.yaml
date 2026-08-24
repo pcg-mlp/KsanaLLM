@@ -1,0 +1,73 @@
+skill_version: "0.4.1"
+status: pending_verification
+complexity: XL
+work_type: feature
+subdomain: cache_manager
+cross_subdomains: [scheduler, distributed]
+
+source:
+  type: tapd
+  id: "1020421996137039494"
+  url: "https://tapd.woa.com/tapd_fe/20421996/story/detail/1020421996137039494"
+  workspace_id: "20421996"
+  fetch_status: ok
+  upload_status: n/a
+
+tapd_sync:
+  last_synced: null
+  action: null
+  entry_type: stories
+  entry_id: "1020421996137039494"
+  workspace_id: "20421996"
+  fields: []
+  artifact: null
+  skipped: user
+
+execution_env:
+  coding:
+    agent: "cursor-grok-4.6"
+    last_active: "2026-08-24T10:32:00+08:00"
+  container:
+    agent: "n/a"
+    last_run: null
+
+models:
+  review: opus
+
+handoff:
+  pending: false
+  manifest: 2-handoff-manifest.json
+  produced_at: "2026-08-24T10:18:42+08:00"
+  produced_by_commit: "6a1fe8d724e5a35c405dbb4d6cf84aa2875906b2"
+  consumed_at: null
+  consumed_by_commit: null
+
+verify_attempts: 0
+max_retries: 3
+
+artifacts:
+  clarification:      {produced_at: "2026-08-24T10:18:42+08:00", stale: false, revision: 2, produced_by_env: coding}
+  context-snapshot:    {produced_at: "2026-08-24T10:18:42+08:00", stale: false, revision: 2, produced_by_env: coding, updated_by_stages: [clarify, design]}
+  change-plan:         {produced_at: "2026-08-24T10:18:42+08:00", stale: false, revision: 1, produced_by_env: coding}
+  coding-snapshot:      {produced_at: "2026-08-24T10:18:42+08:00", stale: false, revision: 1, produced_by_env: coding}
+  verify-report:
+    compile:     {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    unit:        {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    integration: {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: not_run}
+  reviews:
+    - {produced_at: "2026-08-24T10:18:42+08:00", stale: false, revision: 1, filename: "20260824-1018-go_only.md", mode: go_only, model: "cursor-grok-4.6"}
+
+knowledge_base_feedback:
+  status: not_started
+  proposal_count: 0
+  applied_at: null
+
+status_history:
+  - {status: draft, at: "2026-08-24T10:18:42+08:00", by: /ai-clarify, env: coding, reason: "reverse-doc from 6a1fe8d72"}
+  - {status: designing, at: "2026-08-24T10:18:42+08:00", by: /ai-design, env: coding, reason: "reverse-map landed commit"}
+  - {status: pending_verification, at: "2026-08-24T10:18:42+08:00", by: /ai-go, env: coding, reason: "code already in tree; snapshot only"}
+
+skipped_phases: [ai-verify]
+paused_from: null
+blocked_reason: null
+blocked_at: null

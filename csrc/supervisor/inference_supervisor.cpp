@@ -5,6 +5,7 @@
 #include "supervisor/inference_supervisor.h"
 #include <unistd.h>
 
+#include <algorithm>
 #include <memory>
 
 #include "configure/schedule_config_parser.h"
@@ -62,9 +63,10 @@ InferenceSupervisor::InferenceSupervisor(const std::string &config_file, bool is
 InferenceSupervisor::~InferenceSupervisor() { Destroy(); }
 
 Status InferenceSupervisor::InitIpc() {
-  // Create ipc func wrapper.
-  ipc_func_wrapper_ =
-      std::make_shared<IpcFuncWrapper>(context_->global->GetTensorParallelSize(), is_engine_, executor_id_);
+  // Create ipc func wrapper；long-task 并行度来自 yaml（已与 fetch_thread_num 取 max 对齐）。
+  const size_t long_task_thread_num = static_cast<size_t>(std::max(1, env_->GetLongTaskThreadNum()));
+  ipc_func_wrapper_ = std::make_shared<IpcFuncWrapper>(context_->global->GetTensorParallelSize(), is_engine_,
+                                                       executor_id_, /*initialize_device=*/true, long_task_thread_num);
   return Status();
 }
 

@@ -5,22 +5,30 @@
 #include "batch_scheduler/global_cache_fetcher.h"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
+#include <future>
+#include <string>
 
 #include "configure/environment.h"
 #include "ipc/ipc_func_wrapper.h"
 #include "profiler/reporter.h"
+#include "profiler/timer.h"
 #include "utils/logger.h"
 #include "utils/string_utils.h"
 
 namespace ksana_llm {
 
 GlobalCacheFetcher::GlobalCacheFetcher(int device_count, std::shared_ptr<IpcFuncWrapper> ipc_func_wrapper,
-                                       const std::string& role)
-    : device_count_(device_count), ipc_func_wrapper_(ipc_func_wrapper), role_(role) {
-  dispatch_thread_pool_ = std::make_unique<ThreadPool>(2);
-  KLLM_LOG_INFO << "GlobalCacheFetcher created: device_count=" << device_count_
-                << ", role=" << (role_.empty() ? "(standalone)" : role_)
+                                       const std::string& role, int fetch_thread_num, int fetch_timeout_ms)
+    : device_count_(device_count),
+      ipc_func_wrapper_(ipc_func_wrapper),
+      role_(role),
+      fetch_timeout_ms_(std::max(1, fetch_timeout_ms)) {
+  const size_t thread_num = static_cast<size_t>(std::max(1, fetch_thread_num));
+  dispatch_thread_pool_ = std::make_unique<ThreadPool>(thread_num);
+  KLLM_LOG_INFO << "created: device_count=" << device_count_ << ", fetch_thread_num=" << thread_num
+                << ", fetch_timeout_ms=" << fetch_timeout_ms_ << ", role=" << (role_.empty() ? "(standalone)" : role_)
                 << ", ipc_enabled=" << (ipc_func_wrapper_ != nullptr);
 }
 
@@ -30,10 +38,18 @@ GlobalCacheFetcher::~GlobalCacheFetcher() { Stop(); }
 void GlobalCacheFetcher::Start() {
   terminated_ = false;
   dispatch_thread_pool_->Start();
+  // 仅异步 IPC 路径需要超时扫尾；无后端时 Submit 同步完成
+  if (ipc_func_wrapper_ != nullptr) {
+    timeout_thread_ = std::thread([this] { TimeoutLoop(); });
+  }
 }
 
 void GlobalCacheFetcher::Stop() {
   terminated_ = true;
+  timeout_wake_cv_.notify_all();
+  if (timeout_thread_.joinable()) {
+    timeout_thread_.join();
+  }
 
   CompletionCallback cb;
   std::vector<int64_t> orphan_req_ids;
@@ -70,6 +86,13 @@ void GlobalCacheFetcher::SubmitRequest(std::shared_ptr<InferRequest> req) {
 
   // 没有 ipc_func_wrapper_ 说明未配置全局 cache 后端，仅基于本地 cache 更新 workload 后直接完成。
   if (!ipc_func_wrapper_) {
+    size_t input_token_num = req->GetPrefillingTokens().size();
+    size_t seq_len = req->GetPlanningSequenceLen();
+    KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req->req_id << ", input_tokens=" << input_token_num
+                   << ", seq_len=" << seq_len << ", local_cache=" << local_cached_len
+                   << ", global_cache=0, total_cached=" << local_cached_len
+                   << ", remaining_prefill=" << (seq_len > local_cached_len ? seq_len - local_cached_len : 0)
+                   << ", full_hit=" << (local_cached_len >= seq_len);
     UpdateRequestWorkload(req, local_cached_len);
     std::lock_guard<std::mutex> lock(mutex_);
     if (req->finished) {
@@ -84,6 +107,16 @@ void GlobalCacheFetcher::SubmitRequest(std::shared_ptr<InferRequest> req) {
   pending.req = req;
   pending.devices_completed = 0;
   pending.total_devices = device_count_;
+  pending.submit_time_us = ProfileTimer::GetCurrentTimeInUs();
+  const size_t device_slots = static_cast<size_t>(std::max(device_count_, 0));
+  pending.device_done_us.assign(device_slots, -1);
+  pending.swa_enabled = !req->swa_kv_cache_blocks.empty() &&
+                        req->swa_kv_cache_blocks.size() == req->swa_kv_cache_block_idx_offsets.size();
+  {
+    const size_t planning_seq_len = req->GetPlanningSequenceLen();
+    const size_t token_seq_len = req->GetPrefillingTokens().size();
+    pending.query_seq_len = std::max(planning_seq_len, token_seq_len);
+  }
 
   int64_t req_id = req->req_id;
 
@@ -97,35 +130,72 @@ void GlobalCacheFetcher::SubmitRequest(std::shared_ptr<InferRequest> req) {
 
   // 在线程池中异步发送 IPC 到所有 executor
   dispatch_thread_pool_->Submit([this, req_id]() {
-    if (terminated_) return;
+    if (terminated_) {
+      return;
+    }
 
     PendingRequest pending_copy;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       auto it = pending_requests_.find(req_id);
-      if (it == pending_requests_.end()) return;
+      if (it == pending_requests_.end()) {
+        return;
+      }
       pending_copy = it->second;
     }
     DispatchQueryToExecutors(pending_copy);
   });
 }
 
-void GlobalCacheFetcher::DispatchQueryToExecutors(const PendingRequest& pending) {
-  size_t local_cached_len = pending.req->GetPlanningWorkload().prefill_start_offset;
-  for (int executor_id = 0; executor_id < device_count_; ++executor_id) {
-    Status status = ipc_func_wrapper_->DispatchGlobalCacheQuery(
-        executor_id, pending.req->req_id, pending.req->GetPrefillingTokens(), local_cached_len,
-        static_cast<int>(pending.req->block_token_num), pending.req->kv_cache_blocks);
+size_t GlobalCacheFetcher::SwaWindowBlockNum(size_t block_token_num) const {
+  if (sliding_window_size_ == 0 || block_token_num == 0) {
+    return 1;
+  }
+  return (sliding_window_size_ + block_token_num - 1) / block_token_num;
+}
 
-    if (!status.OK()) {
-      KLLM_LOG_ERROR << "GlobalCacheFetcher: dispatch global cache query IPC failed, req_id=" << pending.req->req_id
-                     << ", executor_id=" << executor_id << ", error=" << status.GetMessage();
-      GlobalCacheQueryResult result;
-      result.req_id = pending.req->req_id;
-      result.device_id = executor_id;
-      result.success = false;
-      OnDeviceComplete(result);
-    }
+void GlobalCacheFetcher::DispatchQueryToExecutors(const PendingRequest& pending) {
+  // 先拷贝只读字段，再并行 Invoke：同一请求尽量同时发到各卡，避免串行发送拉开起点
+  const int64_t req_id = pending.req->req_id;
+  const std::vector<int> token_ids = pending.req->GetPrefillingTokens();
+  const size_t local_cached_len = pending.req->GetPlanningWorkload().prefill_start_offset;
+  const int block_size = static_cast<int>(pending.req->block_token_num);
+  const std::vector<int> kv_cache_block_ids = pending.req->kv_cache_blocks;
+  const int n = device_count_;
+
+  // SWA：命中边界必须落在「末 W 个位置有 SWA」处，因此把本地 SWA 落点与命中上限一起发给
+  // executor，让求边界与拉取在同一处完成。上限用 seq_len - 1，engine 侧的 cap 只作兜底。
+  const std::vector<int> swa_kv_cache_block_ids =
+      pending.swa_enabled ? pending.req->swa_kv_cache_blocks : std::vector<int>{};
+  const std::vector<size_t> swa_block_idx_offsets =
+      pending.swa_enabled ? pending.req->swa_kv_cache_block_idx_offsets : std::vector<size_t>{};
+  const size_t swa_window_block_num = pending.swa_enabled ? SwaWindowBlockNum(pending.req->block_token_num) : 1;
+  const size_t seq_len = pending.query_seq_len > 0 ? pending.query_seq_len : pending.req->GetPlanningSequenceLen();
+  const size_t max_cached_len = pending.swa_enabled && seq_len > 0 ? seq_len - 1 : 0;
+
+  std::vector<std::future<void>> futs;
+  futs.reserve(static_cast<size_t>(std::max(n, 0)));
+
+  for (int executor_id = 0; executor_id < n; ++executor_id) {
+    futs.push_back(std::async(std::launch::async, [this, executor_id, req_id, &token_ids, local_cached_len, block_size,
+                                                   &kv_cache_block_ids, &swa_kv_cache_block_ids, &swa_block_idx_offsets,
+                                                   swa_window_block_num, max_cached_len]() {
+      Status status = ipc_func_wrapper_->DispatchGlobalCacheQuery(
+          executor_id, req_id, token_ids, local_cached_len, block_size, kv_cache_block_ids, swa_kv_cache_block_ids,
+          swa_block_idx_offsets, swa_window_block_num, max_cached_len);
+      if (!status.OK()) {
+        KLLM_LOG_ERROR << "dispatch global cache query IPC failed, req_id=" << req_id << ", executor_id=" << executor_id
+                       << ", error=" << status.GetMessage();
+        GlobalCacheQueryResult result;
+        result.req_id = req_id;
+        result.device_id = executor_id;
+        result.success = false;
+        OnDeviceComplete(result);
+      }
+    }));
+  }
+  for (auto& fut : futs) {
+    fut.wait();
   }
 }
 
@@ -140,16 +210,36 @@ void GlobalCacheFetcher::OnDeviceComplete(const GlobalCacheQueryResult& result) 
 
   PendingRequest& pending = it->second;
   pending.devices_completed++;
+  const int64_t now_us = ProfileTimer::GetCurrentTimeInUs();
+  const int64_t done_offset = now_us - pending.submit_time_us;
+  if (result.device_id >= 0 && static_cast<size_t>(result.device_id) < pending.device_done_us.size()) {
+    pending.device_done_us[static_cast<size_t>(result.device_id)] = done_offset;
+  }
+  pending.last_done_us = done_offset;
 
   if (result.success) {
     pending.per_device_ranges.push_back(result.matched_ranges);
+
+    // SWA：各卡必须报回完全相同的对齐边界。不一致说明有的卡缺 SWA 内容，
+    // 取最小值会让命中点落在那些卡没有拉 SWA 的位置上，只能整体放弃全局命中。
+    if (pending.swa_enabled) {
+      if (pending.swa_aligned_hit_len == 0) {
+        pending.swa_aligned_hit_len = result.swa_aligned_hit_len;
+      } else if (pending.swa_aligned_hit_len != result.swa_aligned_hit_len) {
+        pending.swa_consistent = false;
+      }
+      if (result.swa_aligned_hit_len == 0) {
+        pending.swa_consistent = false;
+      }
+    }
+
     // 任一设备查到 token(s) 即采用（token 与设备无关，所有设备的结果一致）
     if (result.has_cached_tokens && !pending.has_cached_tokens) {
       pending.cached_tokens = result.cached_tokens;
       pending.has_cached_tokens = true;
       KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << result.req_id
                      << " cached_tokens collected from device_id=" << result.device_id
-                     << ", token_count=" << result.cached_tokens.size();
+                     << ", token_count=" << pending.cached_tokens.size();
     }
   } else {
     pending.all_success = false;
@@ -161,41 +251,162 @@ void GlobalCacheFetcher::OnDeviceComplete(const GlobalCacheQueryResult& result) 
                      << pending.devices_completed << "/" << pending.total_devices << ", success=" << result.success;
 
   if (pending.devices_completed >= pending.total_devices) {
-    size_t local_cached_len = pending.req->GetPlanningWorkload().prefill_start_offset;
-    size_t total_cached_len = local_cached_len;
+    FinalizePendingLocked(it, lock);
+  }
+}
 
-    if (pending.all_success && !pending.per_device_ranges.empty()) {
-      size_t global_prefix_len = GetAllDevicesContiguousPrefixLen(pending.per_device_ranges, local_cached_len);
-      total_cached_len += global_prefix_len;
+void GlobalCacheFetcher::FinalizePendingLocked(std::unordered_map<int64_t, PendingRequest>::iterator it,
+                                               std::unique_lock<std::mutex>& lock) {
+  PendingRequest& pending = it->second;
+  const int64_t req_id = pending.req->req_id;
 
-      if (global_prefix_len > 0) {
-        KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << result.req_id
-                           << " global cache extended prefix, local=" << local_cached_len
-                           << ", global_prefix=" << global_prefix_len << ", total_cached=" << total_cached_len;
+  size_t local_cached_len = pending.req->GetPlanningWorkload().prefill_start_offset;
+  size_t total_cached_len = local_cached_len;
+
+  // SWA 命中的边界要被 hook 用来算 DropUnbackedSwaBlocks 的保留起点，所以要跟着 pending 传出去。
+  size_t swa_aligned_hit_len = 0;
+
+  if (pending.all_success && !pending.per_device_ranges.empty()) {
+    size_t global_prefix_len = GetAllDevicesContiguousPrefixLen(pending.per_device_ranges, local_cached_len);
+    total_cached_len += global_prefix_len;
+
+    if (pending.swa_enabled) {
+      // executor 侧保证：主 KV 没有完整覆盖 [local, L) 时会把 matched_ranges 一起清空，
+      // 所以这里要求两个信号严格对齐；对不上就说明 L 与实际可用前缀不一致，放弃全局命中。
+      if (!pending.swa_consistent || total_cached_len != pending.swa_aligned_hit_len) {
+        if (global_prefix_len > 0) {
+          KLLM_LOG_WARNING << "GlobalCacheFetcher: req_id=" << req_id
+                           << " drop global hit, swa_consistent=" << pending.swa_consistent
+                           << ", swa_aligned_hit_len=" << pending.swa_aligned_hit_len
+                           << ", contiguous_total=" << total_cached_len << ", local=" << local_cached_len;
+        } else {
+          KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req_id
+                         << " swa align unavailable, no global extension, swa_consistent=" << pending.swa_consistent
+                         << ", swa_aligned_hit_len=" << pending.swa_aligned_hit_len << ", local=" << local_cached_len;
+        }
+        total_cached_len = local_cached_len;
+        global_prefix_len = 0;
+      } else {
+        swa_aligned_hit_len = pending.swa_aligned_hit_len;
       }
     }
 
-    UpdateRequestWorkload(pending.req, total_cached_len, pending.cached_tokens, pending.has_cached_tokens);
+    if (global_prefix_len > 0) {
+      KLLM_LOG_DEBUG << "GlobalCacheFetcher: req_id=" << req_id
+                     << " global cache extended prefix, local=" << local_cached_len
+                     << ", global_prefix=" << global_prefix_len << ", total_cached=" << total_cached_len
+                     << ", swa_aligned=" << swa_aligned_hit_len;
+    }
+  }
 
-    bool success = !pending.req->finished;
-    if (success) {
-      KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << result.req_id
-                         << " all devices done, moved to prepared queue";
-      completed_requests_.push_back(std::move(pending.req));
-    } else {
-      KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << result.req_id << " all devices done, request rejected";
-      rejected_requests_.push_back(std::move(pending.req));
+  // get 耗时：相对 submit 的最晚一卡完成时刻（us）。无 IPC 的本地旁路路径保持 0。
+  if (pending.last_done_us >= 0) {
+    pending.req->global_cache_get_us.store(pending.last_done_us, std::memory_order_relaxed);
+    REPORT_METRIC("global_cache_get_us", pending.last_done_us);
+  }
+
+  // 统一处理 workload 更新和全命中切换 decode（decode 角色不满足条件时会拒绝请求）
+  UpdateRequestWorkload(pending.req, total_cached_len, pending.cached_tokens, pending.has_cached_tokens,
+                        swa_aligned_hit_len);
+
+  // 按实际采纳的 workload 记扩展长度（被放弃/截断后为 0）。
+  {
+    const size_t applied = pending.req->GetPlanningWorkload().prefill_start_offset;
+    const int ext = (applied > local_cached_len) ? static_cast<int>(applied - local_cached_len) : 0;
+    pending.req->global_cache_ext_tokens.store(ext, std::memory_order_relaxed);
+    // 与 prefix_cache_hit_token_num（仅本地）对称：这里只记全局相对本地多出来的 token。
+    if (ext > 0) {
+      REPORT_METRIC("global_cache_hit_req_num", 1);
+      REPORT_METRIC("global_cache_ext_token_num", ext);
+    }
+  }
+
+  // 交给 hook 释放命中范围内未写入的 SWA block。UpdateRequestWorkload 可能因兜底截断放弃
+  // 全局命中，此时 prefill_start_offset 不等于 L，不能再让 hook 按 L 去 drop。
+  pending.req->global_swa_aligned_hit_len =
+      (swa_aligned_hit_len > 0 && pending.req->GetPlanningWorkload().prefill_start_offset == swa_aligned_hit_len)
+          ? swa_aligned_hit_len
+          : 0;
+
+  bool success = !pending.req->finished;
+  if (success) {
+    KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << req_id << " all devices done, moved to prepared queue";
+    completed_requests_.push_back(std::move(pending.req));
+  } else {
+    KLLM_LOG_SCHEDULER << "GlobalCacheFetcher: req_id=" << req_id << " all devices done, request rejected";
+    rejected_requests_.push_back(std::move(pending.req));
+  }
+
+  CompletionCallback cb = completion_callback_;
+  pending_requests_.erase(it);
+
+  if (cb) {
+    // 回调在锁外执行，避免死锁（回调可能重新获取锁或操作调度器事件队列）
+    lock.unlock();
+    cb(req_id, success);
+  }
+}
+
+void GlobalCacheFetcher::TimeoutLoop() {
+  while (!terminated_) {
+    {
+      std::unique_lock<std::mutex> wake_lock(timeout_wake_mutex_);
+      timeout_wake_cv_.wait_for(wake_lock, std::chrono::milliseconds(100), [this] { return terminated_.load(); });
+    }
+    if (terminated_) {
+      break;
+    }
+    SweepTimeouts();
+  }
+}
+
+void GlobalCacheFetcher::SweepTimeouts() {
+  const int64_t now_us = ProfileTimer::GetCurrentTimeInUs();
+  const int64_t timeout_us = static_cast<int64_t>(fetch_timeout_ms_) * 1000;
+  std::vector<int64_t> timed_out_ids;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    timed_out_ids.reserve(pending_requests_.size());
+    for (const auto& [req_id, pending] : pending_requests_) {
+      if (now_us - pending.submit_time_us >= timeout_us) {
+        timed_out_ids.push_back(req_id);
+      }
+    }
+  }
+
+  for (int64_t req_id : timed_out_ids) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    auto it = pending_requests_.find(req_id);
+    if (it == pending_requests_.end()) {
+      continue;
     }
 
-    CompletionCallback cb = completion_callback_;
-    pending_requests_.erase(it);
-
-    if (cb) {
-      // 回调在锁外执行，避免死锁（回调可能重新获取锁或操作调度器事件队列）
-      lock.unlock();
-      cb(result.req_id, success);
-      return;
+    PendingRequest& pending = it->second;
+    // 再次确认仍超时（期间可能已正常完成）
+    if (now_us - pending.submit_time_us < timeout_us) {
+      continue;
     }
+
+    std::vector<int> missing_devs;
+    for (int d = 0; d < pending.total_devices; ++d) {
+      if (static_cast<size_t>(d) >= pending.device_done_us.size() ||
+          pending.device_done_us[static_cast<size_t>(d)] < 0) {
+        missing_devs.push_back(d);
+      }
+    }
+
+    KLLM_LOG_WARNING << "fetch timeout, req_id=" << req_id << " age_us=" << (now_us - pending.submit_time_us)
+                     << " timeout_ms=" << fetch_timeout_ms_ << " done=" << pending.devices_completed << "/"
+                     << pending.total_devices << " missing_dev=" << Vector2Str(missing_devs)
+                     << " dev_us=" << Vector2Str(pending.device_done_us);
+
+    // 强制按失败收尾：保留已收到的部分命中区间，但 all_success=false 不再扩展 global prefix
+    pending.all_success = false;
+    pending.devices_completed = pending.total_devices;
+    if (pending.last_done_us < 0) {
+      pending.last_done_us = now_us - pending.submit_time_us;
+    }
+    FinalizePendingLocked(it, lock);
   }
 }
 
@@ -251,7 +462,8 @@ size_t GlobalCacheFetcher::GetAllDevicesContiguousPrefixLen(const std::vector<st
 }
 
 void GlobalCacheFetcher::UpdateRequestWorkload(std::shared_ptr<InferRequest>& req, size_t new_cached_len,
-                                               const std::vector<int>& cached_tokens, bool has_cached_tokens) {
+                                               const std::vector<int>& cached_tokens, bool has_cached_tokens,
+                                               size_t swa_aligned_hit_len) {
   // V1 decode 角色无论命中与否都要走完判定逻辑 (未全覆盖+tokens 需要 reject); 其它角色无命中直接返回.
   if (new_cached_len == 0 && role_ != "decode") {
     return;
@@ -269,6 +481,16 @@ void GlobalCacheFetcher::UpdateRequestWorkload(std::shared_ptr<InferRequest>& re
   // SWA：prefill_start_offset 须按 block 下取整（与旧 HandleFullPrefixCacheHit 一致），否则窗口错位。
   if (!req->swa_kv_cache_blocks.empty() && req->block_token_num > 0) {
     usable_cached_len = (usable_cached_len / req->block_token_num) * req->block_token_num;
+  }
+
+  // 命中长度来自 SWA 对齐边界时，executor 已经把 seq-1 上限和 block 对齐算进边界里了，
+  // 上面这两步只该是恒等变换。真被改动说明边界与「有 SWA 的位置」不再对应：
+  // 命中点会退到没拉 SWA 的 block 上，恢复计算读到垃圾，因此整体放弃全局命中。
+  if (swa_aligned_hit_len > 0 && usable_cached_len != new_cached_len) {
+    KLLM_LOG_WARNING << "swa-aligned hit truncated by cap/floor, abandon global hit: req_id=" << req->req_id
+                     << ", new_cached_len=" << new_cached_len << ", usable_cached_len=" << usable_cached_len
+                     << ", seq_token_num=" << seq_token_num << ", block_token_num=" << req->block_token_num;
+    return;
   }
 
   KLLM_LOG_DEBUG << "UpdateRequestWorkload: req_id=" << req->req_id

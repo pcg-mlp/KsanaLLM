@@ -60,6 +60,8 @@ class GlobalCacheQueryHook : public ScheduleHookInterface {
   // 为空或 async_callback_ 尚未接线时为 no-op。
   void WakeDeferredAdmission();
 
+  bool IsInflightCapExceeded() const;
+
   // kRequestExited 事件处理: pd_v2 Decode 下某个已准入的 req 彻底离场 (HandleStopRequest /
   // HandleHookFailAndEnd / HandlePdV2DecodeRestart 释放其本地 KV blocks) 时被调用, 从
   // in_flight_admitted_ 集合移除该 req_id, 给后续 admission 腾出名额。按 req_id erase, 幂等
@@ -72,14 +74,6 @@ class GlobalCacheQueryHook : public ScheduleHookInterface {
   int hook_idx_ = 0;
   bool defer_admission_on_block_full_ = false;
   AsyncTaskFinishedCallback async_callback_;
-
-  // pd_v2 Decode admission gate (gated by defer_admission_on_block_full_).
-  // 在真正调用 AllocateRequestBlocks (会触发 FreeCachedBlocks 驱逐扫描) 之前用
-  // GetUsableBlockNumber() 廉价预检; 必须留出 admission_block_reserve_ 块 headroom 给
-  // 正在 decode 的 req (每 16 token 才需 1 新块) 增量分配, 否则新 admission 会把 free pool
-  // 抽干→正在 decode 的 req 拿不到下一块而饿死/卡住。默认 = max_batch_size (每个 decode
-  // 槽 1 块的最坏情况 headroom)。
-  size_t admission_block_reserve_ = 0;
 
   // pd_v2 Decode in-flight 并发上限 (gated by defer_admission_on_block_full_)。
   // 现象 (warm-cache decode 块池死锁): decode 把每个 admitted req

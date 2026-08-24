@@ -29,7 +29,8 @@ void ScheduleBackendInterface::PreSchedule(const ScheduleContext& context,
                                                 ? context.GetScheduleStartTimeInMs()
                                                 : ProfileTimer::GetCurrentTimeInMs();
   auto is_timeout = [this, schedule_start_time_in_ms](const std::shared_ptr<InferRequest>& req) -> bool {
-    if (req == nullptr || req->IsStopped()) {
+    // aborted 请求即将被 stop 流程清理，不需要再触发 timeout 事件。
+    if (req == nullptr || req->IsStoppedOrAborted()) {
       return false;
     }
     const int64_t deadline_ms = static_cast<int64_t>(req->timestamp_in_us / 1000) +

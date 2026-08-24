@@ -184,6 +184,9 @@ struct PlanningBatch {
       running_step_logits_num -= lgt;
       dp_batch.req_id_to_contribution.erase(contrib_it);
     }
+    // 从 batch 中移除时必须清理 planning_task_，否则该请求被放回队列后，
+    // ProcessDecodingQueue/ProcessPrefillingQueue 会因 HasPlanningTask()=true 永久跳过它。
+    req->ResetPlanningTask();
     dp_batch.running_reqs.erase(it);
     return true;
   }
@@ -203,7 +206,9 @@ struct PlanningBatch {
       for (const auto& r : dp_batch.running_reqs) {
         const std::shared_ptr<InferRequest>& req = r.second;
         KLLM_CHECK(req != nullptr);
-        if (req->IsStopped()) {
+        // 同步跳过 aborted 请求：客户端取消后该 req 仍可能短暂留在 batch 中等待清理，
+        // 不应阻塞整个 batch 的 launch。否则一旦该 req 还有 inflight_task_ 残留会卡住 IsLaunchable。
+        if (req->IsStoppedOrAborted()) {
           continue;
         }
         if (!req->HasInflightCapacity(max_depth)) {

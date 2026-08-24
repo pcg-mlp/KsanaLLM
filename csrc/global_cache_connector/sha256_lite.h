@@ -4,8 +4,7 @@
 #pragma once
 
 // Minimal header-only SHA256 implementation.
-// Removes the external OpenSSL dependency for the default (mock-only) build.
-// Only used by global_cache_key_utils.h for token prefix hashing.
+// Used by global_cache_key_utils.h for token prefix hashing.
 
 #include <cstddef>
 #include <cstdint>
@@ -69,43 +68,84 @@ inline void TransformBlock(uint32_t state[8], const uint8_t block[64]) {
   state[7] += h;
 }
 
-// Compute SHA256 digest of `data` (len bytes) into `digest` (32 bytes).
-inline void Sha256(const uint8_t* data, size_t len, uint8_t digest[32]) {
-  uint32_t state[8] = {0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19};
-
-  // Process full 64-byte blocks.
-  size_t i = 0;
-  for (; i + 64 <= len; i += 64) {
-    TransformBlock(state, data + i);
-  }
-
-  // Pad the remaining bytes.
-  uint8_t buf[128];
-  size_t remaining = len - i;
-  std::memcpy(buf, data + i, remaining);
-  buf[remaining++] = 0x80;
-
-  // Need room for 8-byte length at the end of a 64-byte block.
-  size_t pad_len = (remaining <= 56) ? 64 : 128;
-  std::memset(buf + remaining, 0, pad_len - remaining);
-
-  // Append bit length (big-endian, 64-bit).
-  uint64_t bit_len = static_cast<uint64_t>(len) * 8;
-  for (int j = 0; j < 8; ++j) {
-    buf[pad_len - 1 - j] = static_cast<uint8_t>(bit_len >> (j * 8));
-  }
-
-  for (size_t off = 0; off < pad_len; off += 64) {
-    TransformBlock(state, buf + off);
-  }
-
-  // Write digest (big-endian).
+inline void WriteDigest(const uint32_t state[8], uint8_t digest[32]) {
   for (int j = 0; j < 8; ++j) {
     digest[j * 4] = static_cast<uint8_t>(state[j] >> 24);
     digest[j * 4 + 1] = static_cast<uint8_t>(state[j] >> 16);
     digest[j * 4 + 2] = static_cast<uint8_t>(state[j] >> 8);
     digest[j * 4 + 3] = static_cast<uint8_t>(state[j]);
   }
+}
+
+// 可增量 Update 的 SHA256；FinalizeTo 用快照 pad，不破坏后续 Update。
+class Sha256Context {
+ public:
+  Sha256Context() { Reset(); }
+
+  void Reset() {
+    state_[0] = 0x6a09e667;
+    state_[1] = 0xbb67ae85;
+    state_[2] = 0x3c6ef372;
+    state_[3] = 0xa54ff53a;
+    state_[4] = 0x510e527f;
+    state_[5] = 0x9b05688c;
+    state_[6] = 0x1f83d9ab;
+    state_[7] = 0x5be0cd19;
+    buffer_len_ = 0;
+    total_len_ = 0;
+  }
+
+  void Update(const uint8_t* data, size_t len) {
+    if (data == nullptr || len == 0) {
+      return;
+    }
+    total_len_ += len;
+    while (len > 0) {
+      size_t space = 64 - buffer_len_;
+      size_t take = len < space ? len : space;
+      std::memcpy(buffer_ + buffer_len_, data, take);
+      buffer_len_ += take;
+      data += take;
+      len -= take;
+      if (buffer_len_ == 64) {
+        TransformBlock(state_, buffer_);
+        buffer_len_ = 0;
+      }
+    }
+  }
+
+  // 对当前已 Update 的内容出 digest；不修改本上下文，便于继续 Update 下一段。
+  void FinalizeTo(uint8_t digest[32]) const {
+    uint32_t state[8];
+    std::memcpy(state, state_, sizeof(state_));
+    uint8_t buf[128];
+    size_t remaining = buffer_len_;
+    std::memcpy(buf, buffer_, remaining);
+    buf[remaining++] = 0x80;
+    size_t pad_len = (remaining <= 56) ? 64 : 128;
+    std::memset(buf + remaining, 0, pad_len - remaining);
+    uint64_t bit_len = total_len_ * 8;
+    for (int j = 0; j < 8; ++j) {
+      buf[pad_len - 1 - j] = static_cast<uint8_t>(bit_len >> (j * 8));
+    }
+    for (size_t off = 0; off < pad_len; off += 64) {
+      TransformBlock(state, buf + off);
+    }
+    WriteDigest(state, digest);
+  }
+
+ private:
+  uint32_t state_[8];
+  uint8_t buffer_[64];
+  size_t buffer_len_;
+  uint64_t total_len_;
+};
+
+// Compute SHA256 digest of `data` (len bytes) into `digest` (32 bytes).
+inline void Sha256(const uint8_t* data, size_t len, uint8_t digest[32]) {
+  Sha256Context ctx;
+  ctx.Update(data, len);
+  ctx.FinalizeTo(digest);
 }
 
 }  // namespace sha256_detail

@@ -621,6 +621,48 @@ TEST_F(PrefixCacheManagerSWATest, SWABlockAllocatedWithFABlock) {
   cache_manager_->DestroyFinishedRequest(req_id);
 }
 
+// DropUnbacked 清空 SWA 窗口后，FA 仍在；decode 再 Allocate(0) 不能因 SWA 缺口 abort。
+TEST_F(PrefixCacheManagerSWATest, AllocateZeroBlocksAfterSwaDropDoesNotAbort) {
+  std::vector<int> token_ids;
+  faked_token_generator_->GeneratePromptTokens({{1, 80}}, token_ids);  // 5 FA blocks
+
+  int64_t req_id = 1;
+  size_t shared_block_num = 0, unique_block_num = 0, shared_token_num = 0;
+  ASSERT_TRUE(cache_manager_
+                  ->GetRequestPrefixBlockNumber(req_id, token_ids, token_ids.size(), shared_block_num, unique_block_num,
+                                                shared_token_num)
+                  .OK());
+
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id, unique_block_num, req_block_ids, swa_req_block_ids,
+                                          swa_block_idx_offset, mamba_kv_cache_block_id)
+                  .OK());
+  bool block_merged = false;
+  ASSERT_TRUE(cache_manager_
+                  ->UpdateRequestTokens(req_id, token_ids, token_ids.size(), req_block_ids, block_merged,
+                                        swa_req_block_ids, swa_block_idx_offset)
+                  .OK());
+
+  // keep_start 超过全部 SWA 下标 → 窗口清空，FA 仍保留。
+  ASSERT_TRUE(cache_manager_
+                  ->DropUnbackedSwaBlocks(req_id, /*keep_start_block_idx=*/100, swa_req_block_ids, swa_block_idx_offset)
+                  .OK());
+  EXPECT_TRUE(cache_manager_->cached_requests_[req_id]->swa_window_fa_block_ids.empty());
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id]->cached_blocks.size(), 5u);
+
+  // 模拟 decode 步：FA 已够，req_step_block_num=0。修复前会 CHECK abort。
+  Status status = cache_manager_->AllocateRequestBlocks(req_id, /*block_num=*/0, req_block_ids, swa_req_block_ids,
+                                                        swa_block_idx_offset, mamba_kv_cache_block_id);
+  EXPECT_TRUE(status.OK()) << status.GetMessage();
+  EXPECT_EQ(cache_manager_->cached_requests_[req_id]->cached_blocks.size(), 5u);
+
+  cache_manager_->DestroyFinishedRequest(req_id);
+}
+
 // Test: Normal prefix cache hit with SWA enabled (design doc §5.1).
 // Request A fills 8 blocks; Request B 同 token，查询硬上限 seq-1 → shared=7。
 TEST_F(PrefixCacheManagerSWATest, NormalPrefixCacheHitWithSWA) {
@@ -1195,6 +1237,131 @@ TEST_F(PrefixCacheManagerSWATest, HitCountIncrementedOnPrefixCacheHit) {
   EXPECT_EQ(cache_manager_->swa_cache_manager_->swa_blocks_.at(fa_id_2)->hit_count, 2u);
 
   cache_manager_->DestroyFinishedRequest(req_id_b);
+}
+
+// ============================================================================
+// DropUnbackedSwaBlocks：全局 cache 命中范围内未写入的 SWA block 必须在 forward 之前
+// 释放，否则 UpdateRequestTokens → AppendFilledCachedBlock 会把垃圾内容标记为有效。
+// ============================================================================
+
+// 本请求自己新分配的 SWA block（未进树、非 shareable）应被彻底释放，配额还给 SWA 池。
+TEST_F(PrefixCacheManagerSWATest, DropUnbackedSwaBlocksFreesNewBlocks) {
+  // 5 full blocks = 80 tokens，无前缀命中，5 个 FA block 全新分配。
+  std::vector<int> token_ids;
+  faked_token_generator_->GeneratePromptTokens({{1, 80}}, token_ids);
+
+  int64_t req_id = 1;
+  size_t sb = 0, ub = 0, st = 0;
+  cache_manager_->GetRequestPrefixBlockNumber(req_id, token_ids, token_ids.size(), sb, ub, st);
+
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                          mamba_kv_cache_block_id)
+                  .OK());
+  ASSERT_EQ(swa_req_block_ids.size(), 5u);
+  EXPECT_EQ(cache_manager_->swa_cache_manager_->GetAvailableBlockCount(), swa_device_block_num - 5u);
+
+  // 模拟全局命中 L = 5 个 block、窗口 W = 1：只保留最后 1 个 block 的 SWA。
+  ASSERT_TRUE(
+      cache_manager_->DropUnbackedSwaBlocks(req_id, /*keep_start_block_idx=*/4, swa_req_block_ids, swa_block_idx_offset)
+          .OK());
+
+  // 回写给 InferRequest 的列表只剩窗口内那一块，且下标已重建。
+  ASSERT_EQ(swa_req_block_ids.size(), 1u);
+  ASSERT_EQ(swa_block_idx_offset.size(), 1u);
+  EXPECT_EQ(swa_block_idx_offset[0], 4u);
+
+  // 前 4 块被 Free 回池，占用只剩 1 块。
+  EXPECT_EQ(cache_manager_->swa_cache_manager_->GetAvailableBlockCount(), swa_device_block_num - 1u);
+  for (size_t i = 0; i < 4; ++i) {
+    const size_t fa_block_id = cache_manager_->cached_requests_[req_id]->cached_blocks[i]->block_id;
+    EXPECT_LT(cache_manager_->swa_cache_manager_->GetSWAMemoryBlockId(fa_block_id), 0);
+  }
+  const size_t kept_fa_block_id = cache_manager_->cached_requests_[req_id]->cached_blocks[4]->block_id;
+  EXPECT_GE(cache_manager_->swa_cache_manager_->GetSWAMemoryBlockId(kept_fa_block_id), 0);
+
+  cache_manager_->DestroyFinishedRequest(req_id);
+}
+
+// drop 之后紧接着 UpdateRequestTokens 不能 abort：AppendFilledCachedBlock 合并到树上
+// 已有节点时，src 已无 SWA 绑定，必须跳过 Transfer 而不是 KLLM_CHECK 失败。
+TEST_F(PrefixCacheManagerSWATest, UpdateRequestTokensAfterDropDoesNotAbort) {
+  std::vector<int> token_ids;
+  faked_token_generator_->GeneratePromptTokens({{1, 80}}, token_ids);
+
+  // 请求 A 先把 5 个 block 填进前缀树。
+  RunFullRequest(1, token_ids);
+
+  // 请求 B 同 token：命中的 block 直接复用树上节点，未命中的新分配。
+  int64_t req_id_b = 2;
+  size_t sb = 0, ub = 0, st = 0;
+  cache_manager_->GetRequestPrefixBlockNumber(req_id_b, token_ids, token_ids.size(), sb, ub, st);
+
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id_b, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                          mamba_kv_cache_block_id)
+                  .OK());
+
+  // 只保留最后 1 个 block 的 SWA，其余（含树上共享的）全部摘掉。
+  const size_t total_blocks = token_ids.size() / block_token_num;
+  ASSERT_TRUE(cache_manager_
+                  ->DropUnbackedSwaBlocks(req_id_b, /*keep_start_block_idx=*/total_blocks - 1, swa_req_block_ids,
+                                          swa_block_idx_offset)
+                  .OK());
+
+  bool block_merged = false;
+  ASSERT_TRUE(cache_manager_
+                  ->UpdateRequestTokens(req_id_b, token_ids, token_ids.size(), req_block_ids, block_merged,
+                                        swa_req_block_ids, swa_block_idx_offset)
+                  .OK());
+
+  cache_manager_->DestroyFinishedRequest(req_id_b);
+}
+
+// keep_start 为 0 时全部保留，等价于没有全局命中扩展。
+TEST_F(PrefixCacheManagerSWATest, DropUnbackedSwaBlocksKeepAllWhenStartIsZero) {
+  std::vector<int> token_ids;
+  faked_token_generator_->GeneratePromptTokens({{1, 48}}, token_ids);
+
+  int64_t req_id = 1;
+  size_t sb = 0, ub = 0, st = 0;
+  cache_manager_->GetRequestPrefixBlockNumber(req_id, token_ids, token_ids.size(), sb, ub, st);
+
+  std::vector<int> req_block_ids;
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offset;
+  int mamba_kv_cache_block_id = -1;
+  ASSERT_TRUE(cache_manager_
+                  ->AllocateRequestBlocks(req_id, ub, req_block_ids, swa_req_block_ids, swa_block_idx_offset,
+                                          mamba_kv_cache_block_id)
+                  .OK());
+  const size_t swa_num_before = swa_req_block_ids.size();
+  ASSERT_EQ(swa_num_before, 3u);
+
+  ASSERT_TRUE(
+      cache_manager_->DropUnbackedSwaBlocks(req_id, /*keep_start_block_idx=*/0, swa_req_block_ids, swa_block_idx_offset)
+          .OK());
+  EXPECT_EQ(swa_req_block_ids.size(), swa_num_before);
+  EXPECT_EQ(cache_manager_->swa_cache_manager_->GetAvailableBlockCount(), swa_device_block_num - swa_num_before);
+
+  cache_manager_->DestroyFinishedRequest(req_id);
+}
+
+TEST_F(PrefixCacheManagerSWATest, DropUnbackedSwaBlocksUnknownRequestFails) {
+  std::vector<int> swa_req_block_ids;
+  std::vector<size_t> swa_block_idx_offset;
+  EXPECT_FALSE(
+      cache_manager_
+          ->DropUnbackedSwaBlocks(/*req_id=*/12345, /*keep_start_block_idx=*/0, swa_req_block_ids, swa_block_idx_offset)
+          .OK());
 }
 
 // ============================================================================

@@ -45,6 +45,10 @@ def _signal_handler(signum, frame):
 
 
 if __name__ == '__main__':
+    # Mooncake master 须在 Ksana Engine / Executor 之前拉起
+    from ksana_llm.global_cache_bootstrap import ensure_mooncake_master
+    ensure_mooncake_master()
+
     engine_args = EngineArgs.from_command_line()
 
     embedded_encoder = (

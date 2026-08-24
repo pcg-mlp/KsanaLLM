@@ -156,6 +156,47 @@ class CacheManagerInterface {
                                      bool& block_merged, std::vector<int>& swa_req_block_ids,
                                      std::vector<size_t>& swa_block_idx_offsets) = 0;
 
+  // Release the SWA blocks bound to FA block indices below keep_start_block_idx.
+  //
+  // Called after a global cache hit extends the request's prefix past its local prefix-cache hit:
+  // the FA blocks in that range hold KV content fetched from the global store, but their SWA blocks
+  // were never written.  Without this call UpdateRequestTokens would merge those FA blocks into the
+  // prefix tree and AppendFilledCachedBlock would mark their garbage SWA content as valid.
+  //
+  // keep_start_block_idx: the first FA block index whose SWA must be kept.  Callers pass
+  //   (hit_block_num - swa_window_block_num) so the boundary window that actually received global
+  //   SWA content survives; every SWA binding before it is released.
+  //
+  // Shareable (in-tree) FA blocks only get SetReclaimable — their SWA blocks may be shared with
+  // other requests and must not be freed.  Non-shareable blocks are freed outright.
+  //
+  // swa_req_block_ids / swa_block_idx_offsets are rebuilt from the surviving window so the caller
+  // can write them back to the InferRequest; leaving stale memory ids there would let the model
+  // write into SWA memory that has been handed to another request.
+  //
+  // No-op returning OK when SWA is not enabled.
+  virtual Status DropUnbackedSwaBlocks(int64_t req_id, size_t keep_start_block_idx, std::vector<int>& swa_req_block_ids,
+                                       std::vector<size_t>& swa_block_idx_offsets) = 0;
+
+  // Park SWA blocks that slide out of the window instead of reclaiming them, until EndSwaPutHold.
+  //
+  // The executor uploads a request's SWA blocks asynchronously after forward, but the engine runs
+  // UpdateRequestTokens for the same step as soon as the result comes back and releases every SWA
+  // block that just slid out of the window.  Those are exactly the blocks the upload still has to
+  // read, so without this hold another request can win them and the global store ends up with
+  // another request's KV under this request's prefix hash — a silent wrong-answer cache entry.
+  //
+  // The hold only delays the release; it never raises peak SWA usage, because the request already
+  // owned these blocks for the whole forward and the window slide happens in one shot right after.
+  //
+  // No-op when SWA is not enabled.
+  virtual void BeginSwaPutHold(int64_t req_id) = 0;
+
+  // Release everything parked by BeginSwaPutHold and stop parking for this request.
+  // Must be called once all devices report their put done, and on request teardown so the
+  // parked blocks cannot leak.
+  virtual void EndSwaPutHold(int64_t req_id) = 0;
+
   // Update internal state after request finished.
   virtual void DestroyFinishedRequest(int64_t req_id) = 0;
 

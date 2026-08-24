@@ -54,7 +54,14 @@ InferRequest::InferRequest(std::shared_ptr<Request> &request, const int index)
       scheduled_time_us(request->scheduled_time_us),
       first_token_time_us(request->first_token_time_us),
       finish_time_us(request->finish_time_us),
-      prefix_cache_hit_tokens(request->prefix_cache_hit_tokens) {
+      prefix_cache_hit_tokens(request->prefix_cache_hit_tokens),
+      global_cache_ext_tokens(request->global_cache_ext_tokens),
+      global_cache_get_us(request->global_cache_get_us),
+      global_cache_put_fa_blocks(request->global_cache_put_fa_blocks),
+      global_cache_put_swa_blocks(request->global_cache_put_swa_blocks),
+      global_cache_put_done_time_us(request->global_cache_put_done_time_us),
+      global_cache_put_pending(request->global_cache_put_pending),
+      request_ptr(request) {
   draft_tokens.spec = request->draft_tokens;
 }
 

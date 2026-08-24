@@ -3,7 +3,12 @@
 ==============================================================================*/
 
 #include "utils/request.h"
+
+#include <algorithm>
+#include <chrono>
+
 #include "profiler/reporter.h"
+#include "utils/logger.h"
 #include "utils/singleton.h"
 
 namespace ksana_llm {
@@ -203,7 +208,32 @@ Request::Request(const std::shared_ptr<KsanaPythonInput>& ksana_python_input,
   ApplyStructuredGeneratorConfig(this);
 }
 
+void Request::WaitGlobalCachePutDone(int timeout_ms) const {
+  if (!global_cache_put_pending.load(std::memory_order_acquire)) {
+    return;
+  }
+  std::unique_lock<std::mutex> lock(global_cache_put_mu_);
+  const bool done = global_cache_put_cv_.wait_for(lock, std::chrono::milliseconds(std::max(0, timeout_ms)), [this] {
+    return !global_cache_put_pending.load(std::memory_order_acquire);
+  });
+  // 超时后仍继续：ACCESS 快照可能缺 put 指标，但不阻塞输出路径。
+  if (!done) {
+    KLLM_LOG_WARNING << "WaitGlobalCachePutDone timeout, timeout_ms=" << timeout_ms;
+  }
+}
+
+void Request::NotifyGlobalCachePutDone() {
+  {
+    std::lock_guard<std::mutex> lock(global_cache_put_mu_);
+    global_cache_put_pending.store(false, std::memory_order_release);
+  }
+  global_cache_put_cv_.notify_all();
+}
+
 KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
+  // Put 可能在请求结束后才完成；等一下再快照，便于算 put_after_finish_ms。
+  req->WaitGlobalCachePutDone();
+
   finish_status = req->finish_status;
   input_tokens = req->input_tokens;
   // Prefix-cache hit comes from the Request member (set by the scheduler; works regardless of
@@ -246,6 +276,19 @@ KsanaPythonOutput::KsanaPythonOutput(std::shared_ptr<Request> req) {
   pd_v2_pf_send_us = req->pd_v2_pf_send_us.load();
   if (req->req_ctx && req->req_ctx->count("pd_v2_prefill_peer")) {
     pd_v2_prefill_peer = req->req_ctx->at("pd_v2_prefill_peer");
+  }
+
+  global_cache_ext_tokens = req->global_cache_ext_tokens.load(std::memory_order_relaxed);
+  global_cache_get_us = req->global_cache_get_us.load(std::memory_order_relaxed);
+  global_cache_put_fa_blocks = req->global_cache_put_fa_blocks.load(std::memory_order_relaxed);
+  global_cache_put_swa_blocks = req->global_cache_put_swa_blocks.load(std::memory_order_relaxed);
+  const uint64_t put_done = req->global_cache_put_done_time_us.load(std::memory_order_relaxed);
+  if (req->global_cache_put_pending.load(std::memory_order_acquire)) {
+    global_cache_put_after_finish_ms = -1.0;
+  } else if (put_done > 0 && finish_time_us > 0 && put_done > finish_time_us) {
+    global_cache_put_after_finish_ms = static_cast<double>(put_done - finish_time_us) / 1000.0;
+  } else {
+    global_cache_put_after_finish_ms = 0.0;
   }
 }
 

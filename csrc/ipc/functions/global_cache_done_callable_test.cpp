@@ -16,7 +16,6 @@
 #include "loguru.hpp"
 
 namespace ksana_llm {
-namespace {
 
 class MaxLogVerbosityEnv : public ::testing::Environment {
  public:
@@ -121,6 +120,9 @@ class MockCacheManagerForDone : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
+  MOCK_METHOD(Status, DropUnbackedSwaBlocks, (int64_t, size_t, std::vector<int>&, std::vector<size_t>&), (override));
+  MOCK_METHOD(void, BeginSwaPutHold, (int64_t), (override));
+  MOCK_METHOD(void, EndSwaPutHold, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -147,6 +149,7 @@ TEST_F(PutDoneCallableTest, CallForwardsToTracker) {
   auto infer_req = std::make_shared<InferRequest>(request, 0);
   infer_req->req_id = 55;
   infer_req->infer_stage = InferStage::kContext;
+  infer_req->cache_manager = mock_cm_;
   tracker_->OnBatchDispatched({infer_req});
 
   EXPECT_TRUE(tracker_->DeferDestructionIfNeeded(55));
@@ -161,12 +164,17 @@ TEST_F(PutDoneCallableTest, CallForwardsToTracker) {
 
   // 只有 1/2 设备完成，仍有 deferred
   EXPECT_TRUE(tracker_->HasDeferredRequests());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 0u);
 
   // 报告设备 1 完成
   req.device_id = 1;
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(55)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(55)).Times(1);
   EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+  EXPECT_TRUE(tracker_->HasPendingCompletions());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
   EXPECT_FALSE(tracker_->HasDeferredRequests());
+  EXPECT_FALSE(tracker_->HasPendingCompletions());
 }
 
 TEST_F(PutDoneCallableTest, CallWithoutTrackerNoThrow) {
@@ -236,6 +244,8 @@ TEST(PutDoneSerializationTest, RoundTrip) {
   GlobalCachePutDoneRequest original;
   original.device_id = 7;
   original.req_id = 123;
+  original.fa_put_blocks = 8;
+  original.swa_put_blocks = 2;
 
   std::vector<uint8_t> buffer(256);
   size_t bytes = 0;
@@ -246,6 +256,8 @@ TEST(PutDoneSerializationTest, RoundTrip) {
   ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.device_id, 7);
   EXPECT_EQ(restored.req_id, 123);
+  EXPECT_EQ(restored.fa_put_blocks, 8);
+  EXPECT_EQ(restored.swa_put_blocks, 2);
 }
 
 TEST(PutDoneSerializationTest, DefaultValues) {
@@ -259,7 +271,8 @@ TEST(PutDoneSerializationTest, DefaultValues) {
   ASSERT_TRUE(restored.Deserialize(buffer.data()).OK());
   EXPECT_EQ(restored.device_id, -1);
   EXPECT_EQ(restored.req_id, -1);
+  EXPECT_EQ(restored.fa_put_blocks, 0);
+  EXPECT_EQ(restored.swa_put_blocks, 0);
 }
 
-}  // namespace
 }  // namespace ksana_llm

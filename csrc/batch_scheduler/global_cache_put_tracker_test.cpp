@@ -52,6 +52,9 @@ class MockCacheManager : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
+  MOCK_METHOD(Status, DropUnbackedSwaBlocks, (int64_t, size_t, std::vector<int>&, std::vector<size_t>&), (override));
+  MOCK_METHOD(void, BeginSwaPutHold, (int64_t), (override));
+  MOCK_METHOD(void, EndSwaPutHold, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -93,25 +96,34 @@ TEST_F(PutTrackerTest, PrefillRequestTracked) {
 
 TEST_F(PutTrackerTest, AllDevicesDoneTriggersDestroyFinishedRequest) {
   auto req = MakeInferRequest(300, InferStage::kContext);
+  req->cache_manager = mock_cm_;  // Drain 时按 pending_cache_managers 调 EndSwaPutHold
   tracker_->OnBatchDispatched({req});
   EXPECT_TRUE(tracker_->DeferDestructionIfNeeded(300));
   EXPECT_TRUE(tracker_->HasDeferredRequests());
 
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(300)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(300)).Times(1);
 
   tracker_->OnDevicePutDone(0, 300);
   EXPECT_TRUE(tracker_->HasDeferredRequests());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 0u);  // 未齐
 
   tracker_->OnDevicePutDone(1, 300);
+  EXPECT_TRUE(tracker_->HasPendingCompletions());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
   EXPECT_FALSE(tracker_->HasDeferredRequests());
+  EXPECT_FALSE(tracker_->HasPendingCompletions());
 }
 
 TEST_F(PutTrackerTest, NoDeferWhenAllDoneBeforeReset) {
   auto req = MakeInferRequest(400, InferStage::kContext);
+  req->cache_manager = mock_cm_;
   tracker_->OnBatchDispatched({req});
 
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(400)).Times(1);
   tracker_->OnDevicePutDone(0, 400);
   tracker_->OnDevicePutDone(1, 400);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
 
   EXPECT_FALSE(tracker_->DeferDestructionIfNeeded(400));
   EXPECT_FALSE(tracker_->HasDeferredRequests());
@@ -123,6 +135,8 @@ TEST_F(PutTrackerTest, MultiplePrefillRequests) {
   auto req1 = MakeInferRequest(500, InferStage::kContext);
   auto req2 = MakeInferRequest(501, InferStage::kContext);
   auto req3 = MakeInferRequest(502, InferStage::kDecode);
+  req1->cache_manager = mock_cm_;
+  req2->cache_manager = mock_cm_;
   tracker_->OnBatchDispatched({req1, req2, req3});
 
   EXPECT_TRUE(tracker_->DeferDestructionIfNeeded(500));
@@ -131,11 +145,14 @@ TEST_F(PutTrackerTest, MultiplePrefillRequests) {
 
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(500)).Times(1);
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(501)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(500)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(501)).Times(1);
 
   tracker_->OnDevicePutDone(0, 500);
   tracker_->OnDevicePutDone(1, 500);
   tracker_->OnDevicePutDone(0, 501);
   tracker_->OnDevicePutDone(1, 501);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 2u);
 
   EXPECT_FALSE(tracker_->HasDeferredRequests());
 }
@@ -152,9 +169,12 @@ TEST_F(PutTrackerTest, DpCacheManagersUsedWhenSet) {
   EXPECT_CALL(*dp_cm1, DestroyFinishedRequest(600)).Times(1);
   EXPECT_CALL(*dp_cm0, DestroyFinishedRequest(testing::_)).Times(0);
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(testing::_)).Times(0);
+  EXPECT_CALL(*dp_cm1, EndSwaPutHold(600)).Times(0);  // OnBatch 未设 cache_manager，无 EndHold
+  // pending_cache_managers 来自 req->cache_manager；测试 req 未设，completion.cache_manager 为空。
 
   tracker_->OnDevicePutDone(0, 600);
   tracker_->OnDevicePutDone(1, 600);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
 }
 
 TEST_F(PutTrackerTest, PartialDoneNoDefer) {
@@ -167,6 +187,8 @@ TEST_F(PutTrackerTest, PartialDoneNoDefer) {
 
   EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(700)).Times(1);
   tracker_->OnDevicePutDone(1, 700);
+  EXPECT_TRUE(tracker_->HasPendingCompletions());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
   EXPECT_FALSE(tracker_->HasDeferredRequests());
 }
 
@@ -186,7 +208,80 @@ TEST_F(PutTrackerTest, DpCacheManagersDpIdxOutOfRangeFallsBackToSingleManager) {
 
   tracker_->OnDevicePutDone(0, 800);
   tracker_->OnDevicePutDone(1, 800);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
   EXPECT_FALSE(tracker_->HasDeferredRequests());
+}
+
+TEST_F(PutTrackerTest, DuplicateDevicePutDoneIgnored) {
+  auto req = MakeInferRequest(900, InferStage::kContext);
+  req->cache_manager = mock_cm_;
+  tracker_->OnBatchDispatched({req});
+  EXPECT_TRUE(tracker_->DeferDestructionIfNeeded(900));
+
+  EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(900)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(900)).Times(1);
+
+  tracker_->OnDevicePutDone(0, 900);
+  tracker_->OnDevicePutDone(0, 900);
+  EXPECT_TRUE(tracker_->HasDeferredRequests());
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 0u);
+
+  tracker_->OnDevicePutDone(1, 900);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
+  EXPECT_FALSE(tracker_->HasDeferredRequests());
+}
+
+TEST_F(PutTrackerTest, IncompletePrefillNotRegistered) {
+  auto req = MakeInferRequest(1000, InferStage::kContext);
+  ScheduleTaskWorkload remaining;
+  remaining.prefill_token_num = 128;  // SetPlanningTask 后仍有剩余 → 中间 chunk
+  remaining.prefill_start_offset = 256;
+  req->SetRemainingWorkload(remaining);
+
+  tracker_->OnBatchDispatched({req});
+  EXPECT_FALSE(tracker_->DeferDestructionIfNeeded(1000));
+  EXPECT_FALSE(tracker_->HasDeferredRequests());
+}
+
+TEST_F(PutTrackerTest, MidPrefillSkippedThenLastPrefillRegistered) {
+  auto req = MakeInferRequest(1100, InferStage::kContext);
+  req->cache_manager = mock_cm_;
+
+  ScheduleTaskWorkload mid;
+  mid.prefill_token_num = 64;
+  mid.prefill_start_offset = 0;
+  req->SetRemainingWorkload(mid);
+  tracker_->OnBatchDispatched({req});
+  EXPECT_FALSE(tracker_->DeferDestructionIfNeeded(1100));
+
+  ScheduleTaskWorkload last;
+  last.prefill_token_num = 0;  // 本步已扣完 remaining
+  last.prefill_start_offset = 320;
+  req->SetRemainingWorkload(last);
+  tracker_->OnBatchDispatched({req});
+  EXPECT_TRUE(tracker_->DeferDestructionIfNeeded(1100));
+
+  EXPECT_CALL(*mock_cm_, DestroyFinishedRequest(1100)).Times(1);
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(1100)).Times(1);
+  tracker_->OnDevicePutDone(0, 1100);
+  tracker_->OnDevicePutDone(1, 1100);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
+  EXPECT_FALSE(tracker_->HasDeferredRequests());
+}
+
+TEST_F(PutTrackerTest, FaAndSwaPutBlocksSumAcrossDevices) {
+  auto req = MakeInferRequest(1200, InferStage::kContext);
+  req->cache_manager = mock_cm_;
+  tracker_->OnBatchDispatched({req});
+
+  EXPECT_CALL(*mock_cm_, EndSwaPutHold(1200)).Times(1);
+  // 主 KV 分片上传：各卡上报子集，请求级应对 FA/SWA 均累加。
+  tracker_->OnDevicePutDone(/*device_id=*/0, 1200, /*fa_put_blocks=*/4, /*swa_put_blocks=*/1);
+  tracker_->OnDevicePutDone(/*device_id=*/1, 1200, /*fa_put_blocks=*/3, /*swa_put_blocks=*/2);
+  EXPECT_EQ(tracker_->DrainPutCompletions(), 1u);
+
+  EXPECT_EQ(req->global_cache_put_fa_blocks.load(std::memory_order_relaxed), 7);
+  EXPECT_EQ(req->global_cache_put_swa_blocks.load(std::memory_order_relaxed), 3);
 }
 
 }  // namespace

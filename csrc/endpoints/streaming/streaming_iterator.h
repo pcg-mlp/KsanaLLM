@@ -45,7 +45,7 @@ class StreamingIterator {
 
   // Snapshot the current access-log timestamps (microseconds, 0 if not yet stamped).
   // Used by Python to retrieve timing fields after StopIteration.
-  void SnapshotTimestamps(ksana_llm::KsanaPythonOutput &ksana_python_output) const;
+  void SnapshotTimestamps(ksana_llm::KsanaPythonOutput &ksana_python_output, bool wait_put_done = true) const;
 
  private:
   // The user request.

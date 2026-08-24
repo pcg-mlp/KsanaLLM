@@ -265,6 +265,60 @@ cmake ../csrc/global_cache_connector/ \
 make -j$(nproc)
 ```
 
+**运行时启用 Global Cache**
+
+仅编译不够，启动 serving 时还需打开 hook、配置 yaml，并保证 Mooncake 端口一致。
+
+1. **环境变量**
+
+```bash
+export ENABLE_GLOBAL_CACHE_HOOK=1
+# 可选：mooncake_master 不在 PATH 时指定绝对路径
+# export MOONCAKE_MASTER_BIN=/path/to/Mooncake/build/mooncake-store/src/mooncake_master
+```
+
+`ENABLE_GLOBAL_CACHE_HOOK=1` 时，若本机 RPC 端口空闲，serving 会自动拉起本地 `mooncake_master`（已监听则跳过）。
+
+2. **Yaml**（`setting.global_cache_connector`）
+
+- 配置非空 `service_endpoint`（为空则不启用 connector）。
+- 使用事件驱动调度：`setting.batch_scheduler.scheduler_type: 1`。
+- `service_endpoint` / `master_server_addr` 端口须与 serving CLI 对齐（默认 `8080` / `50051`）。
+
+最小示例（完整注释块见 `examples/ksana_llm.yaml`）：
+
+```yaml
+setting:
+  batch_scheduler:
+    scheduler_type: 1
+  global_cache_connector:
+    service_endpoint: "http://127.0.0.1:8080/metadata"
+    master_server_addr: "127.0.0.1:50051"
+    backend_type: "mooncake"   # 或 mooncake-mock
+    protocol: "tcp"            # tcp | rdma
+    # rdma_devices: ""         # 默认空=自动探测；RDMA 时写如 mlx5_0
+```
+
+3. **启动 serving**
+
+```bash
+export ENABLE_GLOBAL_CACHE_HOOK=1
+python serving_server.py \
+    --config_file /path/to/your_config.yaml \
+    --port 8080 \
+    --mooncake-http-port 8080 \
+    --mooncake-rpc-port 50051
+```
+
+| 项 | 作用 |
+|---|---|
+| `ENABLE_GLOBAL_CACHE_HOOK=1` | 打开 query/put hook；可自动拉起本地 master |
+| `service_endpoint` 非空 | 构造 / 启用 Global Cache Connector |
+| `scheduler_type: 1` | 全局 cache hook 路径所要求 |
+| `--mooncake-http-port` / `--mooncake-rpc-port` | 须与 yaml 中 `service_endpoint` / `master_server_addr` 一致 |
+
+更多环境变量与字段说明见 [`docs/ksana_env_guide.md`](docs/ksana_env_guide.md)。
+
 ### 4. 执行
 
 #### 4.1 单机执行

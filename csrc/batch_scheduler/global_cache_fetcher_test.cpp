@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "batch_scheduler/global_cache_fetcher.h"
+#include "ipc/ipc_func_wrapper.h"
 #include "loguru.hpp"
+#include "profiler/timer.h"
 #include "runtime/infer_request.h"
 #include "utils/request.h"
 
@@ -542,6 +544,230 @@ TEST_F(DecodeRoleUpdateWorkloadTest, FullHitWithTokensSwitchesToDecode) {
 
 // 无 tokens 的 seq-1 上限已由 UpdateWorkloadTest::FullHitWithoutTokensCapsToSeqMinusOne 覆盖；
 // decode 角色无 tokens 的 reject 已由 FetcherDecodeRole::RejectsFullHitWithoutTokens 覆盖。
+
+// ==================== SWA 对齐边界测试 ====================
+
+TEST(SwaWindowBlockNumTest, DefaultsToOneBlockWhenWindowUnset) {
+  GlobalCacheFetcher fetcher(1, nullptr);
+  EXPECT_EQ(fetcher.SwaWindowBlockNum(16), 1u);
+}
+
+TEST(SwaWindowBlockNumTest, CeilDivideByBlockTokenNum) {
+  GlobalCacheFetcher fetcher(1, nullptr);
+  fetcher.SetSlidingWindowSize(4096);
+  EXPECT_EQ(fetcher.SwaWindowBlockNum(16), 256u);
+
+  fetcher.SetSlidingWindowSize(100);
+  EXPECT_EQ(fetcher.SwaWindowBlockNum(16), 7u);
+}
+
+TEST(SwaWindowBlockNumTest, ZeroBlockTokenNumFallsBackToOne) {
+  GlobalCacheFetcher fetcher(1, nullptr);
+  fetcher.SetSlidingWindowSize(4096);
+  EXPECT_EQ(fetcher.SwaWindowBlockNum(0), 1u);
+}
+
+// SWA 请求走两卡汇总，验证 L 一致 / 不一致两条路径。
+class SwaFinalizeTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    fetcher_ = std::make_unique<GlobalCacheFetcher>(2, nullptr);
+    fetcher_->SetSlidingWindowSize(16);
+    fetcher_->Start();
+  }
+
+  void TearDown() override { fetcher_->Stop(); }
+
+  // 造一个已分配 SWA block 的 SWA 请求，并按异步提交后的状态插入 pending。
+  std::shared_ptr<InferRequest> InsertSwaPending(int64_t req_id, int token_num) {
+    auto req = MakeFetcherTestRequest(req_id, InferStage::kContext, token_num);
+    req->swa_kv_cache_blocks = {1, 2, 3};
+    req->swa_kv_cache_block_idx_offsets = {0, 1, 2};
+
+    GlobalCacheFetcher::PendingRequest pending;
+    pending.req = req;
+    pending.devices_completed = 0;
+    pending.total_devices = 2;
+    pending.swa_enabled = true;
+    fetcher_->pending_requests_[req_id] = std::move(pending);
+    return req;
+  }
+
+  void CompleteDevice(int64_t req_id, int device_id, const std::vector<int>& ranges, size_t swa_aligned_hit_len) {
+    GlobalCacheQueryResult result;
+    result.req_id = req_id;
+    result.device_id = device_id;
+    result.success = true;
+    result.matched_ranges = ranges;
+    result.swa_aligned_hit_len = swa_aligned_hit_len;
+    fetcher_->OnDeviceComplete(result);
+  }
+
+  std::unique_ptr<GlobalCacheFetcher> fetcher_;
+};
+
+TEST_F(SwaFinalizeTest, ConsistentAlignedHitAdopted) {
+  auto req = InsertSwaPending(3000, 48);
+  CompleteDevice(3000, 0, {0, 31}, 32);
+  CompleteDevice(3000, 1, {0, 31}, 32);
+
+  ASSERT_EQ(fetcher_->TakeCompletedRequests().size(), 1u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 32u);
+  // hook 需要按这个长度算 DropUnbackedSwaBlocks 的保留起点。
+  EXPECT_EQ(req->global_swa_aligned_hit_len, 32u);
+}
+
+TEST_F(SwaFinalizeTest, InconsistentAlignedHitAbandoned) {
+  auto req = InsertSwaPending(3100, 48);
+  // 两卡对齐边界不同：取小值会让命中点落在缺 SWA 的卡上，只能整体放弃。
+  CompleteDevice(3100, 0, {0, 31}, 32);
+  CompleteDevice(3100, 1, {0, 31}, 16);
+
+  ASSERT_EQ(fetcher_->TakeCompletedRequests().size(), 1u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 0u);
+  EXPECT_EQ(req->global_swa_aligned_hit_len, 0u);
+}
+
+TEST_F(SwaFinalizeTest, ZeroAlignedHitFromOneDeviceAbandoned) {
+  auto req = InsertSwaPending(3200, 48);
+  CompleteDevice(3200, 0, {0, 31}, 32);
+  CompleteDevice(3200, 1, {0, 31}, 0);
+
+  ASSERT_EQ(fetcher_->TakeCompletedRequests().size(), 1u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 0u);
+  EXPECT_EQ(req->global_swa_aligned_hit_len, 0u);
+}
+
+TEST_F(SwaFinalizeTest, AlignedHitMismatchesContiguousPrefixAbandoned) {
+  auto req = InsertSwaPending(3300, 48);
+  // 主 KV 连续前缀只有 16，但报回的对齐边界是 32：两个信号对不上即放弃。
+  CompleteDevice(3300, 0, {0, 15}, 32);
+  CompleteDevice(3300, 1, {0, 15}, 32);
+
+  ASSERT_EQ(fetcher_->TakeCompletedRequests().size(), 1u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 0u);
+  EXPECT_EQ(req->global_swa_aligned_hit_len, 0u);
+}
+
+TEST_F(UpdateWorkloadTest, SwaAlignedHitTruncatedByCapAbandoned) {
+  // 对齐边界等于 seq_len 时会被 seq-1 上限改写，说明边界与「有 SWA 的位置」不再对应，放弃全局命中。
+  auto req = MakeFetcherTestRequest(3400, InferStage::kContext, 32);
+  req->swa_kv_cache_blocks = {1, 2};
+  req->block_token_num = 16;
+
+  fetcher_->UpdateRequestWorkload(req, /*new_cached_len=*/32, /*cached_tokens=*/{}, /*has_cached_tokens=*/false,
+                                  /*swa_aligned_hit_len=*/32);
+
+  auto planning = req->GetPlanningWorkload();
+  EXPECT_EQ(planning.prefill_start_offset, 0u);
+  EXPECT_EQ(planning.prefill_token_num, 32u);
+}
+
+TEST_F(UpdateWorkloadTest, SwaAlignedHitWithinCapApplied) {
+  auto req = MakeFetcherTestRequest(3500, InferStage::kContext, 48);
+  req->swa_kv_cache_blocks = {1, 2, 3};
+  req->block_token_num = 16;
+
+  fetcher_->UpdateRequestWorkload(req, /*new_cached_len=*/32, /*cached_tokens=*/{}, /*has_cached_tokens=*/false,
+                                  /*swa_aligned_hit_len=*/32);
+
+  auto planning = req->GetPlanningWorkload();
+  EXPECT_EQ(planning.prefill_start_offset, 32u);
+  EXPECT_EQ(planning.prefill_token_num, 16u);
+}
+
+// ==================== SweepTimeouts / DispatchQueryToExecutors ====================
+
+TEST(SweepTimeoutsTest, ForcesFinalizeWhenAgedOut) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(/*device_count=*/2, /*ipc_func_wrapper=*/nullptr, "",
+                                                      /*fetch_thread_num=*/1, /*fetch_timeout_ms=*/1);
+  auto req = MakeFetcherTestRequest(4000, InferStage::kContext, 16);
+
+  GlobalCacheFetcher::PendingRequest pending;
+  pending.req = req;
+  pending.total_devices = 2;
+  pending.devices_completed = 0;
+  pending.device_done_us.assign(2, -1);
+  pending.submit_time_us = ProfileTimer::GetCurrentTimeInUs() - 10'000;
+  fetcher->pending_requests_[4000] = std::move(pending);
+
+  fetcher->SweepTimeouts();
+
+  ASSERT_EQ(fetcher->TakeCompletedRequests().size(), 1u);
+  EXPECT_FALSE(fetcher->HasPendingRequests());
+}
+
+TEST(SweepTimeoutsTest, SkipsWhenStillWithinTimeout) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(/*device_count=*/1, /*ipc_func_wrapper=*/nullptr, "",
+                                                      /*fetch_thread_num=*/1, /*fetch_timeout_ms=*/5000);
+  auto req = MakeFetcherTestRequest(4100, InferStage::kContext, 16);
+
+  GlobalCacheFetcher::PendingRequest pending;
+  pending.req = req;
+  pending.total_devices = 1;
+  pending.devices_completed = 0;
+  pending.device_done_us.assign(1, -1);
+  pending.submit_time_us = ProfileTimer::GetCurrentTimeInUs();
+  fetcher->pending_requests_[4100] = std::move(pending);
+
+  fetcher->SweepTimeouts();
+
+  EXPECT_TRUE(fetcher->HasPendingRequests());
+  EXPECT_TRUE(fetcher->TakeCompletedRequests().empty());
+  fetcher->pending_requests_.clear();
+}
+
+TEST(SweepTimeoutsTest, PartialDeviceDoneThenTimeout) {
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(/*device_count=*/2, /*ipc_func_wrapper=*/nullptr, "",
+                                                      /*fetch_thread_num=*/1, /*fetch_timeout_ms=*/1);
+  auto req = MakeFetcherTestRequest(4200, InferStage::kContext, 16);
+
+  GlobalCacheFetcher::PendingRequest pending;
+  pending.req = req;
+  pending.total_devices = 2;
+  pending.devices_completed = 1;
+  pending.device_done_us = {100, -1};
+  pending.per_device_ranges.push_back({0, 9});
+  pending.submit_time_us = ProfileTimer::GetCurrentTimeInUs() - 10'000;
+  fetcher->pending_requests_[4200] = std::move(pending);
+
+  fetcher->SweepTimeouts();
+
+  // 超时强制失败收尾，不再扩展 global prefix。
+  ASSERT_EQ(fetcher->TakeCompletedRequests().size(), 1u);
+  EXPECT_EQ(req->GetPlanningWorkload().prefill_start_offset, 0u);
+}
+
+TEST(DispatchQueryToExecutorsTest, InvalidExecutorIdMarksDeviceFailed) {
+  auto wrapper = std::make_shared<IpcFuncWrapper>(/*executor_num=*/1, /*is_engine=*/true, /*executor_id=*/0);
+  auto fetcher = std::make_unique<GlobalCacheFetcher>(/*device_count=*/2, wrapper, "", /*fetch_thread_num=*/1,
+                                                      /*fetch_timeout_ms=*/1);
+
+  auto req = MakeFetcherTestRequest(4300, InferStage::kContext, 32);
+  req->kv_cache_blocks = {10, 11};
+  req->block_token_num = 16;
+  req->swa_kv_cache_blocks = {20, 21};
+  req->swa_kv_cache_block_idx_offsets = {0, 1};
+  fetcher->SetSlidingWindowSize(16);
+
+  GlobalCacheFetcher::PendingRequest pending;
+  pending.req = req;
+  pending.total_devices = 2;
+  pending.devices_completed = 0;
+  pending.device_done_us.assign(2, -1);
+  pending.swa_enabled = true;
+  pending.query_seq_len = 32;
+  pending.submit_time_us = ProfileTimer::GetCurrentTimeInUs() - 10'000;
+  fetcher->pending_requests_[4300] = std::move(pending);
+
+  fetcher->DispatchQueryToExecutors(fetcher->pending_requests_[4300]);
+  fetcher->SweepTimeouts();
+
+  ASSERT_EQ(fetcher->TakeCompletedRequests().size(), 1u);
+  EXPECT_FALSE(fetcher->HasPendingRequests());
+
+  wrapper->GetIpcFuncProxy()->UnlinkIpcResource();
+}
 
 }  // namespace
 }  // namespace ksana_llm

@@ -774,8 +774,13 @@ Status ScheduleConfigParser::ParseScheduleConfig(YamlReader &yaml_reader, const 
   }
 
   InitConnectorConfig(yaml_reader);
+  InitIpcConfig(yaml_reader);
   InitGlobalCacheConnectorConfig(yaml_reader);
-
+  // 未配 global cache 时 InitGlobalCacheConnectorConfig 会提前 return，这里仍要对齐默认 fetch。
+  AlignLongTaskAndFetchThreadNum();
+  if (!global_cache_connector_config_.service_endpoint.empty()) {
+    KLLM_LOG_INFO << "Global cache connector config parsed: " << global_cache_connector_config_.ToString();
+  }
   return Status();
 }
 
@@ -1577,7 +1582,37 @@ void ScheduleConfigParser::InitializeExpertParallelConfig() {
   SetExpertParallelConfig(expert_parallel_config);
 }
 
+void ScheduleConfigParser::InitIpcConfig(YamlReader &yaml_reader) {
+  long_task_thread_num_ = yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.ipc.long_task_thread_num", 4);
+  if (long_task_thread_num_ < 1) {
+    KLLM_LOG_WARNING << "long_task_thread_num=" << long_task_thread_num_ << " < 1, clamp to 1";
+    long_task_thread_num_ = 1;
+  }
+}
+
+void ScheduleConfigParser::AlignLongTaskAndFetchThreadNum() {
+  // 未启用 global cache 时 fetch 仍为结构体默认值。不一致则两侧都抬到 max，
+  // 保证 Query H2D stream 池与 long-task 并行度 1:1。
+  int &fetch_thread_num = global_cache_connector_config_.fetch_thread_num;
+  if (fetch_thread_num < 1) {
+    KLLM_LOG_WARNING << "fetch_thread_num=" << fetch_thread_num << " < 1, clamp to 1";
+    fetch_thread_num = 1;
+  }
+  if (fetch_thread_num != long_task_thread_num_) {
+    const int yaml_long_task = long_task_thread_num_;
+    const int yaml_fetch = fetch_thread_num;
+    const int aligned = std::max(yaml_fetch, yaml_long_task);
+    KLLM_LOG_WARNING << "long_task_thread_num=" << yaml_long_task << " and fetch_thread_num=" << yaml_fetch
+                     << " differ; align both to " << aligned;
+    long_task_thread_num_ = aligned;
+    fetch_thread_num = aligned;
+  }
+  KLLM_LOG_INFO << "aligned long_task_thread_num=" << long_task_thread_num_
+                << ", fetch_thread_num=" << fetch_thread_num;
+}
+
 void ScheduleConfigParser::InitGlobalCacheConnectorConfig(YamlReader &yaml_reader) {
+  // yaml 未配 service_endpoint 则不启用；端口须与 serving --mooncake-*-port 对齐，由部署方保证。
   std::string endpoint = yaml_reader.GetScalar<std::string>(yaml_reader.GetRootNode(),
                                                             "setting.global_cache_connector.service_endpoint", "");
   if (endpoint.empty()) {
@@ -1611,17 +1646,39 @@ void ScheduleConfigParser::InitGlobalCacheConnectorConfig(YamlReader &yaml_reade
   global_cache_connector_config_.master_server_addr = yaml_reader.GetScalar<std::string>(
       yaml_reader.GetRootNode(), "setting.global_cache_connector.master_server_addr", "127.0.0.1:50051");
   global_cache_connector_config_.global_segment_size = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "setting.global_cache_connector.global_segment_size", 16 * 1024 * 1024);
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.global_segment_size", 100ULL * 1024 * 1024 * 1024);
   global_cache_connector_config_.local_buffer_size = yaml_reader.GetScalar<size_t>(
-      yaml_reader.GetRootNode(), "setting.global_cache_connector.local_buffer_size", 16 * 1024 * 1024);
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.local_buffer_size", 67108864);
+  global_cache_connector_config_.put_hotkey_window_sec = yaml_reader.GetScalar<int64_t>(
+      yaml_reader.GetRootNode(), "setting.global_cache_connector.put_hotkey_window_sec", 0);
+  if (global_cache_connector_config_.put_hotkey_window_sec < 0) {
+    KLLM_LOG_WARNING << "put_hotkey_window_sec=" << global_cache_connector_config_.put_hotkey_window_sec
+                     << " < 0, clamp to 0 (disabled)";
+    global_cache_connector_config_.put_hotkey_window_sec = 0;
+  }
+
+  // SWA 稀疏存储策略：尾部 N 个密存 + 前段每隔 K 个稀存。
+  global_cache_connector_config_.swa_tail_block_num =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.global_cache_connector.swa_tail_block_num", 2);
+  global_cache_connector_config_.swa_front_equal_parts =
+      yaml_reader.GetScalar<int>(yaml_reader.GetRootNode(), "setting.global_cache_connector.swa_front_equal_parts", 5);
+  if (global_cache_connector_config_.swa_tail_block_num < 1) {
+    KLLM_LOG_WARNING << "swa_tail_block_num must be >= 1, got " << global_cache_connector_config_.swa_tail_block_num
+                     << ", reset to 1.";
+    global_cache_connector_config_.swa_tail_block_num = 1;
+  }
+  // 首尾两段不上传，至少 3 等分才有中间上传点。
+  if (global_cache_connector_config_.swa_front_equal_parts < 3) {
+    KLLM_LOG_WARNING << "swa_front_equal_parts must be >= 3, got "
+                     << global_cache_connector_config_.swa_front_equal_parts << ", reset to 3.";
+    global_cache_connector_config_.swa_front_equal_parts = 3;
+  }
 
   // 从已解析的 batch_scheduler / block_manager 配置中填充，用于 connector 提前初始化 staging pool。
   // block_byte_size 依赖模型配置计算，在 engine/executor 创建 connector 时再填充。
   global_cache_connector_config_.max_step_tokens = batch_scheduler_config_.max_step_token_num;
   global_cache_connector_config_.block_token_num =
       static_cast<int>(block_manager_config_.device_allocator_config.block_token_num);
-
-  KLLM_LOG_INFO << "Global cache connector config parsed: " << global_cache_connector_config_.ToString();
 }
 
 }  // namespace ksana_llm

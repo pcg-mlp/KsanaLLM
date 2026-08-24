@@ -54,6 +54,9 @@ class MockCacheManager : public CacheManagerInterface {
               (int64_t, const std::vector<int>&, size_t, std::vector<int>&, bool&, std::vector<int>&,
                std::vector<size_t>&),
               (override));
+  MOCK_METHOD(Status, DropUnbackedSwaBlocks, (int64_t, size_t, std::vector<int>&, std::vector<size_t>&), (override));
+  MOCK_METHOD(void, BeginSwaPutHold, (int64_t), (override));
+  MOCK_METHOD(void, EndSwaPutHold, (int64_t), (override));
   MOCK_METHOD(void, DestroyFinishedRequest, (int64_t), (override));
   MOCK_METHOD(bool, IsPrefixCachingEnabled, (), (override));
 };
@@ -332,7 +335,7 @@ class QueryHookDeferTest : public ::testing::Test {
     fetcher_->Start();
 
     BatchSchedulerConfig config;
-    config.max_batch_size = 2;  // -> max_inflight_reqs_ = 4, reserve = 2
+    config.max_batch_size = 2;  // max_inflight_reqs_ = 4
     hook_ = std::make_unique<GlobalCacheQueryHook>(fetcher_, config, /*hook_idx=*/0,
                                                    /*defer_admission_on_block_full=*/true);
     dp_cache_managers_ = {mock_cm_};
@@ -346,15 +349,6 @@ class QueryHookDeferTest : public ::testing::Test {
   ScheduleContext context_;
   std::vector<std::shared_ptr<CacheManagerInterface>> dp_cache_managers_;
 };
-
-TEST_F(QueryHookDeferTest, DeferWhenUsableBlocksLow) {
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));  // < need+reserve
-  auto req = MakeHookTestRequest(1000);
-  auto result = hook_->Process({req}, context_);
-  ASSERT_EQ(result.size(), 1u);
-  EXPECT_EQ(result[1000].action, NextStepAction::kWaitAsyncResult);
-  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
-}
 
 TEST_F(QueryHookDeferTest, AdmitSucceedsWhenBlocksAvailable) {
   auto req = MakeHookTestRequest(1001);
@@ -385,9 +379,13 @@ TEST_F(QueryHookDeferTest, NotifyBlocksFreedFiresSentinelWhenPending) {
     ASSERT_FALSE(info.task_results.empty());
     seen_task_id = info.task_results[0].task_id;
   });
-  // Force one parked request.
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
-  hook_->Process({MakeHookTestRequest(3000)}, context_);
+  // Force one parked request via in-flight cap.
+  std::vector<std::shared_ptr<InferRequest>> admitted;
+  for (int i = 0; i < 4; ++i) {
+    admitted.push_back(MakeHookTestRequest(3000 + i));
+  }
+  hook_->Process(admitted, context_);
+  hook_->Process({MakeHookTestRequest(3099)}, context_);
   ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
 
   hook_->OnEvent(HookEvent(HookEventType::kBlocksFreed));
@@ -405,13 +403,12 @@ TEST_F(QueryHookDeferTest, NotifyBlocksFreedNoopWhenEmpty) {
 TEST_F(QueryHookDeferTest, OnRequestExitedReleasesSlotAndWakes) {
   bool fired = false;
   hook_->SetAsyncTaskFinishedCallback([&](const EventAsyncTaskFinishedInfo&) { fired = true; });
-  // Admit one (enters in_flight_admitted_). Keep it alive so its AddOnDestroy
-  // hook does NOT fire OnRequestExited early and free the slot under us.
-  auto admitted = MakeHookTestRequest(4000);
-  hook_->Process({admitted}, context_);
-  // Park one (pending non-empty so the wake fires the callback).
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
-  hook_->Process({MakeHookTestRequest(4001)}, context_);
+  std::vector<std::shared_ptr<InferRequest>> admitted;
+  for (int i = 0; i < 4; ++i) {
+    admitted.push_back(MakeHookTestRequest(4000 + i));
+  }
+  hook_->Process(admitted, context_);
+  hook_->Process({MakeHookTestRequest(4099)}, context_);
   ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
 
   hook_->OnEvent(HookEvent(HookEventType::kRequestExited, 4000));  // erases slot -> wake deferred admission
@@ -419,30 +416,51 @@ TEST_F(QueryHookDeferTest, OnRequestExitedReleasesSlotAndWakes) {
 }
 
 TEST_F(QueryHookDeferTest, UpdateAsyncResultDrainsAndAdmits) {
-  // Park a request (low usable), then make blocks available and drain via UpdateAsyncResult.
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
-  hook_->Process({MakeHookTestRequest(5000)}, context_);
+  std::vector<std::shared_ptr<InferRequest>> admitted;
+  for (int i = 0; i < 4; ++i) {
+    admitted.push_back(MakeHookTestRequest(5000 + i));
+  }
+  hook_->Process(admitted, context_);
+  hook_->Process({MakeHookTestRequest(5099)}, context_);
   ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
 
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(1000));
+  hook_->OnEvent(HookEvent(HookEventType::kRequestExited, 5000));
   AsyncTaskResult tr;
   tr.hook_idx = 0;
   tr.task_id = -1;
   auto result = hook_->UpdateAsyncResult({tr}, context_);
   EXPECT_EQ(hook_->DeferredCountForTest(), 0u);  // drained + admitted
   ASSERT_EQ(result.size(), 1u);
-  EXPECT_EQ(result[5000].action, NextStepAction::kContinue);  // sync fetcher completed it
+  EXPECT_EQ(result[5099].action, NextStepAction::kContinue);  // sync fetcher completed it
 }
 
 TEST_F(QueryHookDeferTest, UpdateAsyncResultRetryStillFailsRequeues) {
-  ON_CALL(*mock_cm_, GetUsableBlockNumber()).WillByDefault(testing::Return(0));
-  hook_->Process({MakeHookTestRequest(5001)}, context_);
+  std::vector<std::shared_ptr<InferRequest>> admitted;
+  for (int i = 0; i < 4; ++i) {
+    admitted.push_back(MakeHookTestRequest(5100 + i));
+  }
+  hook_->Process(admitted, context_);
+  hook_->Process({MakeHookTestRequest(5199)}, context_);
   ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
 
   AsyncTaskResult tr;
   tr.hook_idx = 0;
   tr.task_id = -1;
-  hook_->UpdateAsyncResult({tr}, context_);  // usable still 0 -> requeued
+  hook_->UpdateAsyncResult({tr}, context_);  // inflight cap still full -> requeued
+  EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
+}
+
+TEST_F(QueryHookDeferTest, UpdateAsyncResultAllocFailRequeues) {
+  ON_CALL(*mock_cm_, AllocateRequestBlocks(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "oom")));
+  auto result = hook_->Process({MakeHookTestRequest(5200)}, context_);
+  EXPECT_EQ(result[5200].action, NextStepAction::kWaitAsyncResult);
+  ASSERT_EQ(hook_->DeferredCountForTest(), 1u);
+
+  AsyncTaskResult tr;
+  tr.hook_idx = 0;
+  tr.task_id = -1;
+  hook_->UpdateAsyncResult({tr}, context_);
   EXPECT_EQ(hook_->DeferredCountForTest(), 1u);
 }
 

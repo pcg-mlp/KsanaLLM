@@ -21,6 +21,8 @@ class GlobalCachePutDoneRequest : public IpcRequest {
 
   int device_id = -1;
   int64_t req_id = -1;
+  int fa_put_blocks = 0;
+  int swa_put_blocks = 0;
 };
 
 class GlobalCachePutDoneResponse : public IpcResponse {

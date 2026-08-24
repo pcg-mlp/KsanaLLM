@@ -56,6 +56,10 @@ class EngineArgs:
     # /health endpoint to detect a pd_v2 Decode node without re-reading the YAML.
     connector_backend: Optional[str] = None
     connector_group_role: Optional[str] = None
+    # Mooncake master 端口（serving 命令行）；须与 yaml connector 地址对齐（默认 8080/50051）
+    mooncake_http_port: int = 8080
+    mooncake_rpc_port: int = 50051
+    mooncake_metrics_port: int = 9003
 
     @classmethod
     def from_config_file(cls, config_file: str) -> "EngineArgs":
@@ -325,6 +329,24 @@ class EngineArgs:
             default=30,
             help="Timeout for encoder requests in seconds (default: 30).",
         )
+        parser.add_argument(
+            "--mooncake-http-port",
+            type=int,
+            default=8080,
+            help="Mooncake HTTP metadata server port (default: 8080).",
+        )
+        parser.add_argument(
+            "--mooncake-rpc-port",
+            type=int,
+            default=50051,
+            help="Mooncake master RPC port (default: 50051).",
+        )
+        parser.add_argument(
+            "--mooncake-metrics-port",
+            type=int,
+            default=9003,
+            help="Mooncake master metrics port (default: 9003).",
+        )
         # Default values for CLI arguments
         parser.set_defaults(access_log=True)
 
@@ -377,5 +399,9 @@ class EngineArgs:
             engine_args.encoder_url = args.encoder_url
         if args.encoder_timeout is not None:
             engine_args.encoder_timeout = args.encoder_timeout
+
+        engine_args.mooncake_http_port = args.mooncake_http_port
+        engine_args.mooncake_rpc_port = args.mooncake_rpc_port
+        engine_args.mooncake_metrics_port = args.mooncake_metrics_port
 
         return engine_args

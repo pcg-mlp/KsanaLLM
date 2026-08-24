@@ -88,7 +88,7 @@ This document lists all environment variables consumed by the KsanaLLM project (
 | `USE_OLD_ARGMAX` | Force old argmax kernel implementation | Unset |
 | `ENABLE_LAYER_TRACKER` | Enable per-layer progress tracker | `0` |
 | `ENABLE_PROFILE_EVENT` | Enable internal profile event tracing | Unset |
-| `ENABLE_GLOBAL_CACHE_HOOK` | Enable global-cache hook (non pd_v2 scenarios) | `0` |
+| `ENABLE_GLOBAL_CACHE_HOOK` | Enable global-cache query/put hook (non pd_v2). When `1`, serving also auto-starts local `mooncake_master` if RPC port is free | `0` |
 | `DISABLE_WARMUP` | Skip warmup phase during engine init | Unset |
 | `MAX_WARMUP_INPUT_LENGTH` | Override warmup input length upper bound | None |
 
@@ -122,11 +122,23 @@ This document lists all environment variables consumed by the KsanaLLM project (
 
 | Environment Variable | Description | Default Value |
 | --- | --- | --- |
+| `MOONCAKE_MASTER_BIN` | Absolute path to `mooncake_master` (used when `ENABLE_GLOBAL_CACHE_HOOK=1` auto-starts master) | PATH lookup |
 | `MC_TCP_BIND_ADDRESS` | Mooncake connector TCP bind address | None |
 | `MC_DISABLE_HUGETLB` | Disable HugeTLB for Mooncake buffers | Unset |
 | `MC_TENT_CONF` | Path to Mooncake tent config file | None (required if used) |
 | `MC_REDIS_PASSWORD` | Redis password for Mooncake alive store | None |
 | `ROUTER_CONFIG_PATH` | Simple router config INI path | None |
+
+Serving CLI（与 yaml `master_server_addr` / `service_endpoint` 端口对齐）:
+
+| Flag | Description | Default |
+| --- | --- | --- |
+| `--mooncake-http-port` | Mooncake HTTP metadata server port | `8080` |
+| `--mooncake-rpc-port` | Mooncake master RPC port | `50051` |
+| `--mooncake-metrics-port` | Mooncake master metrics port | `9003` |
+
+Yaml 字段样例（含 `put_hotkey_window_sec` / `swa_tail_block_num` / `swa_front_equal_parts` 等）见
+`examples/ksana_llm.yaml` 中注释块 `setting.global_cache_connector`。
 
 ## Version / Platform Reporter
 

@@ -90,6 +90,9 @@ void IpcProcessChannel::SetSlotWriteFinish(int slot_id) {
 void IpcProcessChannel::SetSlotReadFinish(int slot_id) { meta_ptr_->slot_read_write_flags[slot_id][executor_id_] = 2; }
 
 bool IpcProcessChannel::WaitWritableAndLock() {
+  // 先拿进程内写锁，再进共享 mutex/cond；失败路径必须成对释放。
+  local_write_mutex_.lock();
+
   // Loop because predicate must be re-validated after we own the rwlock:
   // multiple writers can pass the `used_slot_num < CHANNEL_SLOT_NUM` check
   // while holding the mutex, all release the mutex, then serialize on the
@@ -104,6 +107,7 @@ bool IpcProcessChannel::WaitWritableAndLock() {
     }
     if (meta_ptr_->stopped) {
       Unlock();
+      local_write_mutex_.unlock();
       return false;
     }
     Unlock();
@@ -118,13 +122,14 @@ bool IpcProcessChannel::WaitWritableAndLock() {
     Lock();
     if (meta_ptr_->used_slot_num < CHANNEL_SLOT_NUM && !meta_ptr_->stopped) {
       Unlock();
-      // Note: rwlock is not released, the caller owns it.
+      // Note: rwlock + local_write_mutex_ 仍由 WriteAndUnlock 释放。
       return true;
     }
     bool was_stopped = meta_ptr_->stopped;
     Unlock();
     pthread_rwlock_unlock(&meta_ptr_->rwlock);
     if (was_stopped) {
+      local_write_mutex_.unlock();
       return false;
     }
     // Predicate no longer holds; loop to wait on write_cond again.
@@ -159,6 +164,7 @@ bool IpcProcessChannel::WriteAndUnlock() {
   if (meta_ptr_->stopped) {
     Unlock();
     pthread_rwlock_unlock(&meta_ptr_->rwlock);
+    local_write_mutex_.unlock();
     return false;
   }
 
@@ -179,6 +185,7 @@ bool IpcProcessChannel::WriteAndUnlock() {
 
   Unlock();
   pthread_rwlock_unlock(&meta_ptr_->rwlock);
+  local_write_mutex_.unlock();
   return true;
 }
 

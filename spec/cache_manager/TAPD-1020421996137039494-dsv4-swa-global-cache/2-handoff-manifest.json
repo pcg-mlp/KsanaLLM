@@ -1,0 +1,19 @@
+{
+  "spec_dir": "spec/cache_manager/TAPD-1020421996137039494-dsv4-swa-global-cache/",
+  "produced_by_commit": "6a1fe8d724e5a35c405dbb4d6cf84aa2875906b2",
+  "produced_at": "2026-08-24T10:18:42+08:00",
+  "unit_test_targets": [
+    "global_cache_connector_test",
+    "global_cache_put_worker_test",
+    "global_cache_put_tracker_test",
+    "global_cache_fetcher_test",
+    "global_cache_query_callable_test",
+    "schedule_config_parser_test",
+    "prefix_cache_manager_test",
+    "direct_cache_manager_test"
+  ],
+  "integration_test_requested": true,
+  "retry_count": 0,
+  "max_retries": 3,
+  "prior_failure_summary": null
+}

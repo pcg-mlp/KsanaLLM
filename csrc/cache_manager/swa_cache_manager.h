@@ -183,6 +183,8 @@ class SWACacheManager {
   // Called by AllocateRequestBlocksInternal after the availability pre-check passes.
   void AcquireSWABlock(int64_t req_id, size_t fa_block_id);
 
+  size_t FreeAllBlocks();
+
  private:
   // Evict one reclaimable SWA block according to the LFU + prefix_fa_block_num policy.
   // Returns the fa_block_id of the evicted block, or SIZE_MAX if nothing was evicted.

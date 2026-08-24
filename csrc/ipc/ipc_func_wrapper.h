@@ -74,7 +74,10 @@ enum {
 // Used to call some pre-defined functions in different process.
 class IpcFuncWrapper {
  public:
-  IpcFuncWrapper(size_t executor_num, bool is_engine, int executor_id);
+  // 收包线程是否 SetDevice；fork 后无 GPU 的路径应传 false。
+  // long_task_thread_num: heavy IPC 出队并行度，默认 4（应由 yaml 对齐后的值传入）。
+  IpcFuncWrapper(size_t executor_num, bool is_engine, int executor_id, bool initialize_device = true,
+                 size_t long_task_thread_num = 4);
   ~IpcFuncWrapper();
 
   // Engine to executors.
@@ -158,22 +161,32 @@ class IpcFuncWrapper {
   Status ReportLayerProgress(int device_id, int layer_index);
 
   // Engine → Executor: 向指定 executor 发送全局 cache 查询请求（异步，不阻塞）
+  // swa_* 参数为空/0 时 executor 不做 SWA 对齐，保持原有主 KV 行为。
   Status DispatchGlobalCacheQuery(int executor_id, int64_t req_id, const std::vector<int>& token_ids,
-                                  size_t local_cached_len, int block_size, const std::vector<int>& kv_cache_block_ids);
+                                  size_t local_cached_len, int block_size, const std::vector<int>& kv_cache_block_ids,
+                                  const std::vector<int>& swa_kv_cache_block_ids = {},
+                                  const std::vector<size_t>& swa_block_idx_offsets = {},
+                                  size_t swa_window_block_num = 1, size_t max_cached_len = 0);
 
   // Executor → Engine: 报告全局 cache 查询完成（异步，不阻塞）
   Status ReportGlobalCacheQueryDone(int64_t req_id, int device_id, const std::vector<int>& matched_ranges, bool success,
-                                    const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false);
+                                    const std::vector<int>& cached_tokens = {}, bool has_cached_tokens = false,
+                                    int64_t wait_us = -1, int64_t qf_us = -1, int64_t token_us = -1,
+                                    int64_t report_us = -1, int64_t call_us = -1, int64_t report_wall_us = 0,
+                                    size_t swa_aligned_hit_len = 0,
+                                    const std::vector<size_t>& swa_filled_block_idxs = {});
 
   // 设置全局 cache 查询相关的 IPC callable 依赖
-  void SetGlobalCacheQueryCallableDeps(std::shared_ptr<GlobalCacheConnectorInterface> connector,
-                                       std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager,
-                                       int dp_group_id, std::shared_ptr<Environment> env, int device_id,
-                                       const std::string& role = "", int timeout_ms = 5000);
+  // swa_block_allocator_manager 为空时不启用 SWA 对齐。
+  void SetGlobalCacheQueryCallableDeps(
+      std::shared_ptr<GlobalCacheConnectorInterface> connector,
+      std::shared_ptr<BlockAllocatorManagerInterface> block_allocator_manager, int dp_group_id,
+      std::shared_ptr<Environment> env, int device_id, const std::string& role = "", int timeout_ms = 5000,
+      std::shared_ptr<BlockAllocatorManagerInterface> swa_block_allocator_manager = nullptr);
   void SetGlobalCacheQueryDoneCallableFetcher(std::shared_ptr<GlobalCacheFetcher> fetcher);
 
   // Executor → Engine: 报告单个请求的 KV cache put 完成（异步，不阻塞）
-  Status ReportGlobalCachePutDone(int device_id, int64_t req_id);
+  Status ReportGlobalCachePutDone(int device_id, int64_t req_id, int fa_put_blocks = 0, int swa_put_blocks = 0);
 
   // 设置 GlobalCachePutDone callable 的 tracker 依赖
   void SetGlobalCachePutDoneCallableTracker(std::shared_ptr<GlobalCachePutTracker> tracker);

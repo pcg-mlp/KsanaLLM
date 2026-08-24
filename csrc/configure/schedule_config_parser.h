@@ -644,6 +644,11 @@ class ScheduleConfigParser {
 
   void InitGlobalCacheConnectorConfig(YamlReader &yaml_reader);
 
+  // heavy IPC long-task 出队并行度（setting.ipc.long_task_thread_num），与 fetch_thread_num 启动时取 max 对齐。
+  int GetLongTaskThreadNum() const { return long_task_thread_num_; }
+
+  void SetLongTaskThreadNum(int long_task_thread_num) { long_task_thread_num_ = long_task_thread_num; }
+
   // Calculate block size via model configs.
   Status InitializeBlockManagerConfig(const ModelConfig &model_config,
                                       std::shared_ptr<BaseModelCacheLayout> block_cache_layout);
@@ -684,6 +689,12 @@ class ScheduleConfigParser {
 
   // Store global cache connector configuration
   GlobalCacheConnectorConfig global_cache_connector_config_;
+
+  // IPC heavy long-task 线程数（与 global_cache_connector 解耦；启动时与 fetch_thread_num 对齐）。
+  int long_task_thread_num_ = 4;
+
+  void InitIpcConfig(YamlReader &yaml_reader);
+  void AlignLongTaskAndFetchThreadNum();
 };
 
 }  // namespace ksana_llm

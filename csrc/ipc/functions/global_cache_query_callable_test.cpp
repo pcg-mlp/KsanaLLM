@@ -5,7 +5,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "cache_manager/block_allocator/block_allocator_manager.h"
@@ -14,7 +16,6 @@
 #include "loguru.hpp"
 
 namespace ksana_llm {
-namespace {
 
 class MaxLogVerbosityEnv : public ::testing::Environment {
  public:
@@ -22,17 +23,20 @@ class MaxLogVerbosityEnv : public ::testing::Environment {
 };
 static auto* unused_log_env = ::testing::AddGlobalTestEnvironment(new MaxLogVerbosityEnv());
 
-// ==================== Mock 类 ====================
-
 class MockConnector : public GlobalCacheConnectorInterface {
  public:
   MOCK_METHOD(Status, Initialize, (const GlobalCacheConnectorConfig&), (override));
   MOCK_METHOD(Status, QueryAndFetch,
               (const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-               std::vector<int>&, bool, int),
+               std::vector<int>&, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*),
               (override));
   MOCK_METHOD(Status, PutGlobalCacheBlocks,
-              (const std::vector<int>&, int, int, int, int, size_t, const std::vector<int>&, const std::vector<void*>&),
+              (const std::vector<int>&, int, int, int, int, size_t, const std::vector<int>&, const std::vector<void*>&,
+               int*),
+              (override));
+  MOCK_METHOD(Status, PutSwaBlocks,
+              (const std::vector<int>&, int, int, int, size_t, const std::vector<size_t>&, const std::vector<void*>&,
+               int*),
               (override));
   MOCK_METHOD(Status, PutFirstTokens, (const std::vector<int>&, const std::vector<int>&), (override));
   MOCK_METHOD(Status, QueryFirstTokens, (const std::vector<int>&, std::vector<int>&, bool&), (override));
@@ -66,8 +70,6 @@ class MockBlockAllocatorManager : public BlockAllocatorManagerInterface {
   MOCK_METHOD(std::shared_ptr<BlockAllocatorGroupInterface>, GetBlockAllocatorGroup, (int), (override));
 };
 
-// ==================== 测试夹具 ====================
-
 class QueryCallableTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -82,7 +84,6 @@ class QueryCallableTest : public ::testing::Test {
     block_config_.block_size = 4096;
     ON_CALL(*mock_group_, GetBlockAllocatorGroupConfig()).WillByDefault(testing::ReturnRef(block_config_));
 
-    // 默认 GetBlockPtrs 返回有效指针
     ON_CALL(*mock_device_alloc_, GetBlockPtrs(testing::_, testing::_))
         .WillByDefault([](const std::vector<int>& blocks, std::vector<void*>& ptrs) {
           ptrs.resize(blocks.size(), reinterpret_cast<void*>(0xDEAD));
@@ -96,22 +97,64 @@ class QueryCallableTest : public ::testing::Test {
     callable_->SetGlobalCacheRole("", 5000);
   }
 
+  void EnableSwaMocks(size_t swa_block_byte_size = 8192) {
+    mock_swa_bam_ = std::make_shared<testing::NiceMock<MockBlockAllocatorManager>>();
+    mock_swa_group_ = std::make_shared<testing::NiceMock<MockBlockAllocatorGroup>>();
+    mock_swa_device_alloc_ = std::make_shared<testing::NiceMock<MockBlockAllocator>>();
+    ON_CALL(*mock_swa_bam_, GetBlockAllocatorGroup(testing::_)).WillByDefault(testing::Return(mock_swa_group_));
+    ON_CALL(*mock_swa_group_, GetDeviceBlockAllocator(testing::_))
+        .WillByDefault(testing::Return(mock_swa_device_alloc_));
+    swa_block_config_.block_size = swa_block_byte_size;
+    ON_CALL(*mock_swa_group_, GetBlockAllocatorGroupConfig()).WillByDefault(testing::ReturnRef(swa_block_config_));
+    ON_CALL(*mock_swa_device_alloc_, GetBlockPtrs(testing::_, testing::_))
+        .WillByDefault([](const std::vector<int>& blocks, std::vector<void*>& ptrs) {
+          ptrs.resize(blocks.size(), reinterpret_cast<void*>(0xBEEF));
+          return Status();
+        });
+    callable_->SetSwaBlockAllocatorManager(mock_swa_bam_);
+  }
+
+  static void FillSwaFields(GlobalCacheQueryRequest& req, size_t max_cached_len = 64) {
+    req.swa_kv_cache_block_ids = {10, 11};
+    req.swa_block_idx_offsets = {0, 1};
+    req.swa_window_block_num = 2;
+    req.max_cached_len = max_cached_len;
+  }
+
   GlobalCacheQueryRequest MakeRequest(int64_t req_id, int token_num = 10, int local_cached = 0) {
     GlobalCacheQueryRequest req;
     req.req_id = req_id;
     req.token_ids.resize(token_num);
-    for (int i = 0; i < token_num; ++i) req.token_ids[i] = i + 100;
+    for (int i = 0; i < token_num; ++i) {
+      req.token_ids[i] = i + 100;
+    }
     req.local_cached_len = local_cached;
     req.block_size = 16;
     req.kv_cache_block_ids = {0, 1, 2};
     return req;
   }
 
+  void StubQueryFullHit() {
+    ON_CALL(*mock_connector_,
+            QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                          testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+        .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                          std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*,
+                          GlobalCacheSwaResult*) {
+          matched_ranges = {0, 9};
+          return Status();
+        });
+  }
+
   std::shared_ptr<testing::NiceMock<MockConnector>> mock_connector_;
   std::shared_ptr<testing::NiceMock<MockBlockAllocatorManager>> mock_bam_;
   std::shared_ptr<testing::NiceMock<MockBlockAllocatorGroup>> mock_group_;
   std::shared_ptr<testing::NiceMock<MockBlockAllocator>> mock_device_alloc_;
+  std::shared_ptr<testing::NiceMock<MockBlockAllocatorManager>> mock_swa_bam_;
+  std::shared_ptr<testing::NiceMock<MockBlockAllocatorGroup>> mock_swa_group_;
+  std::shared_ptr<testing::NiceMock<MockBlockAllocator>> mock_swa_device_alloc_;
   BlockAllocatorGroupConfig block_config_;
+  BlockAllocatorGroupConfig swa_block_config_;
   std::unique_ptr<GlobalCacheQueryCallable> callable_;
 };
 
@@ -139,10 +182,12 @@ TEST_F(QueryCallableTest, EmptyBlockPtrsReportsFailure) {
 }
 
 TEST_F(QueryCallableTest, SuccessfulQueryAndFetch) {
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_connector_,
+          QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                        testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
+                        std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*,
+                        GlobalCacheSwaResult*) {
         matched_ranges = {0, 9};
         return Status();
       });
@@ -153,8 +198,9 @@ TEST_F(QueryCallableTest, SuccessfulQueryAndFetch) {
 }
 
 TEST_F(QueryCallableTest, QueryAndFetchFailure) {
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_connector_,
+          QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                        testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "timeout")));
 
   auto req = MakeRequest(400, 10);
@@ -163,10 +209,12 @@ TEST_F(QueryCallableTest, QueryAndFetchFailure) {
 }
 
 TEST_F(QueryCallableTest, StandaloneFullHitQueriesFirstTokens) {
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_connector_,
+          QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                        testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
+                        std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*,
+                        GlobalCacheSwaResult*) {
         matched_ranges = {0, 9};
         return Status();
       });
@@ -187,10 +235,12 @@ TEST_F(QueryCallableTest, SetterMethods) {
   auto callable = std::make_unique<GlobalCacheQueryCallable>();
   callable->SetGlobalCacheConnector(mock_connector_);
   callable->SetBlockAllocatorManager(mock_bam_, 1);
+  callable->SetSwaBlockAllocatorManager(mock_bam_);
+  callable->SetIpcFuncWrapper(nullptr);
+  callable->SetEnvironment(nullptr);
   callable->SetDeviceId(3);
   callable->SetGlobalCacheRole("decode", 3000);
 
-  // 验证 setter 不会崩溃
   EXPECT_EQ(callable->device_id_, 3);
   EXPECT_EQ(callable->role_, "decode");
   EXPECT_EQ(callable->timeout_ms_, 3000);
@@ -199,24 +249,13 @@ TEST_F(QueryCallableTest, SetterMethods) {
 
 TEST_F(QueryCallableTest, PrefillRoleNoFirstTokenQuery) {
   callable_->SetGlobalCacheRole("prefill", 5000);
-
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
-        matched_ranges = {0, 9};
-        return Status();
-      });
-
-  // prefill 角色不应查询 FirstTokens
+  StubQueryFullHit();
   EXPECT_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_)).Times(0);
 
   auto req = MakeRequest(600, 10, 0);
   GlobalCacheQueryResponse resp;
   EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
 }
-
-// ==================== 序列化 roundtrip 测试 ====================
 
 TEST(QueryRequestSerializationTest, RoundTrip) {
   GlobalCacheQueryRequest original;
@@ -225,6 +264,11 @@ TEST(QueryRequestSerializationTest, RoundTrip) {
   original.local_cached_len = 3;
   original.block_size = 16;
   original.kv_cache_block_ids = {0, 1, 2, 3};
+  original.enqueue_wall_us = 123456789;
+  original.swa_kv_cache_block_ids = {7, 8};
+  original.swa_block_idx_offsets = {2, 3};
+  original.swa_window_block_num = 4;
+  original.max_cached_len = 99;
 
   std::vector<uint8_t> buffer(4096);
   size_t bytes = 0;
@@ -238,6 +282,11 @@ TEST(QueryRequestSerializationTest, RoundTrip) {
   EXPECT_EQ(restored.local_cached_len, 3u);
   EXPECT_EQ(restored.block_size, 16);
   EXPECT_EQ(restored.kv_cache_block_ids, original.kv_cache_block_ids);
+  EXPECT_EQ(restored.enqueue_wall_us, 123456789);
+  EXPECT_EQ(restored.swa_kv_cache_block_ids, original.swa_kv_cache_block_ids);
+  EXPECT_EQ(restored.swa_block_idx_offsets, original.swa_block_idx_offsets);
+  EXPECT_EQ(restored.swa_window_block_num, 4u);
+  EXPECT_EQ(restored.max_cached_len, 99u);
 }
 
 TEST(QueryRequestSerializationTest, EmptyVectors) {
@@ -255,22 +304,13 @@ TEST(QueryRequestSerializationTest, EmptyVectors) {
   EXPECT_EQ(restored.req_id, 99);
   EXPECT_TRUE(restored.token_ids.empty());
   EXPECT_TRUE(restored.kv_cache_block_ids.empty());
+  EXPECT_TRUE(restored.swa_kv_cache_block_ids.empty());
+  EXPECT_TRUE(restored.swa_block_idx_offsets.empty());
 }
-
-// ==================== decode 角色 retry 测试 ====================
 
 TEST_F(QueryCallableTest, DecodeRoleFullHitTokensFound) {
   callable_->SetGlobalCacheRole("decode", 5000);
-
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
-        matched_ranges = {0, 9};
-        return Status();
-      });
-
-  // decode 全命中后会循环重试 QueryFirstTokens
+  StubQueryFullHit();
   EXPECT_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_))
       .WillOnce([](const std::vector<int>&, std::vector<int>& tokens, bool& found) {
         tokens = {42, 43};
@@ -285,16 +325,7 @@ TEST_F(QueryCallableTest, DecodeRoleFullHitTokensFound) {
 
 TEST_F(QueryCallableTest, DecodeRoleTokensNotFoundTimeout) {
   callable_->SetGlobalCacheRole("decode", 50);
-
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
-        matched_ranges = {0, 9};
-        return Status();
-      });
-
-  // 始终找不到 token，应超时退出
+  StubQueryFullHit();
   ON_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_))
       .WillByDefault([](const std::vector<int>&, std::vector<int>&, bool& found) {
         found = false;
@@ -311,17 +342,15 @@ TEST_F(QueryCallableTest, DecodeRoleTokensNotFoundTimeout) {
 
 TEST_F(QueryCallableTest, DecodeRolePartialHitNoTokenQuery) {
   callable_->SetGlobalCacheRole("decode", 5000);
-
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
+  ON_CALL(*mock_connector_,
+          QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                        testing::_, testing::_, testing::_, testing::_, testing::_))
       .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
-        // 只命中部分
+                        std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*,
+                        GlobalCacheSwaResult*) {
         matched_ranges = {0, 4};
         return Status();
       });
-
-  // 未全命中时不应查询 token
   EXPECT_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_)).Times(0);
 
   auto req = MakeRequest(900, 10, 0);
@@ -331,16 +360,7 @@ TEST_F(QueryCallableTest, DecodeRolePartialHitNoTokenQuery) {
 
 TEST_F(QueryCallableTest, NonDevice0NoFirstTokenQuery) {
   callable_->SetDeviceId(1);
-
-  ON_CALL(*mock_connector_, QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
-                                          testing::_, testing::_, testing::_, testing::_, testing::_))
-      .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
-                        std::vector<int>& matched_ranges, bool, int) {
-        matched_ranges = {0, 9};
-        return Status();
-      });
-
-  // 非设备 0 不查询 token
+  StubQueryFullHit();
   EXPECT_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_)).Times(0);
 
   auto req = MakeRequest(1000, 10, 0);
@@ -348,5 +368,209 @@ TEST_F(QueryCallableTest, NonDevice0NoFirstTokenQuery) {
   EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
 }
 
-}  // namespace
+TEST_F(QueryCallableTest, EnqueueWallUsComputesWait) {
+  StubQueryFullHit();
+  auto req = MakeRequest(1100, 10, 0);
+  req.enqueue_wall_us = 1;  // >0 走 wait_us 计算分支
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, GetBlockPtrsFailureSkipsQuery) {
+  ON_CALL(*mock_device_alloc_, GetBlockPtrs(testing::_, testing::_))
+      .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "block miss")));
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto req = MakeRequest(1200);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, BlockPtrSizeMismatchSkipsQuery) {
+  ON_CALL(*mock_device_alloc_, GetBlockPtrs(testing::_, testing::_))
+      .WillByDefault([](const std::vector<int>&, std::vector<void*>& ptrs) {
+        ptrs = {reinterpret_cast<void*>(0x1)};  // 故意少于 block ids
+        return Status();
+      });
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto req = MakeRequest(1300);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, NullDeviceAllocatorSkipsQuery) {
+  ON_CALL(*mock_group_, GetDeviceBlockAllocator(testing::_)).WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto req = MakeRequest(1400);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, NoBlockAllocatorManagerSkipsQuery) {
+  auto callable = std::make_unique<GlobalCacheQueryCallable>();
+  callable->SetGlobalCacheConnector(mock_connector_);
+  callable->SetDeviceId(0);
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::_, testing::_))
+      .Times(0);
+
+  auto req = MakeRequest(1500);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, EmptyMatchedRangesNoTokenQuery) {
+  ON_CALL(*mock_connector_,
+          QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                        testing::_, testing::_, testing::_, testing::_, testing::_))
+      .WillByDefault([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                        std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*,
+                        GlobalCacheSwaResult*) {
+        matched_ranges.clear();
+        return Status();
+      });
+  EXPECT_CALL(*mock_connector_, QueryFirstTokens(testing::_, testing::_, testing::_)).Times(0);
+
+  auto req = MakeRequest(1600, 10, 0);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaEnabledPassesContext) {
+  EnableSwaMocks();
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::NotNull(), testing::NotNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext* swa_ctx,
+                   GlobalCacheSwaResult* swa_result) {
+        EXPECT_NE(swa_ctx, nullptr);
+        EXPECT_EQ(swa_ctx->swa_block_ptrs.size(), 2u);
+        EXPECT_EQ(swa_ctx->local_swa_block_idxs.size(), 2u);
+        EXPECT_GT(swa_ctx->swa_block_byte_size, 0u);
+        EXPECT_EQ(swa_ctx->max_hit_token_num, 64u);
+        if (swa_result != nullptr) {
+          swa_result->swa_aligned_hit_len = 32;
+          swa_result->filled_block_idxs = {0, 1};
+        }
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(1700, 10, 0);
+  FillSwaFields(req, /*max_cached_len=*/64);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaGetBlockPtrsFailFallsBackMainKv) {
+  EnableSwaMocks();
+  ON_CALL(*mock_swa_device_alloc_, GetBlockPtrs(testing::_, testing::_))
+      .WillByDefault(testing::Return(Status(RET_RUNTIME_FAILED, "swa miss")));
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::IsNull(), testing::IsNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*) {
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(1800, 10, 0);
+  FillSwaFields(req);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaIncompleteMaxCachedZeroFallsBack) {
+  EnableSwaMocks();
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::IsNull(), testing::IsNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*) {
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(1900, 10, 0);
+  FillSwaFields(req, /*max_cached_len=*/0);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaIncompleteZeroBlockByteFallsBack) {
+  EnableSwaMocks(/*swa_block_byte_size=*/0);
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::IsNull(), testing::IsNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*) {
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(2000, 10, 0);
+  FillSwaFields(req, /*max_cached_len=*/64);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaIdOffsetSizeMismatchNoSwa) {
+  EnableSwaMocks();
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::IsNull(), testing::IsNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*) {
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(2100, 10, 0);
+  req.swa_kv_cache_block_ids = {10, 11};
+  req.swa_block_idx_offsets = {0};  // 长度不一致
+  req.max_cached_len = 64;
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SwaNullDeviceAllocatorFallsBack) {
+  EnableSwaMocks();
+  ON_CALL(*mock_swa_group_, GetDeviceBlockAllocator(testing::_)).WillByDefault(testing::Return(nullptr));
+  EXPECT_CALL(*mock_connector_,
+              QueryAndFetch(testing::_, testing::_, testing::_, testing::_, testing::_, testing::_, testing::_,
+                            testing::_, testing::_, testing::_, testing::_, testing::IsNull(), testing::IsNull()))
+      .WillOnce([](const std::vector<int>&, size_t, int, int, int, int, size_t, const std::vector<void*>&,
+                   std::vector<int>& matched_ranges, bool, int, const GlobalCacheSwaContext*, GlobalCacheSwaResult*) {
+        matched_ranges = {0, 9};
+        return Status();
+      });
+
+  auto req = MakeRequest(2200, 10, 0);
+  FillSwaFields(req);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
+TEST_F(QueryCallableTest, SecondCallReusesAllocatorGroup) {
+  StubQueryFullHit();
+  auto req = MakeRequest(2300, 10, 0);
+  GlobalCacheQueryResponse resp;
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+  EXPECT_TRUE(callable_->Call(&req, &resp, nullptr).OK());
+}
+
 }  // namespace ksana_llm

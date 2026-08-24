@@ -329,6 +329,431 @@ TEST_F(MockConnectorTest, InvalidBlockSizeSkips) {
   EXPECT_TRUE(matched_ranges.empty());
 }
 
+// ==================== SWA 存取与命中边界对齐 ====================
+
+// SWA 请求的命中边界必须落在「末 W 个位置既有全局 SWA 内容、又有本地 SWA 落点」的地方，
+// 且主 KV 要完整覆盖到该边界。下面的 fixture 把这四个约束逐个打破来验证边界计算。
+class MockConnectorSwaTest : public MockConnectorTest {
+ protected:
+  static constexpr size_t kSwaBlockByteSize = 2048;
+
+  // 造 block_num 个满块的 token 序列。
+  static std::vector<int> MakeTokens(int block_num) {
+    std::vector<int> token_ids(static_cast<size_t>(block_num) * kBlockSize);
+    for (size_t i = 0; i < token_ids.size(); ++i) {
+      token_ids[i] = static_cast<int>(i + 1);
+    }
+    return token_ids;
+  }
+
+  // 分配 block_num 个 GPU buffer，第 i 块填 fill_base + i。
+  void AllocBuffers(int block_num, size_t byte_size, uint8_t fill_base, std::vector<std::unique_ptr<GpuBuffer>>& bufs,
+                    std::vector<void*>& ptrs) {
+    for (int i = 0; i < block_num; ++i) {
+      bufs.emplace_back(std::make_unique<GpuBuffer>(byte_size));
+      ptrs.push_back(bufs.back()->ptr());
+      std::vector<uint8_t> data(byte_size, static_cast<uint8_t>(fill_base + i));
+      bufs.back()->Upload(data.data());
+    }
+  }
+};
+
+TEST_F(MockConnectorSwaTest, SwaAlignedHitFetchesBoundaryWindow) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  // 写入端：主 KV 全部 4 块 + SWA 全部 4 块。
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs, swa_bufs;
+  std::vector<void*> kv_ptrs, swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x50, swa_bufs, swa_ptrs);
+
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+  ASSERT_TRUE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {0, 1, 2, 3}, swa_ptrs)
+          .OK());
+
+  // 读取端：全新的空 buffer。
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+  for (auto& b : dst_kv_bufs) b->Clear();
+  for (auto& b : dst_swa_bufs) b->Clear();
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1, 2, 3};
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 2;
+  swa_ctx.max_hit_token_num = token_ids.size() - 1;  // engine 侧的 seq-1 上限
+
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, dst_kv_ptrs,
+                                  matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  // seq-1 上限把边界压到 3 个 block，窗口 W=2 → 拉 SWA 的是 block 1、2。
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, static_cast<size_t>(3 * kBlockSize));
+  EXPECT_EQ(swa_result.filled_block_idxs, (std::vector<size_t>{1, 2}));
+  ASSERT_EQ(matched_ranges.size(), 2u);
+  EXPECT_EQ(matched_ranges[0], 0);
+  EXPECT_EQ(matched_ranges[1], 3 * kBlockSize - 1);
+
+  // 窗口内的 SWA 内容必须与写入端一致，窗口外的不能被动过。
+  std::vector<uint8_t> readback(kSwaBlockByteSize);
+  for (size_t idx : {1u, 2u}) {
+    dst_swa_bufs[idx]->Download(readback.data());
+    EXPECT_EQ(readback, std::vector<uint8_t>(kSwaBlockByteSize, static_cast<uint8_t>(0x50 + idx))) << "swa " << idx;
+  }
+  dst_swa_bufs[0]->Download(readback.data());
+  EXPECT_EQ(readback, std::vector<uint8_t>(kSwaBlockByteSize, 0));
+}
+
+TEST_F(MockConnectorSwaTest, MissingSwaTruncatesBoundary) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs, swa_bufs;
+  std::vector<void*> kv_ptrs, swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x50, swa_bufs, swa_ptrs);
+
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+  // 只存 block 0、1 的 SWA：block 2 缺 SWA，边界只能退到 2。
+  ASSERT_TRUE(connector_
+                  ->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {0, 1},
+                                 {swa_ptrs[0], swa_ptrs[1]})
+                  .OK());
+
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1, 2, 3};
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 1;
+  swa_ctx.max_hit_token_num = token_ids.size() - 1;
+
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, dst_kv_ptrs,
+                                  matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, static_cast<size_t>(2 * kBlockSize));
+  EXPECT_EQ(swa_result.filled_block_idxs, (std::vector<size_t>{1}));
+  ASSERT_EQ(matched_ranges.size(), 2u);
+  EXPECT_EQ(matched_ranges[1], 2 * kBlockSize - 1);
+}
+
+// 本地没给出边界位置的 SWA 落点时，拉下来的内容无处可写，边界必须继续往前退。
+TEST_F(MockConnectorSwaTest, MissingLocalSwaSlotTruncatesBoundary) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs, swa_bufs;
+  std::vector<void*> kv_ptrs, swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x50, swa_bufs, swa_ptrs);
+
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+  ASSERT_TRUE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {0, 1, 2, 3}, swa_ptrs)
+          .OK());
+
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(2, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1};  // block 2、3 没有本地 SWA 落点
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 1;
+  swa_ctx.max_hit_token_num = token_ids.size() - 1;
+
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, dst_kv_ptrs,
+                                  matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, static_cast<size_t>(2 * kBlockSize));
+  EXPECT_EQ(swa_result.filled_block_idxs, (std::vector<size_t>{1}));
+}
+
+// 完全没有 SWA 内容：边界退回起点，等价于没有全局命中。
+TEST_F(MockConnectorSwaTest, NoSwaContentYieldsNoHit) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs;
+  std::vector<void*> kv_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1, 2, 3};
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 1;
+  swa_ctx.max_hit_token_num = token_ids.size() - 1;
+
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, dst_kv_ptrs,
+                                  matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, 0u);
+  EXPECT_TRUE(matched_ranges.empty());
+}
+
+TEST_F(MockConnectorSwaTest, SwaContextWithoutResultReturnsError) {
+  auto token_ids = MakeTokens(2);
+  std::vector<std::unique_ptr<GpuBuffer>> bufs;
+  std::vector<void*> ptrs;
+  AllocBuffers(2, kBlockByteSize, 0x00, bufs, ptrs);
+
+  GlobalCacheSwaContext swa_ctx;
+  std::vector<int> matched_ranges;
+  Status s = connector_->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ptrs,
+                                       matched_ranges, false, 0, &swa_ctx, nullptr);
+  EXPECT_FALSE(s.OK());
+}
+
+TEST_F(MockConnectorSwaTest, PutSwaBlocksRejectsBadArguments) {
+  auto token_ids = MakeTokens(2);
+  std::vector<std::unique_ptr<GpuBuffer>> bufs;
+  std::vector<void*> ptrs;
+  AllocBuffers(2, kSwaBlockByteSize, 0x50, bufs, ptrs);
+
+  EXPECT_FALSE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, /*swa_block_byte_size=*/0, {0, 1}, ptrs)
+          .OK());
+  EXPECT_FALSE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {0}, ptrs).OK());
+  EXPECT_FALSE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, /*block_size=*/0, kSwaBlockByteSize, {0, 1}, ptrs)
+          .OK());
+}
+
+// 统计 StoreBatchIsExist：用于断言 Query 路径主 KV 不重复 Exist。
+class CountingExistMockConnector : public MooncakeMockConnector {
+ public:
+  int kv_exist_calls = 0;
+  int skv_exist_calls = 0;
+
+  void ResetExistCounts() {
+    kv_exist_calls = 0;
+    skv_exist_calls = 0;
+  }
+
+ protected:
+  std::vector<bool> StoreBatchIsExist(const std::vector<std::string>& keys) override {
+    for (const auto& key : keys) {
+      if (key.rfind("skv_", 0) == 0) {
+        ++skv_exist_calls;
+      } else if (key.rfind("kv_", 0) == 0) {
+        ++kv_exist_calls;
+      }
+    }
+    return MooncakeMockConnector::StoreBatchIsExist(keys);
+  }
+};
+
+class CountingSwaConnectorTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    connector_ = std::make_unique<CountingExistMockConnector>();
+    GlobalCacheConnectorConfig config;
+    config.backend_type = "mooncake-mock";
+    config.service_endpoint = tmpdir_.path();
+    ASSERT_TRUE(connector_->Initialize(config).OK());
+  }
+
+  void TearDown() override {
+    if (connector_) {
+      connector_->Shutdown();
+    }
+  }
+
+  static std::vector<int> MakeTokens(int block_num) {
+    std::vector<int> token_ids(static_cast<size_t>(block_num) * kBlockSize);
+    for (size_t i = 0; i < token_ids.size(); ++i) {
+      token_ids[i] = static_cast<int>(i + 1);
+    }
+    return token_ids;
+  }
+
+  void AllocBuffers(int block_num, size_t byte_size, uint8_t fill_base, std::vector<std::unique_ptr<GpuBuffer>>& bufs,
+                    std::vector<void*>& ptrs) {
+    for (int i = 0; i < block_num; ++i) {
+      bufs.emplace_back(std::make_unique<GpuBuffer>(byte_size));
+      ptrs.push_back(bufs.back()->ptr());
+      std::vector<uint8_t> data(byte_size, static_cast<uint8_t>(fill_base + i));
+      bufs.back()->Upload(data.data());
+    }
+  }
+
+  TempDir tmpdir_;
+  std::unique_ptr<CountingExistMockConnector> connector_;
+
+  static constexpr int kBlockSize = 4;
+  static constexpr size_t kBlockByteSize = 1024;
+  static constexpr size_t kSwaBlockByteSize = 2048;
+  static constexpr int kTpSize = 1;
+  static constexpr int kTpRank = 0;
+  static constexpr int kLayerIndex = 0;
+};
+
+// 契约：SWA Query 时主 KV Exist 只扫候选块一次（不应在 Align 后再扫一遍）。
+TEST_F(CountingSwaConnectorTest, SwaQueryMainKvExistOnce) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs, swa_bufs;
+  std::vector<void*> kv_ptrs, swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x50, swa_bufs, swa_ptrs);
+
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+  ASSERT_TRUE(
+      connector_->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {0, 1, 2, 3}, swa_ptrs)
+          .OK());
+
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1, 2, 3};
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 2;
+  // seq-1 → exist_end=3；若重复查主 KV，kv_exist_calls 会变成 6。
+  swa_ctx.max_hit_token_num = token_ids.size() - 1;
+
+  connector_->ResetExistCounts();
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, 0, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, dst_kv_ptrs,
+                                  matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, static_cast<size_t>(3 * kBlockSize));
+  EXPECT_EQ(connector_->kv_exist_calls, 3);
+  EXPECT_EQ(connector_->skv_exist_calls, 3);
+  ASSERT_EQ(matched_ranges.size(), 2u);
+  EXPECT_EQ(matched_ranges[1], 3 * kBlockSize - 1);
+}
+
+// start_block>0：窗口内 idx<start_block 视为本地已保证，无需全局 SWA；主 KV 只查 [start, exist_end)。
+TEST_F(CountingSwaConnectorTest, SwaWithLocalCachedLenSkipsLocalWindowSlots) {
+  constexpr int kBlockNum = 4;
+  auto token_ids = MakeTokens(kBlockNum);
+
+  std::vector<std::unique_ptr<GpuBuffer>> kv_bufs, swa_bufs;
+  std::vector<void*> kv_ptrs, swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0xA0, kv_bufs, kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x50, swa_bufs, swa_ptrs);
+
+  std::vector<int> ranges = {0, static_cast<int>(token_ids.size()) - 1};
+  ASSERT_TRUE(
+      connector_
+          ->PutGlobalCacheBlocks(token_ids, kTpSize, kTpRank, kLayerIndex, kBlockSize, kBlockByteSize, ranges, kv_ptrs)
+          .OK());
+  // 不存 block0 的 SWA：若错误地对 idx<start_block 也要求全局 SWA，边界会被错误截断。
+  ASSERT_TRUE(connector_
+                  ->PutSwaBlocks(token_ids, kTpRank, kLayerIndex, kBlockSize, kSwaBlockByteSize, {1, 2, 3},
+                                 {swa_ptrs[1], swa_ptrs[2], swa_ptrs[3]})
+                  .OK());
+
+  std::vector<std::unique_ptr<GpuBuffer>> dst_kv_bufs, dst_swa_bufs;
+  std::vector<void*> dst_kv_ptrs, dst_swa_ptrs;
+  AllocBuffers(kBlockNum, kBlockByteSize, 0x00, dst_kv_bufs, dst_kv_ptrs);
+  AllocBuffers(kBlockNum, kSwaBlockByteSize, 0x00, dst_swa_bufs, dst_swa_ptrs);
+  for (auto& b : dst_kv_bufs) {
+    b->Clear();
+  }
+  for (auto& b : dst_swa_bufs) {
+    b->Clear();
+  }
+
+  GlobalCacheSwaContext swa_ctx;
+  swa_ctx.swa_block_ptrs = dst_swa_ptrs;
+  swa_ctx.local_swa_block_idxs = {0, 1, 2, 3};
+  swa_ctx.swa_block_byte_size = kSwaBlockByteSize;
+  swa_ctx.swa_window_block_num = 2;
+  swa_ctx.max_hit_token_num = token_ids.size();
+
+  connector_->ResetExistCounts();
+  GlobalCacheSwaResult swa_result;
+  std::vector<int> matched_ranges;
+  const size_t local_cached_len = static_cast<size_t>(kBlockSize);
+  ASSERT_TRUE(connector_
+                  ->QueryAndFetch(token_ids, local_cached_len, kTpSize, kTpRank, kLayerIndex, kBlockSize,
+                                  kBlockByteSize, dst_kv_ptrs, matched_ranges, false, 0, &swa_ctx, &swa_result)
+                  .OK());
+
+  // start=1, W=2 → 可对齐到 4；窗口拉取 [max(4-2,1), 4) = {2,3}
+  EXPECT_EQ(swa_result.swa_aligned_hit_len, static_cast<size_t>(4 * kBlockSize));
+  EXPECT_EQ(swa_result.filled_block_idxs, (std::vector<size_t>{2, 3}));
+  ASSERT_EQ(matched_ranges.size(), 2u);
+  EXPECT_EQ(matched_ranges[0], kBlockSize);
+  EXPECT_EQ(matched_ranges[1], 4 * kBlockSize - 1);
+
+  // 主 KV 只查 block 1/2/3；SWA Exist 也只扫 [1,4)
+  EXPECT_EQ(connector_->kv_exist_calls, 3);
+  EXPECT_EQ(connector_->skv_exist_calls, 3);
+
+  std::vector<uint8_t> readback(kSwaBlockByteSize);
+  for (size_t idx : {2u, 3u}) {
+    dst_swa_bufs[idx]->Download(readback.data());
+    EXPECT_EQ(readback, std::vector<uint8_t>(kSwaBlockByteSize, static_cast<uint8_t>(0x50 + idx))) << "swa " << idx;
+  }
+  // block0 未拉 SWA，应仍为清零
+  dst_swa_bufs[0]->Download(readback.data());
+  EXPECT_EQ(readback, std::vector<uint8_t>(kSwaBlockByteSize, 0));
+}
+
 TEST_F(MockConnectorTest, ShutdownAndReinitialize) {
   ASSERT_TRUE(connector_->Shutdown().OK());
 
@@ -698,6 +1123,55 @@ TEST(KeyUtilsTest, MakeBlockKeyFormat) {
 TEST(KeyUtilsTest, MakeFirstTokenKeyFormat) {
   std::string key = MakeFirstTokenKey("abcdef0123456789");
   EXPECT_EQ(key, "ft_abcdef0123456789");
+}
+
+TEST(KeyUtilsTest, HashTokenPrefixesIncrementalMatchesOneShot) {
+  constexpr int kBlockSize = 4;
+  std::vector<int> tokens(20);
+  std::iota(tokens.begin(), tokens.end(), 1);
+
+  std::vector<std::string> incr;
+  HashTokenPrefixesIncremental(tokens.data(), static_cast<int>(tokens.size()), kBlockSize, 0, 5, incr);
+  ASSERT_EQ(incr.size(), 5u);
+  for (int bi = 0; bi < 5; ++bi) {
+    const size_t prefix_len = std::min(static_cast<size_t>(bi + 1) * kBlockSize, tokens.size());
+    EXPECT_EQ(incr[bi], HashTokenPrefix(tokens.data(), prefix_len)) << "bi=" << bi;
+  }
+}
+
+TEST(KeyUtilsTest, HashTokenPrefixesIncrementalPartialTailAndStartOffset) {
+  constexpr int kBlockSize = 8;
+  // 100 tokens → 13 有效 block，尾 block 非整除
+  std::vector<int> tokens(100);
+  std::iota(tokens.begin(), tokens.end(), 7);
+
+  // start_block>0
+  std::vector<std::string> incr;
+  HashTokenPrefixesIncremental(tokens.data(), static_cast<int>(tokens.size()), kBlockSize, 3, 13, incr);
+  ASSERT_EQ(incr.size(), 10u);
+  for (int bi = 3; bi < 13; ++bi) {
+    const size_t prefix_len = std::min(static_cast<size_t>(bi + 1) * kBlockSize, tokens.size());
+    EXPECT_EQ(incr[static_cast<size_t>(bi - 3)], HashTokenPrefix(tokens.data(), prefix_len)) << "bi=" << bi;
+  }
+
+  // end_block 超过有效 token blocks：尾部应复用 total_tokens 的 digest
+  std::vector<std::string> padded;
+  HashTokenPrefixesIncremental(tokens.data(), static_cast<int>(tokens.size()), kBlockSize, 0, 16, padded);
+  ASSERT_EQ(padded.size(), 16u);
+  const std::string full = HashTokenPrefix(tokens.data(), tokens.size());
+  for (int bi = 0; bi < 16; ++bi) {
+    const size_t prefix_len = std::min(static_cast<size_t>(bi + 1) * kBlockSize, tokens.size());
+    EXPECT_EQ(padded[bi], HashTokenPrefix(tokens.data(), prefix_len)) << "bi=" << bi;
+  }
+  EXPECT_EQ(padded[15], full);
+}
+
+TEST(KeyUtilsTest, HashTokenPrefixesIncrementalSingleBlock) {
+  std::vector<int> tokens = {9, 8, 7};
+  std::vector<std::string> incr;
+  HashTokenPrefixesIncremental(tokens.data(), static_cast<int>(tokens.size()), 16, 0, 1, incr);
+  ASSERT_EQ(incr.size(), 1u);
+  EXPECT_EQ(incr[0], HashTokenPrefix(tokens.data(), tokens.size()));
 }
 
 // ==================== StagingBufferPool 测试 ====================

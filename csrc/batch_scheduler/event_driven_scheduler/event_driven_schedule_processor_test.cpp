@@ -45,7 +45,8 @@ class NoopCacheManager : public CacheManagerInterface {
  public:
   void InitializeCachedBlocks() override {}
   std::shared_ptr<BlockAllocatorGroupInterface> GetBlockAllocatorGroup() const override { return nullptr; }
-  size_t GetUsableBlockNumber() override { return 0; }
+  // 返回足够大的可用 block 池，让测试聚焦调度流程本身。
+  size_t GetUsableBlockNumber() override { return 100000; }
   size_t GetHostFreeBlockNumber() override { return 0; }
   size_t GetUsedBlockNumber() override { return 0; }
   size_t GetRequestStepBlockNumber(int64_t, size_t, size_t) override { return 0; }
@@ -76,6 +77,9 @@ class NoopCacheManager : public CacheManagerInterface {
                              std::vector<size_t>&) override {
     return Status();
   }
+  Status DropUnbackedSwaBlocks(int64_t, size_t, std::vector<int>&, std::vector<size_t>&) override { return Status(); }
+  void BeginSwaPutHold(int64_t) override {}
+  void EndSwaPutHold(int64_t) override {}
   void DestroyFinishedRequest(int64_t req_id) override { destroyed.push_back(req_id); }
   bool IsPrefixCachingEnabled() override { return false; }
 
@@ -354,6 +358,11 @@ TEST_F(EventDrivenScheduleProcessorWhiteBox, HandleStopRequestDeferredByPutTrack
 
   auto req = MakeReq(1);
   RegisterReq(req);
+  // 模拟最后一段 prefill：SetPlanningTask 后 remaining.prefill 已为 0
+  ScheduleTaskWorkload last;
+  last.prefill_token_num = 0;
+  last.prefill_start_offset = req->GetPrefillingTokens().size();
+  req->SetRemainingWorkload(last);
   tracker->OnBatchDispatched({req});  // register a pending put -> defer destruction
 
   HandleStop(req, Status(RET_SUCCESS), 0);

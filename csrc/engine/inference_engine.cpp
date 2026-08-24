@@ -446,35 +446,36 @@ Status InferenceEngine::Initialize() {
         //   V1 standalone -> ""，V1 Prefill -> "prefill"，V1 Decode -> "decode"，
         //   pd_v2 Prefill -> "pd_v2_prefill"，pd_v2 Decode -> "pd_v2_decode"。
         const std::string fetcher_role = DetermineGlobalCacheFetcherRole(connector_config, status.OK());
-        auto global_cache_fetcher = std::make_shared<GlobalCacheFetcher>(device_count, fetcher_ipc, fetcher_role);
+        auto global_cache_fetcher =
+            std::make_shared<GlobalCacheFetcher>(device_count, fetcher_ipc, fetcher_role,
+                                                 global_cache_config.fetch_thread_num, global_cache_config.timeout_ms);
 
         if (global_cache_connector_) {
           ipc_func_wrapper_->SetGlobalCacheQueryDoneCallableFetcher(global_cache_fetcher);
         }
+        // SWA 命中边界要按窗口覆盖的 block 数对齐，公式与本地 prefix 命中判据保持一致。
+        {
+          CacheManagerConfig fetcher_cache_config;
+          if (env_->GetCacheManagerConfig(fetcher_cache_config).OK()) {
+            global_cache_fetcher->SetSlidingWindowSize(fetcher_cache_config.sliding_window_size);
+          }
+        }
         global_cache_fetcher->Start();
 
-        // 创建全局 cache 查询 Hook（hook_idx=0，第一个添加的 hook）。
-        // pd_v2 Decode 角色下让本 Hook 成为 block 分配的单一所有者: alloc 失败时挂起并等
-        // block 释放后重试, 而非回退到 backend (下游 PdV2DecodeHook 假定 req 已分好 block)。
-        const bool defer_admission_on_block_full = (fetcher_role == "pd_v2_decode");
-        // master 引入 ENABLE_GLOBAL_CACHE_HOOK 开关，用于非 pd_v2 场景按需启用全局 cache hook；
-        // pd_v2 Decode 必须创建该 hook（block 分配的唯一所有者），不受该开关影响。
+        const bool is_pd_v2_decode = (fetcher_role == "pd_v2_decode");
         const char *enable_global_cache_hook_env = std::getenv("ENABLE_GLOBAL_CACHE_HOOK");
         const bool enable_global_cache_hook =
             (enable_global_cache_hook_env != nullptr && std::string(enable_global_cache_hook_env) == "1");
-        if (enable_global_cache_hook || defer_admission_on_block_full) {
-          auto global_cache_hook =
-              std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config,
-                                                     /*hook_idx=*/0, defer_admission_on_block_full);
+        if (enable_global_cache_hook || is_pd_v2_decode) {
+          auto global_cache_hook = std::make_shared<GlobalCacheQueryHook>(global_cache_fetcher, batch_scheduler_config,
+                                                                          /*hook_idx=*/0, is_pd_v2_decode);
           hook_manager->AddHook(global_cache_hook);
 
-          // PD decode 下 GlobalCacheQueryHook 是 block 分配的唯一所有者，recompute 必须经
-          // hook 链重新分配而非直接回灌 prefilling_reqs（详见 HandleRecomputeRequest）。
-          event_driven_schedule_processor->SetPdV2DecodeMode(defer_admission_on_block_full);
+          event_driven_schedule_processor->SetPdV2DecodeMode(is_pd_v2_decode);
 
           KLLM_LOG_INFO << "GlobalCacheQueryHook created and added to event-driven scheduler, device_count="
                         << device_count << ", global_cache_enabled=" << (global_cache_connector_ != nullptr)
-                        << ", defer_admission_on_block_full=" << defer_admission_on_block_full;
+                        << ", defer_admission_on_block_full=" << is_pd_v2_decode;
         } else {
           KLLM_LOG_INFO << "GlobalCacheQueryHook disabled (ENABLE_GLOBAL_CACHE_HOOK="
                         << (enable_global_cache_hook_env ? enable_global_cache_hook_env : "not set") << ")";

@@ -5,6 +5,8 @@
 #include "ipc/core/ipc_func_proxy.h"
 
 #include <cstdlib>
+
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 
@@ -16,12 +18,11 @@
 
 namespace ksana_llm {
 
-// The thread num of ipc long task.
-const size_t LONG_TASK_THREAD_NUM = 4;
-
-IpcFuncProxy::IpcFuncProxy(size_t executor_num, bool is_engine, int executor_id, bool initialize_device) {
+IpcFuncProxy::IpcFuncProxy(size_t executor_num, bool is_engine, int executor_id, bool initialize_device,
+                           size_t long_task_thread_num) {
   executor_num_ = executor_num;
   initialize_device_ = initialize_device;
+  long_task_thread_num_ = std::max<size_t>(1, long_task_thread_num);
   ipc_channel_manager_ = std::make_shared<IpcProcessChannelManager>(executor_num_, executor_id, is_engine);
 
   if (is_engine) {
@@ -63,11 +64,14 @@ void IpcFuncProxy::Initialize() {
         new std::thread(&IpcFuncProxy::ExecuteIpcPackets, this, -1, ipc_channel_manager_->GetBroadcastChannel()));
   }
 
-  ipc_long_task_exec_threads_.resize(LONG_TASK_THREAD_NUM);
-  for (size_t i = 0; i < LONG_TASK_THREAD_NUM; ++i) {
+  ipc_long_task_exec_threads_.resize(long_task_thread_num_);
+  for (size_t i = 0; i < long_task_thread_num_; ++i) {
     ipc_long_task_exec_threads_[i] =
         std::unique_ptr<std::thread>(new std::thread(&IpcFuncProxy::ExecuteIpcLongTasks, this));
   }
+  KLLM_LOG_INFO << "long_task_thread_num=" << long_task_thread_num_
+                << ", role=" << (ipc_role_ == IpcRole::IPC_ROLE_ENGINE ? "engine" : "executor")
+                << ", executor_id=" << ipc_executor_id_;
 }
 
 void IpcFuncProxy::Destroy() {
@@ -90,6 +94,10 @@ void IpcFuncProxy::Destroy() {
       }
     }
   } else {
+    // 必须先 Stop 再 join：收包线程堵在 WaitReadableAndLock，未 Stop 时 join 会永久等待。
+    ipc_channel_manager_->GetEngine2ExecutorChannel(ipc_executor_id_)->Stop();
+    ipc_channel_manager_->GetExecutor2EngineChannel(ipc_executor_id_)->Stop();
+
     if (ipc_broadcast_exec_thread_->joinable()) {
       ipc_broadcast_exec_thread_->join();
     }
@@ -97,13 +105,10 @@ void IpcFuncProxy::Destroy() {
     if (ipc_exec_threads_[ipc_executor_id_]->joinable()) {
       ipc_exec_threads_[ipc_executor_id_]->join();
     }
-
-    ipc_channel_manager_->GetEngine2ExecutorChannel(ipc_executor_id_)->Stop();
-    ipc_channel_manager_->GetExecutor2EngineChannel(ipc_executor_id_)->Stop();
   }
 
   ipc_long_task_queue_.Stop();
-  for (size_t i = 0; i < LONG_TASK_THREAD_NUM; ++i) {
+  for (size_t i = 0; i < long_task_thread_num_; ++i) {
     if (ipc_long_task_exec_threads_[i] && ipc_long_task_exec_threads_[i]->joinable()) {
       ipc_long_task_exec_threads_[i]->join();
     }
@@ -136,17 +141,25 @@ Status IpcFuncProxy::Invoke(const IpcRequest* request, IpcResponse* response, Ip
     }
   }
 
-  SendIpcRequest(request, context);
+  if (!SendIpcRequest(request, context)) {
+    if (ipc_notifier) {
+      NotifyWaitingIpcFunc(ipc_notifier);
+      std::lock_guard<std::mutex> lock(mutex_);
+      ipc_notifiers_.erase(context->exec_seq);
+    }
+    return Status(RET_RUNTIME_FAILED, "SendIpcRequest failed, channel stopped");
+  }
 
   // If in sync mode, wait until the response received.
   if (!context->is_async) {
-    WaitingUntilIpcFuncFinished(ipc_notifier);
+    Status wait_status = WaitingUntilIpcFuncFinished(ipc_notifier);
 
     // Clear notifier when finished.
     {
       std::lock_guard<std::mutex> lock(mutex_);
       ipc_notifiers_.erase(context->exec_seq);
     }
+    return wait_status;
   }
 
   return Status();
@@ -155,7 +168,8 @@ Status IpcFuncProxy::Invoke(const IpcRequest* request, IpcResponse* response, Ip
 Status IpcFuncProxy::WaitingUntilIpcFuncFinished(std::shared_ptr<IpcNotifier>& ipc_notifier) {
   PROFILE_EVENT_SCOPE(ipc_sync_wait, "Ipc.WaitingUntilIpcFuncFinished");
   std::unique_lock<std::mutex> lock(ipc_notifier->mutex);
-  ipc_notifier->cv.wait(lock, [this, &ipc_notifier] { return ipc_notifier->finished; });
+  // 仅等 finished；发送失败须 NotifyWaitingIpcFunc，对端不得在回包前 Destroy。
+  ipc_notifier->cv.wait(lock, [&ipc_notifier] { return ipc_notifier->finished; });
 
   return Status();
 }
@@ -168,7 +182,7 @@ Status IpcFuncProxy::NotifyWaitingIpcFunc(std::shared_ptr<IpcNotifier>& ipc_noti
   return Status();
 }
 
-void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context) {
+bool IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context) {
   PROFILE_EVENT_SCOPE(ipc_send_request_total, "Ipc.SendIpcRequest.Total");
   std::shared_ptr<IpcProcessChannel> ipc_channel = nullptr;
   if (ipc_role_ == IpcRole::IPC_ROLE_ENGINE) {
@@ -185,7 +199,7 @@ void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context
     PROFILE_EVENT_SCOPE(ipc_send_request_wait, "Ipc.SendIpcRequest.WaitWritable");
     if (!ipc_channel->WaitWritableAndLock()) {
       KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
-      return;
+      return false;
     }
   }
 
@@ -205,9 +219,10 @@ void IpcFuncProxy::SendIpcRequest(const IpcRequest* request, IpcContext* context
     PROFILE_EVENT_SCOPE(ipc_send_request_notify, "Ipc.SendIpcRequest.WriteAndUnlock");
     if (!ipc_channel->WriteAndUnlock()) {
       KLLM_LOG_WARNING << "SendIpcRequest error, channel stopped, break..";
-      return;
+      return false;
     }
   }
+  return true;
 }
 
 void IpcFuncProxy::SendIpcResponse(const IpcResponse* response, IpcContext* context) {
@@ -260,28 +275,41 @@ void IpcFuncProxy::ExecuteIpcPacketsImpl(int executor_id, int current_rank, IpcC
     int func_info_id = context_ptr->share_callable ? -1 : executor_id;
     IpcFuncInfo& ipc_func_info = GetIpcFuncInfo(context_ptr->func_id, func_info_id);
 
-    // Heavy tasks are executed by multiple threads concurrently, so we must lock
-    // to protect shared request/response objects even when share_callable is false.
-    // Normal tasks are executed serially in a single thread, so no lock is needed.
-    bool need_lock = context_ptr->share_callable || context_ptr->is_heavy;
+    // share_callable：多线程/多路共用同一 request，必须加锁。
+    // heavy 且非 share：每次执行私有 request/response，不加锁，允许多 long-task 线程并行 Call。
+    // 其它（非 heavy、单 reader）：沿用共享 request，无需锁。
+    const bool use_private_packet = context_ptr->is_heavy && !context_ptr->share_callable &&
+                                    ipc_func_info.create_request && ipc_func_info.create_response;
+    const bool need_lock = context_ptr->share_callable || (context_ptr->is_heavy && !use_private_packet);
+
+    std::shared_ptr<IpcRequest> private_request;
+    std::shared_ptr<IpcResponse> private_response;
+    IpcRequest* request_ptr = ipc_func_info.request.get();
+    IpcResponse* response_ptr = ipc_func_info.response.get();
 
     if (need_lock) {
       ipc_func_info.mutex->lock();
+    } else if (use_private_packet) {
+      private_request = ipc_func_info.create_request();
+      private_response = ipc_func_info.create_response();
+      request_ptr = private_request.get();
+      response_ptr = private_response.get();
     }
 
     {
       PROFILE_EVENT_SCOPE(ipc_request_deserialize, "Ipc.ExecuteIpcPackets.RequestDeserialize");
-      ipc_func_info.request->Deserialize(data_ptr);
+      request_ptr->Deserialize(data_ptr);
     }
-    ipc_func_info.request->role = ipc_role_;
-    ipc_func_info.request->rank = current_rank;
+    request_ptr->role = ipc_role_;
+    request_ptr->rank = current_rank;
+
     {
       PROFILE_EVENT_SCOPE(ipc_request_call, "Ipc.ExecuteIpcPackets.RequestCall");
-      ipc_func_info.callable->Call(ipc_func_info.request.get(), ipc_func_info.response.get(), context_ptr);
+      ipc_func_info.callable->Call(request_ptr, response_ptr, context_ptr);
     }
 
     if (!context_ptr->is_oneway) {
-      SendIpcResponse(ipc_func_info.response.get(), context_ptr);
+      SendIpcResponse(response_ptr, context_ptr);
     }
 
     if (need_lock) {
