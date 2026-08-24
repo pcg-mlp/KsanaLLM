@@ -1,0 +1,73 @@
+skill_version: "0.4.1"
+status: draft
+complexity: XL
+work_type: perf
+subdomain: models
+cross_subdomains: []
+
+source:
+  type: conversation
+  id: ""
+  url: ""
+  workspace_id: ""
+  fetch_status: n/a
+  upload_status: n/a
+
+tapd_sync:
+  last_synced: null
+  action: null
+  entry_type: null
+  entry_id: ""
+  workspace_id: ""
+  fields: []
+  artifact: null
+  skipped: null
+
+execution_env:
+  coding:
+    agent: "opencode"
+    last_active: 2026-08-21T09:39:02Z
+  container:
+    agent: ""
+    last_run: null
+
+models:
+  review: opus
+
+handoff:
+  pending: false
+  manifest: 2-handoff-manifest.json
+  produced_at: null
+  produced_by_commit: null
+  consumed_at: null
+  consumed_by_commit: null
+
+verify_attempts: 0
+max_retries: 3
+
+artifacts:
+  clarification:      {produced_at: 2026-08-21T09:39:02Z, stale: false, revision: 1, produced_by_env: coding}
+  context-snapshot:    {produced_at: 2026-08-21T09:39:02Z, stale: false, revision: 1, produced_by_env: coding, updated_by_stages: [clarify]}
+  change-plan:         {produced_at: null, stale: false, revision: 0, produced_by_env: n/a}
+  coding-snapshot:      {produced_at: null, stale: false, revision: 0, produced_by_env: n/a}
+  verify-report:
+    compile:     {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    unit:        {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    integration: {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: not_run}
+  reviews:
+    - {produced_at: 2026-08-21T09:59:11Z, stale: false, revision: 1, filename: 4-reviews/20260821-1759-go_only.md, mode: go_only, model: glm-5.3-external}
+
+knowledge_base_feedback:
+  status: not_started
+  proposal_count: 0
+  applied_at: null
+
+status_history:
+  - {status: draft, at: 2026-08-21T09:39:02Z, by: /ai-clarify, env: coding, reason: "回溯补文档：代码已实现并提交（7b8bf9976 / cb18d71f2），基于实现资料与实际提交澄清"}
+  - {status: draft, at: 2026-08-21T09:59:11Z, by: /ai-review --mode=go_only, env: coding, reason: "go_only 评审完成（P0=0/P1=1/P2=4，SR minor=2）；模型环境偏差：models.review 配置 opus，实际以 glm-5.3-external 执行（环境无模型切换能力，用户确认）；status 不迁移"}
+  - {status: draft, at: 2026-08-24T02:53:33Z, by: /ai-review --mode=go_only (F6 迭代), env: coding, reason: "FIX-1 resolved：generate-batch 进程级失败告警去 verbose 门控（humming_jit_compiler.cpp:710，LLM_kernels commit 287032c83），编码环境 ninja -j64 编译通过 472/472；评审模型沿用 glm-5.3-external（上轮用户确认）；FIX-2~5 (P2) 仍 open；status 不迁移"}
+
+skipped_phases: []
+paused_from: null
+blocked_reason: null
+blocked_at: null

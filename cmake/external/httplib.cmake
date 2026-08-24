@@ -9,6 +9,7 @@ set(HTTPLIB_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/httplib)
 FetchContent_Populate(download_httplib
     GIT_REPOSITORY https://github.com/yhirose/cpp-httplib.git
     GIT_TAG v0.17.1
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${HTTPLIB_INCLUDE_DIR}
 )
 

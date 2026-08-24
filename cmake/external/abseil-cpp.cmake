@@ -12,6 +12,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -w")
 FetchContent_Declare(absl
     GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
     GIT_TAG        20240722.0
+    GIT_SHALLOW    TRUE
     SOURCE_DIR     ${ABSEIL_INSTALL_DIR}
 )
 

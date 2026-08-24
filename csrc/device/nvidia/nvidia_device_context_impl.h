@@ -50,6 +50,11 @@ class NvidiaDeviceContextExtension {
   uint32_t GetComputeCapacity() { return sm_; }
   uint32_t GetCudaVersion() { return cuda_ver_; }
 
+  // Cached from cudaGetDeviceProperties at Initialize() — device identity for
+  // operator-search cache keys (see HummingMoeSearchCache).
+  const std::string& GetDeviceName() const { return device_name_; }
+  int GetSmCount() const { return sm_count_; }
+
   llm_kernels::nvidia::GPUGemmAlgoHelper& GetGPUGemmAlgoHelper() { return gpu_gemm_algo_helper_; }
 
   // Initialize and destroy extension.
@@ -101,6 +106,9 @@ class NvidiaDeviceContextExtension {
 
   uint32_t sm_{0};
   uint32_t cuda_ver_{0};
+  // Device identity cached at Initialize().
+  std::string device_name_;
+  int sm_count_{0};
   // The helper for providing the best performance gemm algo
   llm_kernels::nvidia::GPUGemmAlgoHelper gpu_gemm_algo_helper_;
 

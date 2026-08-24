@@ -2,7 +2,7 @@
 
 ==============================================================================*/
 #include "layers/humming_fused_wfp4a16_moe_layer.h"
-#include "layers/humming_jit_cache.h"
+#include "layers/nvidia/humming_jit_cache.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/torch.h>

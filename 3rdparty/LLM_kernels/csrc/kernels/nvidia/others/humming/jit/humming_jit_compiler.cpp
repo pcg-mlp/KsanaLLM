@@ -9,6 +9,7 @@
  */
 
 #include "csrc/kernels/nvidia/others/humming/jit/humming_jit_compiler.h"
+#include "csrc/kernels/nvidia/others/humming/jit/process_utils.h"
 
 #include <fcntl.h>
 #include <sys/file.h>
@@ -16,7 +17,6 @@
 #include <unistd.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cerrno>
 #include <cstdlib>
@@ -220,33 +220,14 @@ class CubinElfReader {
   std::vector<SymbolInfo> symbols_;
 };
 
-/// Execute a shell command and return its exit code. Captures stdout+stderr.
-int ExecuteCommand(const std::string& cmd, std::string* output = nullptr) {
-  std::string full_cmd = cmd + " 2>&1";
-  FILE* pipe = popen(full_cmd.c_str(), "r");
-  if (!pipe) return -1;
-
-  std::string result;
-  std::array<char, 256> buffer;
-  while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
-    result += buffer.data();
+/// Join an argv vector into a single space-separated string (for error messages).
+std::string JoinArgv(const std::vector<std::string>& argv) {
+  std::string s;
+  for (const auto& a : argv) {
+    if (!s.empty()) s += " ";
+    s += a;
   }
-
-  int ret = pclose(pipe);
-  if (output) *output = result;
-  return WEXITSTATUS(ret);
-}
-
-/// Create directory recursively (like mkdir -p).
-// NOTE: std::filesystem::create_directories would be cleaner, but we keep the
-// shell-based approach for now.  See the note at the rm -rf cleanup below for
-// the libtorch.so std::filesystem symbol conflict that affects this codebase.
-// Once the symbol conflict is resolved, migrate both MkdirP and the rm -rf
-// cleanup to std::filesystem.
-void MkdirP(const std::string& path) {
-  std::string cmd = "mkdir -p \"" + path + "\"";
-  int ret = ExecuteCommand(cmd);
-  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "Failed to create directory: %s", path.c_str());
+  return s;
 }
 
 /// Check if a file exists.
@@ -317,6 +298,19 @@ std::string ResolveLocalIncludeDir() {
 }  // anonymous namespace
 
 // ════════════════════════════════════════════════════════════════════════════════
+// Shared cache-root resolution
+// ════════════════════════════════════════════════════════════════════════════════
+
+std::string GetKernelCacheRootDir() {
+  const char* cache_env = std::getenv("KSANA_HUMMING_KERNEL_PATH");
+  if (cache_env && cache_env[0] != '\0') {
+    return std::string(cache_env);
+  }
+  const char* home = std::getenv("HOME");
+  return std::string(home ? home : "/tmp") + "/.cache/KsanaLLM/humming_kernel_files";
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // Constructor / Destructor
 // ════════════════════════════════════════════════════════════════════════════════
 
@@ -346,14 +340,8 @@ HummingJitCompiler::HummingJitCompiler() : nvcc_path_(FindNvcc()), force_regener
                               "<base_dir>/include/humming/. Set $HUMMING_INCLUDE_DIR to override.",
                               include_dir_.c_str());
 
-  // ── 3. Cache dir: KSANA_HUMMING_KERNEL_PATH env, or ~/.cache/KsanaLLM/humming_kernel_files ──
-  const char* cache_env = std::getenv("KSANA_HUMMING_KERNEL_PATH");
-  if (cache_env && cache_env[0] != '\0') {
-    cache_dir_ = cache_env;
-  } else {
-    const char* home = std::getenv("HOME");
-    cache_dir_ = std::string(home ? home : "/tmp") + "/.cache/KsanaLLM/humming_kernel_files";
-  }
+  // ── 3. Cache dir: shared resolver (KSANA_HUMMING_KERNEL_PATH env, or default) ──
+  cache_dir_ = GetKernelCacheRootDir();
 
   // ── 4. Check HUMMING_REGENERATE ──
   const char* regen_env = std::getenv("HUMMING_REGENERATE");
@@ -439,7 +427,20 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
 
   if (uncached.empty()) return;
 
-  // Phase 3: Generate + compile in parallel across threads.
+  // Phase 3a: Render ALL uncached .cu sources in a single python process.
+  // Import of torch dominates per-process cost (~10 s, ~600 MB); rendering is
+  // <1 ms per config after template warm-up.  Re-check the cache first — a
+  // sibling process may have finished some configs since the Phase-1 scan.
+  {
+    std::vector<const KernelConfig*> to_generate;
+    for (const auto* config : uncached) {
+      if (!force_regenerate_ && CacheExists(*config)) continue;
+      to_generate.push_back(config);
+    }
+    GenerateSources(to_generate);
+  }
+
+  // Phase 3b: compile in parallel across threads.
   // Each config gets its own cache dir and flock — no cross-config contention.
   // Threads do NOT call LoadAndRegister: CUDA driver API is per-thread and
   // spawned threads do not inherit the main thread's CUDA context.  Loading
@@ -484,7 +485,19 @@ void HummingJitCompiler::CompileKernels(const std::vector<KernelConfig>& configs
         std::string source_path = dir + "/kernel.cu";
         std::string cubin_path = dir + "/kernel.cubin";
         try {
-          GenerateSource(*config, source_path);
+          // .cu was rendered by Phase 3a batch; a missing .cu means rendering
+          // failed for this config (same skip semantics as the old per-config
+          // generate failure).
+          if (!FileExists(source_path)) {
+            if (verbose_) {
+              std::lock_guard<std::mutex> _ll(log_mutex_);
+              std::cerr << "[HUMMING JIT] WARNING: no rendered source for " << config->cache_key << ", skipping nvcc"
+                        << std::endl;
+            }
+            ReleaseLock(lock_fd);
+            --active_count;
+            return;
+          }
           CompileCubin(source_path, cubin_path, include_dir_);
         } catch (const std::exception& e) {
           ReleaseLock(lock_fd);
@@ -617,38 +630,96 @@ const KernelMeta* HummingJitCompiler::SelectKernel(int64_t size_m, int64_t size_
 // Private: Generate / Compile / Load
 // ════════════════════════════════════════════════════════════════════════════════
 
-void HummingJitCompiler::GenerateSource(const KernelConfig& config, const std::string& output_path) {
-  std::string meta_path = output_path + ".meta.json";
+void HummingJitCompiler::GenerateSources(const std::vector<const KernelConfig*>& configs) {
+  if (configs.empty()) return;
 
-  std::ostringstream cmd;
-  cmd << "python3 " << humming_tool_path_ << " generate"
-      << " --size_n " << config.size_n << " --size_k " << config.size_k << " --num_experts " << config.num_experts
-      << " --compute_dtype " << static_cast<int>(config.compute_dtype) << " --gemm_type "
-      << static_cast<int>(config.gemm_type) << " --block_m " << config.block_m << " --block_n " << config.block_n
-      << " --block_k " << config.block_k << " --warp_shape_m " << config.warp_shape[0] << " --warp_shape_n "
-      << config.warp_shape[1] << " --warp_shape_k " << config.warp_shape[2] << " --use_stream_k "
-      << (config.use_stream_k ? 1 : 0) << " --num_stages " << config.num_stages << " --num_ctas_per_sm "
-      << config.num_ctas_per_sm << " --use_tma_a " << (config.use_tma_a ? 1 : 0) << " --use_tma_b "
-      << (config.use_tma_b ? 1 : 0) << " --use_tma_c " << (config.use_tma_c ? 1 : 0) << " --use_tma_bs "
-      << (config.use_tma_bs ? 1 : 0) << " --use_mbarrier " << (config.use_mbarrier ? 1 : 0) << " --use_warp_spec "
-      << (config.use_warp_spec ? 1 : 0) << " --use_f16_accum " << (config.use_f16_accum ? 1 : 0) << " --output "
-      << output_path << " --meta_output " << meta_path;
+  static std::atomic<uint64_t> manifest_counter{0};
+  const std::string manifest_path = cache_dir_ + "/.batch_manifest_" + std::to_string(getpid()) + "_" +
+                                    std::to_string(manifest_counter.fetch_add(1)) + ".json";
+
+  nlohmann::json kernels = nlohmann::json::array();
+  for (const auto* config : configs) {
+    // Create the config's cache dir up front: the batch renderer writes
+    // dir/kernel.cu before Phase 3b threads re-create it (MkdirP is
+    // idempotent and EEXIST-tolerant, so this is safe without any lock).
+    const std::string dir = GetCacheDir(*config);
+    MkdirP(dir);
+    nlohmann::json entry;
+    entry["size_n"] = config->size_n;
+    entry["size_k"] = config->size_k;
+    entry["num_experts"] = config->num_experts;
+    entry["compute_dtype"] = static_cast<int>(config->compute_dtype);
+    entry["gemm_type"] = static_cast<int>(config->gemm_type);
+    entry["block_shape"] = {config->block_m, config->block_n, config->block_k};
+    entry["warp_shape"] = {config->warp_shape[0], config->warp_shape[1], config->warp_shape[2]};
+    entry["use_stream_k"] = config->use_stream_k;
+    entry["num_stages"] = config->num_stages;
+    entry["num_ctas_per_sm"] = config->num_ctas_per_sm;
+    entry["use_tma_a"] = config->use_tma_a;
+    entry["use_tma_b"] = config->use_tma_b;
+    entry["use_tma_c"] = config->use_tma_c;
+    entry["use_tma_bs"] = config->use_tma_bs;
+    entry["use_mbarrier"] = config->use_mbarrier;
+    entry["use_warp_spec"] = config->use_warp_spec;
+    entry["use_f16_accum"] = config->use_f16_accum;
+    entry["output"] = dir + "/kernel.cu";
+    kernels.push_back(entry);
+  }
+
+  {
+    std::ofstream ofs(manifest_path);
+    ofs << nlohmann::json({{"kernels", kernels}}).dump();
+    if (!ofs.good()) {
+      KLLM_KERNEL_CHECK_WITH_INFO(false, "Failed to write batch manifest: %s", manifest_path.c_str());
+    }
+  }
 
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
-    std::cout << "[HUMMING JIT]     python: humming_tool.py generate"
-              << " N=" << config.size_n << " K=" << config.size_k << " E=" << config.num_experts
-              << " block_m=" << config.block_m << " block_n=" << config.block_n << " block_k=" << config.block_k
-              << " sk=" << config.use_stream_k << " stages=" << config.num_stages << " ctas=" << config.num_ctas_per_sm
+    std::cout << "[HUMMING JIT]   batch generate: " << configs.size() << " config(s) in ONE python process"
               << std::endl;
   }
 
-  std::string output;
-  int ret = ExecuteCommand(cmd.str(), &output);
-  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "humming_tool.py generate failed (exit=%d) for config %s.\nOutput: %s", ret,
-                              config.cache_key.c_str(), output.c_str());
-  KLLM_KERNEL_CHECK_WITH_INFO(FileExists(output_path), "humming_tool.py generate did not produce output file: %s",
-                              output_path.c_str());
+  // NOTE: no flock here.  Concurrent .cu writes by sibling ranks are made
+  // safe by tmp-file + atomic rename on the python side; a reader (nvcc)
+  // holding the old inode is unaffected by a rename.
+  const CommandResult result =
+      ExecuteCommand({"python3", humming_tool_path_, "generate-batch", "--manifest", manifest_path}, 1800);
+  unlink(manifest_path.c_str());
+
+  size_t generated = 0, failed = 0;
+  if (result.Ok() && !result.stdout_data.empty()) {
+    try {
+      const auto summary = nlohmann::json::parse(result.stdout_data);
+      if (summary.contains("generated")) generated = summary["generated"].size();
+      if (summary.contains("failed")) {
+        for (const auto& f : summary["failed"]) {
+          ++failed;
+          if (verbose_) {
+            std::lock_guard<std::mutex> _ll(log_mutex_);
+            std::cerr << "[HUMMING JIT] WARNING: batch generate failed for " << f.value("output", std::string("?"))
+                      << ": " << f.value("error", std::string("?")) << std::endl;
+          }
+        }
+      }
+    } catch (const nlohmann::json::exception& e) {
+      // Unconditional: parse failure silently skips ALL configs; must be visible without HUMMING_JIT_LOG=1.
+      std::lock_guard<std::mutex> _ll(log_mutex_);
+      std::cerr << "[HUMMING JIT] WARNING: generate-batch summary parse error: " << e.what() << std::endl;
+    }
+  } else {
+    // Unconditional: process-level failure (spawn fail / timeout / non-zero exit /
+    // empty stdout) silently skips ALL configs; must be visible without HUMMING_JIT_LOG=1.
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cerr << "[HUMMING JIT] WARNING: generate-batch failed (spawn=" << result.spawned
+              << " timed_out=" << result.timed_out << " exit=" << result.exit_code << ")\n"
+              << result.stderr_data << std::endl;
+  }
+  if (verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cout << "[HUMMING JIT]   batch generate done: " << generated << " generated, " << failed << " failed"
+              << std::endl;
+  }
 }
 
 void HummingJitCompiler::CompileCubin(const std::string& source_path, const std::string& cubin_path,
@@ -670,23 +741,29 @@ void HummingJitCompiler::CompileCubin(const std::string& source_path, const std:
   // -gencode=arch=compute_90a,code=sm_90a
   // --compiler-options=-fPIC,-O3,-Wno-deprecated-declarations,-Wno-abi
   // --diag-suppress=39,161,174,177,940
-  std::ostringstream cmd;
-  cmd << nvcc_path_ << " " << source_path << " -o " << tmp_path << " -cubin"
-      << " -std=c++17"
-      << " -O3"
-      << " --use_fast_math"
-      << " --ptxas-options=--register-usage-level=10"
-      << " --expt-relaxed-constexpr"
-      << " --expt-extended-lambda"
-      << " -gencode=arch=compute_90a,code=sm_90a"
-      << " --compiler-options=-fPIC,-O3,-Wno-deprecated-declarations,-Wno-abi"
-      << " --diag-suppress=39,161,174,177,940"
-      << " -I" << include_dir;
+  std::vector<std::string> cmd = {nvcc_path_,
+                                  source_path,
+                                  "-o",
+                                  tmp_path,
+                                  "-cubin",
+                                  "-std=c++17",
+                                  "-O3",
+                                  "--use_fast_math",
+                                  "--ptxas-options=--register-usage-level=10",
+                                  "--expt-relaxed-constexpr",
+                                  "--expt-extended-lambda",
+                                  "-gencode=arch=compute_90a,code=sm_90a",
+                                  "--compiler-options=-fPIC,-O3,-Wno-deprecated-declarations,-Wno-abi",
+                                  "--diag-suppress=39,161,174,177,940",
+                                  "-I" + include_dir};
 
-  std::string output;
-  int ret = ExecuteCommand(cmd.str(), &output);
-  KLLM_KERNEL_CHECK_WITH_INFO(ret == 0, "nvcc compilation failed (exit=%d) for %s.\nCommand: %s\nOutput: %s", ret,
-                              source_path.c_str(), cmd.str().c_str(), output.c_str());
+  CommandResult result = ExecuteCommand(cmd, 1800);
+  KLLM_KERNEL_CHECK_WITH_INFO(result.Ok(),
+                              "nvcc compilation failed (spawn=%d timed_out=%d exit=%d) for %s.\nCommand: %s\n"
+                              "stdout: %s\nstderr: %s",
+                              static_cast<int>(result.spawned), static_cast<int>(result.timed_out), result.exit_code,
+                              source_path.c_str(), JoinArgv(cmd).c_str(), result.stdout_data.c_str(),
+                              result.stderr_data.c_str());
   KLLM_KERNEL_CHECK_WITH_INFO(FileExists(tmp_path), "nvcc did not produce cubin file: %s", tmp_path.c_str());
 
   // Atomically rename temp → final.  Only after this point can other threads
@@ -727,8 +804,7 @@ void HummingJitCompiler::LoadAndRegister(const KernelConfig& config, const std::
     // removeDirectoryRecursive in compiler.cuh for the same issue.  Once the
     // symbol conflict is resolved, switch to std::filesystem::remove_all.
     std::string dir = cubin_path.substr(0, cubin_path.rfind('/'));
-    std::string rm_cmd = "rm -rf \"" + dir + "\" 2>/dev/null";
-    ExecuteCommand(rm_cmd);
+    ExecuteCommand({"rm", "-rf", dir}, 60);  // best-effort cleanup; result ignored (same as before)
   }
 
   KLLM_KERNEL_CHECK_WITH_INFO(cu_ret == CUDA_SUCCESS, "cuModuleLoad failed (CUresult=%d) for: %s",
@@ -801,10 +877,17 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
                                                                                      ComputeDtype compute_dtype,
                                                                                      GemmType gemm_type) {
   // Call Python script to query humming heuristic + generate variants
-  std::ostringstream cmd;
-  cmd << "python3 " << humming_tool_path_ << " query-configs"
-      << " --size_n " << size_n << " --size_k " << size_k << " --num_experts " << num_experts << " --compute_dtype "
-      << static_cast<int>(compute_dtype);
+  std::vector<std::string> cmd = {"python3",
+                                  humming_tool_path_,
+                                  "query-configs",
+                                  "--size_n",
+                                  std::to_string(size_n),
+                                  "--size_k",
+                                  std::to_string(size_k),
+                                  "--num_experts",
+                                  std::to_string(num_experts),
+                                  "--compute_dtype",
+                                  std::to_string(static_cast<int>(compute_dtype))};
 
   if (verbose_) {
     std::lock_guard<std::mutex> _ll(log_mutex_);
@@ -812,8 +895,17 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
               << " dt=" << static_cast<int>(compute_dtype) << std::endl;
   }
 
-  std::string output;
-  int ret = ExecuteCommand(cmd.str(), &output);
+  CommandResult result = ExecuteCommand(cmd, 300);
+  // JSON comes from stdout ONLY — stderr (warnings from torch/humming) must
+  // never corrupt the parse.  The old popen("... 2>&1") merged the streams,
+  // so any stderr output silently degraded us to the 2-config fallback.
+  std::string output = result.stdout_data;
+  int ret = result.Ok() ? 0 : 1;
+  if (ret != 0 && verbose_) {
+    std::lock_guard<std::mutex> _ll(log_mutex_);
+    std::cerr << "[HUMMING JIT]   query-configs failed (spawn=" << result.spawned << " timed_out=" << result.timed_out
+              << " exit=" << result.exit_code << ")\nstderr: " << result.stderr_data << std::endl;
+  }
 
   // Helper lambda to parse a single config from JSON
   auto parse_config = [&](const nlohmann::json& item) {
@@ -909,6 +1001,7 @@ std::vector<HummingJitCompiler::KernelConfig> HummingJitCompiler::QueryKernelCon
     if (verbose_) {
       std::lock_guard<std::mutex> _ll(log_mutex_);
       std::cout << "[HUMMING JIT]   JSON parse error: " << e.what() << ", using fallback" << std::endl;
+      std::cerr << "[HUMMING JIT]   query-configs stderr: " << result.stderr_data << std::endl;
     }
     for (int bm : {64, 128}) {
       KernelConfig cfg;

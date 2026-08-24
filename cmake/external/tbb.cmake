@@ -31,6 +31,7 @@ endif()
 ExternalProject_Add(tbb_external
     GIT_REPOSITORY https://github.com/oneapi-src/oneTBB.git
     GIT_TAG v2022.2.0
+    GIT_SHALLOW TRUE
     CMAKE_ARGS ${TBB_CMAKE_ARGS}
     BUILD_BYPRODUCTS ${CMAKE_BINARY_DIR}/tbb_install/lib64/libtbb.so.12
     INSTALL_COMMAND ${CMAKE_COMMAND} --build . --target install

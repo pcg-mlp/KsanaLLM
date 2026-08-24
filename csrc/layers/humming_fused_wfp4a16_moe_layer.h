@@ -16,7 +16,7 @@
 #  include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "csrc/utils/search_status.h"
-#  include "layers/humming_jit_cache.h"
+#  include "layers/nvidia/humming_jit_cache.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"

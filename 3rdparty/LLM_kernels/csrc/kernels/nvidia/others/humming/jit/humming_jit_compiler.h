@@ -29,6 +29,13 @@ namespace llm_kernels {
 namespace nvidia {
 namespace humming {
 
+/// Resolve the shared kernel-cache root directory: $KSANA_HUMMING_KERNEL_PATH,
+/// or ~/.cache/KsanaLLM/humming_kernel_files. Pure resolution, no side effects
+/// (directory creation is the caller's responsibility). Shared by the JIT
+/// compiler and sibling caches (e.g. operator-search cache) as the single
+/// source of truth for this path.
+std::string GetKernelCacheRootDir();
+
 /// JIT compiler that generates, compiles, and loads humming kernels.
 class HummingJitCompiler {
  public:
@@ -111,8 +118,12 @@ class HummingJitCompiler {
   std::vector<KernelConfig> QueryKernelConfigs(int64_t size_n, int64_t size_k, int64_t num_experts,
                                                ComputeDtype compute_dtype, GemmType gemm_type);
 
-  /// Step 1: Call humming_tool.py generate to produce .cu source.
-  void GenerateSource(const KernelConfig& config, const std::string& output_path);
+  /// Step 1: Render .cu sources for all uncached configs in ONE python
+  /// process (humming_tool.py generate-batch; torch import dominates
+  /// per-process cost).  Configs whose .cu was not produced are skipped by
+  /// the caller with a verbose-log warning (mirrors the old per-config
+  /// generate-failure semantics).
+  void GenerateSources(const std::vector<const KernelConfig*>& configs);
 
   /// Step 2: Invoke nvcc to compile .cu -> .cubin.
   void CompileCubin(const std::string& source_path, const std::string& cubin_path, const std::string& include_dir);

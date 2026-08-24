@@ -9,6 +9,7 @@ set(MSGPACK_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/msgpack)
 FetchContent_Populate(download_msgpack
     GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
     GIT_TAG cpp-6.1.1
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${MSGPACK_INCLUDE_DIR}
 )
 

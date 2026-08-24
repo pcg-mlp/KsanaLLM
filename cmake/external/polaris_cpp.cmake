@@ -12,6 +12,7 @@ if(WITH_INTERNAL_LIBRARIES)
         # Use git@git.woa.com:polaris/polaris-cpp.git when clone repositories with ssh key
         GIT_REPOSITORY "https://git.woa.com/polaris/polaris-cpp.git"
         GIT_TAG "release_0.17.6"
+        GIT_SHALLOW TRUE
     )
 
     if(NOT polaris_cpp_POPULATED)

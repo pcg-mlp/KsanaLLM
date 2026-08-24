@@ -16,7 +16,7 @@
 #  include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #  include "csrc/utils/nvidia/workspace.h"
 #  include "csrc/utils/search_status.h"
-#  include "layers/humming_jit_cache.h"
+#  include "layers/nvidia/humming_jit_cache.h"
 #endif
 #include "distributed/expert_parallel/expert_parallel_manager.h"
 #include "layers/base_moe_layer.h"
@@ -67,12 +67,6 @@ class HummingFusedWfp4Afp8MoeLayer : public BaseMoeLayer {
   // perf_stats_ is null or defer_perf_flush_ is false. Called by the test driver
   // after its own cudaEventSynchronize(end).
   void FlushPerfStats(size_t iterations);
-
-  // Expose the JIT compiler's kernel table for test/inspection (nullptr if no compiler).
-  // The table contains all JIT-compiled kernel variants for all shapes/dtypes compiled
-  // by any HummingFusedWfp4Afp8MoeLayer instance (compiler is the process-global singleton
-  // from humming_jit_cache.h, shared across instances).
-  static const std::vector<llm_kernels::nvidia::humming::KernelMeta>* GetJitKernelTable();
 
  private:
   template <typename T>

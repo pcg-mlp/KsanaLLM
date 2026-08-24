@@ -5,10 +5,12 @@
 #
 # Subcommands:
 #   generate       Generate a humming GEMM kernel .cu source file
+#   generate-batch Render multiple kernel .cu files in ONE python process
 #   query-configs  Query humming heuristic for recommended kernel configurations
 #
 # Usage:
 #   python3 humming_tool.py generate --size_n 7168 --size_k 2048 ...
+#   python3 humming_tool.py generate-batch --manifest manifest.json
 #   python3 humming_tool.py query-configs --size_n 4096 --size_k 4096 ...
 
 import argparse
@@ -172,57 +174,61 @@ def _add_generate_args(subparsers):
     return p
 
 
-def _cmd_generate(args):
+def _render_kernel(params: Dict) -> Tuple[str, str]:
+    """Render the final .cu source for one kernel config dict (batch/shared path).
+
+    Keys: size_n/size_k/num_experts/compute_dtype/gemm_type/block_shape(list of 3)/
+    warp_shape(list of 3)/use_stream_k/num_stages/num_ctas_per_sm/use_tma_a/
+    use_tma_b/use_tma_c/use_tma_bs/use_mbarrier/use_warp_spec/use_f16_accum.
+    Returns (cuda_source, kernel_expr).
+    """
     m = _import_humming()
     _monkey_patch_kernel_runtime()
 
-    a_dtype, use_fused_e8m0_scale, weight_scale_type = _get_dtype_config(args.compute_dtype)
-
-    gemm_type_map = {1: m["GemmType"].INDEXED, 2: m["GemmType"].GROUPED_CONTIGUOUS}
-    gemm_type = gemm_type_map[args.gemm_type]
-
-    block_shape = (args.block_m, args.block_n, args.block_k)
-    warp_shape = (args.warp_shape_m, args.warp_shape_n, args.warp_shape_k)
-    use_tma = bool(args.use_tma_a or args.use_tma_b or args.use_tma_c or args.use_tma_bs)
+    a_dtype, use_fused_e8m0_scale, weight_scale_type = _get_dtype_config(params["compute_dtype"])
+    gemm_type = {1: m["GemmType"].INDEXED, 2: m["GemmType"].GROUPED_CONTIGUOUS}[params["gemm_type"]]
+    use_tma = bool(params["use_tma_a"] or params["use_tma_b"] or params["use_tma_c"] or params["use_tma_bs"])
 
     kernel = m["HummingKernel"](
-        shape_n=args.size_n,
-        shape_k=args.size_k,
-        num_experts=args.num_experts,
-        b_dtype=m["dtypes"].float4e2m1,
-        a_dtype=a_dtype,
-        c_dtype=m["dtypes"].bfloat16,
-        bs_dtype=m["dtypes"].float8e8m0,
-        weight_scale_group_size=32,
-        weight_scale_type=weight_scale_type,
-        has_zero_point=False,
-        has_bias=False,
-        mma_type=m["MmaType"].WGMMA,
-        use_fused_e8m0_scale=use_fused_e8m0_scale,
+        shape_n=params["size_n"], shape_k=params["size_k"], num_experts=params["num_experts"],
+        b_dtype=m["dtypes"].float4e2m1, a_dtype=a_dtype,
+        c_dtype=m["dtypes"].bfloat16, bs_dtype=m["dtypes"].float8e8m0,
+        weight_scale_group_size=32, weight_scale_type=weight_scale_type,
+        has_zero_point=False, has_bias=False,
+        mma_type=m["MmaType"].WGMMA, use_fused_e8m0_scale=use_fused_e8m0_scale,
         gemm_type=gemm_type,
-        block_shape=block_shape,
-        warp_shape=warp_shape,
-        use_stream_k=bool(args.use_stream_k),
-        num_stages=args.num_stages,
-        num_ctas_per_sm=args.num_ctas_per_sm,
-        use_f16_accum=bool(args.use_f16_accum),
-        use_tma=use_tma,
-        use_tma_a=bool(args.use_tma_a),
-        use_tma_b=bool(args.use_tma_b),
-        use_tma_c=bool(args.use_tma_c),
-        use_tma_bs=bool(args.use_tma_bs),
-        use_mbarrier=bool(args.use_mbarrier),
-        use_warp_spec=bool(args.use_warp_spec),
+        block_shape=tuple(params["block_shape"]), warp_shape=tuple(params["warp_shape"]),
+        use_stream_k=params["use_stream_k"], num_stages=params["num_stages"],
+        num_ctas_per_sm=params["num_ctas_per_sm"], use_f16_accum=params["use_f16_accum"],
+        use_tma=use_tma, use_tma_a=params["use_tma_a"], use_tma_b=params["use_tma_b"],
+        use_tma_c=params["use_tma_c"], use_tma_bs=params["use_tma_bs"],
+        use_mbarrier=params["use_mbarrier"], use_warp_spec=params["use_warp_spec"],
     )
 
-    cuda_source = kernel.code
-    kernel_expr = kernel.kernel_expr
-
+    source = kernel.code
     # Append template instantiation to force the kernel symbol into the .cubin
-    cuda_source += (
+    # (cubin ELF symbol extraction depends on it).
+    source += (
         "\n// Force template instantiation for symbol extraction\n"
-        f"auto __humming_kernel_ptr = reinterpret_cast<void*>(&{kernel_expr});\n"
+        f"auto __humming_kernel_ptr = reinterpret_cast<void*>(&{kernel.kernel_expr});\n"
     )
+    return source, kernel.kernel_expr
+
+
+def _cmd_generate(args):
+    params = {
+        "size_n": args.size_n, "size_k": args.size_k, "num_experts": args.num_experts,
+        "compute_dtype": args.compute_dtype, "gemm_type": args.gemm_type,
+        "block_shape": [args.block_m, args.block_n, args.block_k],
+        "warp_shape": [args.warp_shape_m, args.warp_shape_n, args.warp_shape_k],
+        "use_stream_k": bool(args.use_stream_k), "num_stages": args.num_stages,
+        "num_ctas_per_sm": args.num_ctas_per_sm,
+        "use_tma_a": bool(args.use_tma_a), "use_tma_b": bool(args.use_tma_b),
+        "use_tma_c": bool(args.use_tma_c), "use_tma_bs": bool(args.use_tma_bs),
+        "use_mbarrier": bool(args.use_mbarrier), "use_warp_spec": bool(args.use_warp_spec),
+        "use_f16_accum": bool(args.use_f16_accum),
+    }
+    cuda_source, kernel_expr = _render_kernel(params)
 
     with open(args.output, "w") as f:
         f.write(cuda_source)
@@ -230,20 +236,19 @@ def _cmd_generate(args):
 
     if args.meta_output:
         metadata = {
-            "kernel_name": kernel.name,
-            "kernel_expr": kernel_expr,
             "size_n": args.size_n,
             "size_k": args.size_k,
             "num_experts": args.num_experts,
             "block_m": args.block_m,
             "gemm_type": args.gemm_type,
             "compute_dtype": args.compute_dtype,
-            "block_shape": list(block_shape),
-            "warp_shape": list(warp_shape),
+            "block_shape": params["block_shape"],
+            "warp_shape": params["warp_shape"],
             "num_stages": args.num_stages,
             "num_ctas_per_sm": args.num_ctas_per_sm,
             "use_stream_k": bool(args.use_stream_k),
             "use_f16_accum": bool(args.use_f16_accum),
+            "kernel_expr": kernel_expr,
         }
         with open(args.meta_output, "w") as f:
             json.dump(metadata, f, indent=2)
@@ -776,6 +781,57 @@ def _cmd_query_configs(args):
 
 
 # ════════════════════════════════════════════════════════════════════════════════
+# Subcommand: generate-batch
+# ════════════════════════════════════════════════════════════════════════════════
+
+def _add_generate_batch_args(subparsers):
+    p = subparsers.add_parser("generate-batch",
+                              help="Render multiple kernel .cu files in ONE python process")
+    p.add_argument("--manifest", type=str, required=True,
+                   help='JSON file: {"kernels": [{<kernel params>, "output": <path>}, ...]}')
+    return p
+
+
+def _cmd_generate_batch(args):
+    """Batch-render all .cu sources in one process.
+
+    Import of torch dominates per-process cost (~10 s, ~600 MB); rendering a
+    kernel takes <1 ms after the first (template cold start ~4 s).  Batching N
+    configs collapses N python processes into one.
+    """
+    try:
+        with open(args.manifest) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"ERROR: cannot read manifest {args.manifest}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    generated, failed = [], []
+    for entry in manifest["kernels"]:
+        out_path = entry.get("output")
+        if not out_path:
+            failed.append({"output": "", "error": "manifest entry missing 'output' key"})
+            continue
+        # pid suffix prevents interleaved writes when ranks on mixed humming
+        # versions race on a shared cache; os.replace stays atomic.
+        tmp_path = f"{out_path}.tmp.{os.getpid()}"
+        try:
+            source, _ = _render_kernel(entry)
+            with open(tmp_path, "w") as f:
+                f.write(source)
+            os.replace(tmp_path, out_path)  # atomic on same filesystem
+            generated.append(out_path)
+        except Exception as e:  # per-config failure must not kill the batch
+            failed.append({"output": out_path, "error": str(e)})
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    print(json.dumps({"generated": generated, "failed": failed}))
+
+
+# ════════════════════════════════════════════════════════════════════════════════
 # Main
 # ════════════════════════════════════════════════════════════════════════════════
 
@@ -786,12 +842,15 @@ def main():
     subparsers = parser.add_subparsers(dest="subcommand", required=True)
 
     _add_generate_args(subparsers)
+    _add_generate_batch_args(subparsers)
     _add_query_configs_args(subparsers)
 
     args = parser.parse_args()
 
     if args.subcommand == "generate":
         _cmd_generate(args)
+    elif args.subcommand == "generate-batch":
+        _cmd_generate_batch(args)
     elif args.subcommand == "query-configs":
         _cmd_query_configs(args)
     else:

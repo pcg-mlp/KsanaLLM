@@ -11,6 +11,7 @@ set(CPPZMQ_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/cppzmq)
 FetchContent_Populate(download_cppzmq
     GIT_REPOSITORY https://github.com/zeromq/cppzmq.git
     GIT_TAG v4.10.0
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${CPPZMQ_INCLUDE_DIR}
 )
 

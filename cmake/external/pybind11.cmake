@@ -9,6 +9,7 @@ set(PYBIND11_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/pybind11)
 FetchContent_Populate(download_pybind11
     GIT_REPOSITORY https://github.com/pybind/pybind11.git
     GIT_TAG v2.13.5
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${PYBIND11_INCLUDE_DIR}
 )
 

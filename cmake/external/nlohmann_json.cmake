@@ -9,6 +9,7 @@ set(NLOHMANN_JSON_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/nlohmann_json)
 FetchContent_Populate(json
     GIT_REPOSITORY https://github.com/nlohmann/json.git
     GIT_TAG v3.11.2
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${NLOHMANN_JSON_INCLUDE_DIR}
 )
 

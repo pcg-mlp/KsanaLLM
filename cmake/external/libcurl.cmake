@@ -17,6 +17,7 @@ ExternalProject_Add(
     PREFIX ${THIRD_PARTY_PATH}/libcurl
     GIT_REPOSITORY https://github.com/curl/curl.git
     GIT_TAG curl-8_10_1
+    GIT_SHALLOW TRUE
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${LIBCURL_INSTALL_DIR}
         -DCMAKE_INSTALL_LIBDIR=lib

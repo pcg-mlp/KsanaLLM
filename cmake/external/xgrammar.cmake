@@ -9,6 +9,7 @@ set(XGRAMMAR_SOURCE_DIR ${THIRD_PARTY_PATH}/xgrammar)
 FetchContent_Declare(xgrammar
     GIT_REPOSITORY https://github.com/mlc-ai/xgrammar.git
     GIT_TAG v0.2.5
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${XGRAMMAR_SOURCE_DIR}
 )
 FetchContent_Populate(xgrammar)
@@ -18,6 +19,7 @@ set(DLPACK_INCLUDE_DIR ${THIRD_PARTY_PATH}/install/dlpack)
 FetchContent_Populate(dlpack
     GIT_REPOSITORY https://github.com/dmlc/dlpack.git
     GIT_TAG v1.1
+    GIT_SHALLOW TRUE
     SOURCE_DIR ${DLPACK_INCLUDE_DIR}
 )
 

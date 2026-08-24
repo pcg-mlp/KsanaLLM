@@ -2,7 +2,8 @@
 
 ==============================================================================*/
 #include "layers/humming_fused_wfp4afp8_moe_layer.h"
-#include "layers/humming_jit_cache.h"
+#include "layers/nvidia/humming_jit_cache.h"
+#include "layers/nvidia/humming_search_cache.h"
 
 #include <ATen/cuda/CUDAContext.h>
 #include <torch/torch.h>
@@ -30,12 +31,6 @@
 #include "utils/utils.h"
 
 namespace ksana_llm {
-
-const std::vector<llm_kernels::nvidia::humming::KernelMeta>* HummingFusedWfp4Afp8MoeLayer::GetJitKernelTable() {
-  auto& compiler = GetHummingFp4JitCompiler();
-  if (!compiler) return nullptr;
-  return &compiler->GetKernelTable();
-}
 
 // Minimum moe_block_size for workspace pre-allocation (fallback when no JIT kernels compiled).
 // The actual max block_m is determined at runtime by iterating the JIT kernel table in
@@ -169,9 +164,10 @@ size_t HummingFusedWfp4Afp8MoeLayer::GetWorkspaceSizeT() {
   // worst-case block_m, otherwise InvokeAlignBlockSize / InvokeSglMoeAlignBlockSize will
   // overflow the pre-allocated buffer at runtime, causing an illegal memory access.
   int64_t max_block_m = kHummingMoeMaxBlockSize;
-  auto& jit_compiler = GetHummingFp4JitCompiler();
-  if (jit_compiler) {
-    for (const auto& meta : jit_compiler->GetKernelTable()) {
+  // Raw-table scan (intentionally NOT filtered by n/k): the buffer must cover the
+  // worst case across ALL compiled shapes — see GetHummingKernelCandidates note.
+  if (const auto* table = GetJitKernelTable(); table != nullptr) {
+    for (const auto& meta : *table) {
       if (meta.compute_dtype != humming_compute_dtype_) continue;
       if (meta.gemm_type != llm_kernels::nvidia::humming::GemmType::INDEXED) continue;
       max_block_m = std::max(max_block_m, static_cast<int64_t>(meta.block_m));
@@ -214,8 +210,10 @@ size_t HummingFusedWfp4Afp8MoeLayer::GetWorkspaceSizeT() {
   // small-K, large-N MoE GEMMs), which the hardcoded get_workspace_size() doesn't account for.
   // Locks buffer has 4x over-provision so it's safe, but the TMA descriptor buffer is exact-sized.
   int max_ctas_per_sm = 3;  // FP8
-  if (jit_compiler) {
-    for (const auto& meta : jit_compiler->GetKernelTable()) {
+  // Raw-table scan (intentionally NOT filtered by n/k): worst case across ALL
+  // compiled shapes — see GetHummingKernelCandidates note.
+  if (const auto* table = GetJitKernelTable(); table != nullptr) {
+    for (const auto& meta : *table) {
       if (meta.compute_dtype != humming_compute_dtype_) continue;
       if (meta.gemm_type != llm_kernels::nvidia::humming::GemmType::INDEXED) continue;
       max_ctas_per_sm = std::max(max_ctas_per_sm, meta.num_ctas_per_sm);
@@ -259,29 +257,63 @@ Status HummingFusedWfp4Afp8MoeLayer::Preprocess(const ModelConfig& model_config,
   int gt = static_cast<int>(llm_kernels::nvidia::humming::GemmType::INDEXED);
   size_t E = params_.expert_num_per_node;
 
+  // Device identity cached by the device context extension at Initialize().
+  const std::string& gpu_name = context_->device->ext->GetDeviceName();
+  const int sm_count = context_->device->ext->GetSmCount();
+
+  // Three-level lookup per GEMM: memory singleton → file cache → real search.
+  auto search_or_load = [&](int64_t n, int64_t k, int64_t top_k, int64_t mult, const char* tag) {
+    if (Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n, k, E, dt, gt)) {
+      KLLM_LOG_INFO << fmt::format("Rank[{}] Reusing profiled {} (N={},K={})", rank_, tag, n, k);
+      return;
+    }
+
+    const auto candidates = GetHummingKernelCandidates(n, k, humming_compute_dtype_,
+                                                       llm_kernels::nvidia::humming::GemmType::INDEXED);
+    HummingMoeSearchCache search_cache;
+    const HummingSearchCacheKeyParams kp{
+        .n = n,
+        .k = k,
+        .e = static_cast<int64_t>(E),
+        .dt = dt,
+        .gt = gt,
+        .top_k = top_k,
+        .size_m_multiplier = mult,
+        .ep_size = static_cast<int64_t>(global_expert_para_size_),
+        .using_deepep = using_deepep_,
+        .gpu_name = gpu_name,
+        .sm_count = sm_count,
+        .rank = rank_,
+        .profile_iters = profile_iters_,
+        .warmup_iters = warmup_iters_,
+        .m_thresh1 = profile_m_thresh1_,
+        .cc = fmt::format("{}", context_->device->ext->GetComputeCapacity()),
+    };
+
+    if (!candidates.empty() && search_cache.Enabled() && !search_cache.Regenerate()) {
+      HummingMoeSearchStatus::ProfiledSchedule sched;
+      if (search_cache.TryLoad(kp, candidates, sched)) {
+        Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n, k, E, dt, gt, sched);
+        KLLM_LOG_INFO << fmt::format("Rank[{}] {} search cache hit (N={},K={})", rank_, tag, n, k);
+        return;
+      }
+    }
+
+    auto schedule = ProfileAllBuckets(n, k, E, top_k, warmup_iters_, profile_iters_, mult);
+    Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n, k, E, dt, gt, schedule);
+    KLLM_LOG_INFO << fmt::format("Rank[{}] {} profiled (N={},K={})", rank_, tag, n, k);
+    if (!candidates.empty() && search_cache.Enabled()) {
+      search_cache.Save(kp, candidates, schedule);
+    }
+  };
+
   // GEMM1: N=inter*2, K=hidden, top_k=expert_topk, size_m=tokens
-  int64_t n1 = static_cast<int64_t>(params_.expert_inter_size * 2);
-  int64_t k1 = static_cast<int64_t>(params_.expert_hidden_size);
-  if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n1, k1, E, dt, gt)) {
-    auto schedule =
-        ProfileAllBuckets(n1, k1, E, params_.expert_topk, warmup_iters_, profile_iters_, /*size_m_multiplier=*/1);
-    Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n1, k1, E, dt, gt, schedule);
-    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer GEMM1 profiled (N={},K={})", rank_, n1, k1);
-  } else {
-    KLLM_LOG_INFO << fmt::format("Rank[{}] Reusing profiled GEMM1 (N={},K={})", rank_, n1, k1);
-  }
+  search_or_load(static_cast<int64_t>(params_.expert_inter_size * 2),
+                 static_cast<int64_t>(params_.expert_hidden_size), params_.expert_topk, 1, "GEMM1");
 
   // GEMM2: N=hidden, K=inter, top_k=1, size_m=tokens*topk
-  int64_t n2 = static_cast<int64_t>(params_.expert_hidden_size);
-  int64_t k2 = static_cast<int64_t>(params_.expert_inter_size);
-  if (!Singleton<HummingMoeSearchStatus>::GetInstance()->IsProfiled(n2, k2, E, dt, gt)) {
-    auto schedule = ProfileAllBuckets(n2, k2, E, /*top_k=*/1, warmup_iters_, profile_iters_,
-                                      /*size_m_multiplier=*/params_.expert_topk);
-    Singleton<HummingMoeSearchStatus>::GetInstance()->AddProfiledSchedule(n2, k2, E, dt, gt, schedule);
-    KLLM_LOG_INFO << fmt::format("Rank[{}] HummingFusedWfp4Afp8MoeLayer GEMM2 profiled (N={},K={})", rank_, n2, k2);
-  } else {
-    KLLM_LOG_INFO << fmt::format("Rank[{}] Reusing profiled GEMM2 (N={},K={})", rank_, n2, k2);
-  }
+  search_or_load(static_cast<int64_t>(params_.expert_hidden_size),
+                 static_cast<int64_t>(params_.expert_inter_size), 1, params_.expert_topk, "GEMM2");
   return Status();
 }
 
@@ -432,20 +464,16 @@ const llm_kernels::nvidia::humming::KernelMeta* HummingFusedWfp4Afp8MoeLayer::Pr
     size_t profile_iters, cudaStream_t stream, const ProfWeights& weights) {
   using namespace llm_kernels::nvidia::humming;
 
-  // 1. Filter candidates by (N, K, gemm_type, dtype)
-  // Also filter by heuristic M range: skip candidates whose max_shape_m < size_m.
-  // This prevents small-M kernels (e.g. block_m=8 with range [1,384]) from being
-  // selected at large M where they're suboptimal, even if profiling noise makes
-  // them appear faster.
-  std::vector<const KernelMeta*> candidates;
-  auto& jit_compiler = GetHummingFp4JitCompiler();
-  for (const auto& meta : jit_compiler->GetKernelTable()) {
-    if (meta.size_n != size_n || meta.size_k != size_k) continue;
-    if (meta.gemm_type != GemmType::INDEXED) continue;
-    if (meta.compute_dtype != humming_compute_dtype_) continue;
-    if (meta.max_shape_m < size_m) continue;
-    candidates.push_back(&meta);
-  }
+  // 1. Candidates for this problem come pre-filtered by (N, K, gemm_type, dtype)
+  // from GetHummingKernelCandidates. Additionally skip candidates whose
+  // max_shape_m < size_m: this prevents small-M kernels (e.g. block_m=8 with
+  // range [1,384]) from being selected at large M where they're suboptimal,
+  // even if profiling noise makes them appear faster.
+  std::vector<const KernelMeta*> candidates = GetHummingKernelCandidates(size_n, size_k, humming_compute_dtype_,
+                                                                         GemmType::INDEXED);
+  candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+                                  [size_m](const KernelMeta* m) { return m->max_shape_m < size_m; }),
+                   candidates.end());
   if (candidates.empty()) return nullptr;
 
   if (profile_iters <= 0 || num_experts <= 0 || size_m <= 0 || size_n <= 0 || size_k <= 0) {

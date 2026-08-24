@@ -114,6 +114,7 @@ d.*
 python/ksana_plugin/arc_hunyuan_video/ARIAL.TTF
 
 .agent
+.opencode
 
 # 本地工作笔记 (plans / specs), 不追入仓库
 docs/superpowers/

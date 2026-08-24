@@ -9,6 +9,7 @@ set(RE2_INSTALL_DIR ${THIRD_PARTY_PATH}/install/re2)
 FetchContent_Declare(re2
   GIT_REPOSITORY https://github.com/google/re2.git
   GIT_TAG 2024-07-02
+  GIT_SHALLOW TRUE
   SOURCE_DIR ${RE2_INSTALL_DIR}
 )
 

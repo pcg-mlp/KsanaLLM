@@ -18,6 +18,7 @@ FetchContent_Declare(
   opentelemetry-cpp
   GIT_REPOSITORY https://github.com/open-telemetry/opentelemetry-cpp.git
   GIT_TAG v1.16.0
+  GIT_SHALLOW TRUE
   GIT_SUBMODULES ""
   SOURCE_DIR ${OPENTELEMETRY_CPP_INSTALL_DIR}
 )

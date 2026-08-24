@@ -16,6 +16,7 @@ ExternalProject_Add(
     PREFIX ${THIRD_PARTY_PATH}/libzmq
     GIT_REPOSITORY https://github.com/zeromq/libzmq.git
     GIT_TAG v4.3.5
+    GIT_SHALLOW TRUE
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${LIBZMQ_INSTALL_DIR}
         -DCMAKE_INSTALL_LIBDIR=lib

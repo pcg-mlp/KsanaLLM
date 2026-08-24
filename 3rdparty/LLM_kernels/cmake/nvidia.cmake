@@ -52,7 +52,7 @@ execute_process(COMMAND mkdir -p ${CMAKE_BINARY_DIR}/triton_kernel_files)
 # fetch 3rdparty
 if(GIT_FOUND)
   message(STATUS "Running submodule update to fetch cutlass c3x")
-  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/c3x/cutlass
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --depth 1 3rdparty/c3x/cutlass
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE GIT_SUBMOD_RESULT)
 
@@ -64,7 +64,7 @@ endif()
 # fetch 3rdparty
 if(GIT_FOUND)
   message(STATUS "Running submodule update to fetch cutlass c4x")
-  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/c4x/cutlass
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --depth 1 3rdparty/c4x/cutlass
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE GIT_SUBMOD_RESULT)
 
@@ -81,7 +81,7 @@ endif()
 # fetch 3rdparty
 if(GIT_FOUND)
   message(STATUS "Running submodule update to fetch hpc-ops")
-  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/hpc-ops
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --depth 1 3rdparty/hpc-ops
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE GIT_SUBMOD_RESULT)
 
@@ -180,7 +180,7 @@ message(STATUS "ENABLE_FLASH_MLA: ${ENABLE_FLASH_MLA}")
 # setting flashmla
 if(GIT_FOUND AND (ENABLE_FLASH_MLA STREQUAL "TRUE"))
   message(STATUS "Running submodule update to fetch FlashMLA")
-  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/FlashMLA
+  execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --depth 1 3rdparty/FlashMLA
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     RESULT_VARIABLE GIT_SUBMOD_RESULT)
 

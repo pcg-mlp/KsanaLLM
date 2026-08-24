@@ -116,6 +116,8 @@ void NvidiaDeviceContextExtension<T>::Initialize() {
   cudaDeviceProp prop;
   CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
   sm_ = prop.major * 10 + prop.minor;
+  device_name_ = prop.name;
+  sm_count_ = prop.multiProcessorCount;
   int cuda_ver_tmp;
   CUDA_CHECK(cudaRuntimeGetVersion(&cuda_ver_tmp));
   cuda_ver_ = static_cast<uint32_t>(cuda_ver_tmp);

@@ -2,8 +2,10 @@
  * Copyright 2026 Tencent Inc.  All rights reserved.
  *
  * Stub implementations of humming symbols for non-SM90 platforms.
- * Provides no-op/zero-return implementations so that callers link successfully,
- * but any actual invocation at runtime will log an error and return safely.
+ * Provides link-time placeholders with neutral no-op/zero-return semantics
+ * for harmless queries; any invocation of a real humming entry point is a
+ * programming error on non-SM90 platforms and fails fast by throwing
+ * KllmException (with file:line).
  */
 
 #include "csrc/kernels/nvidia/others/humming/jit/humming_jit_compiler.h"
@@ -12,12 +14,19 @@
 #include "csrc/kernels/nvidia/others/humming/ops/ops.h"
 #include "csrc/kernels/nvidia/others/humming/ops/wrapper.h"
 #include "csrc/kernels/nvidia/others/humming/preprocess/humming_preprocess.h"
-
-#include <cstdio>
+#include "csrc/utils/nvidia/assert.h"
 
 namespace llm_kernels {
 namespace nvidia {
 namespace humming {
+
+// ============================================================================
+// Shared cache-root resolution stub
+// ============================================================================
+
+std::string GetKernelCacheRootDir() {
+  KLLM_KERNEL_THROW("GetKernelCacheRootDir called on non-SM90 platform — not supported.");
+}
 
 // ============================================================================
 // HummingJitCompiler stubs
@@ -53,7 +62,7 @@ void humming_moe_gemm(const void*, const void*, void*, const void*, const void*,
                       const int32_t*, const int32_t*, const int32_t*, const int32_t*, const float*, int32_t*, void*,
                       GemmType, ComputeDtype, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, cudaStream_t,
                       int32_t, const KernelMeta*) {
-  fprintf(stderr, "ERROR: humming_moe_gemm called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("humming_moe_gemm called on non-SM90 platform — not supported.");
 }
 
 // ============================================================================
@@ -68,19 +77,19 @@ int64_t get_workspace_size(int64_t, int64_t, int64_t, int64_t, int64_t, ComputeD
 // ============================================================================
 
 void pack_weight_fp4(cudaStream_t, const void*, void*, int64_t, int64_t, int64_t) {
-  fprintf(stderr, "ERROR: pack_weight_fp4 called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("pack_weight_fp4 called on non-SM90 platform — not supported.");
 }
 
 void repack_weight_wgmma(cudaStream_t, const void*, void*, int64_t, int64_t, int64_t, ComputeDtype) {
-  fprintf(stderr, "ERROR: repack_weight_wgmma called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("repack_weight_wgmma called on non-SM90 platform — not supported.");
 }
 
 void process_mxfp4_w4a8_weight(cudaStream_t, void*, void*, float*, int64_t, int64_t, int64_t, int64_t) {
-  fprintf(stderr, "ERROR: process_mxfp4_w4a8_weight called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("process_mxfp4_w4a8_weight called on non-SM90 platform — not supported.");
 }
 
 void process_scales(cudaStream_t, const void*, void*, int64_t, int64_t, int64_t, int64_t, ComputeDtype) {
-  fprintf(stderr, "ERROR: process_scales called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("process_scales called on non-SM90 platform — not supported.");
 }
 
 // ============================================================================
@@ -90,7 +99,7 @@ void process_scales(cudaStream_t, const void*, void*, int64_t, int64_t, int64_t,
 void launch_kernel(const KernelMeta*, const void*, const void*, void*, const void*, const void*, const void*,
                    const void*, const void*, const int32_t*, const int32_t*, const int32_t*, const void*, int32_t*,
                    void*, int64_t, int64_t, int64_t, int64_t, int64_t, bool, cudaStream_t) {
-  fprintf(stderr, "ERROR: launch_kernel called on non-SM90 platform — not supported.\n");
+  KLLM_KERNEL_THROW("launch_kernel called on non-SM90 platform — not supported.");
 }
 
 // ============================================================================

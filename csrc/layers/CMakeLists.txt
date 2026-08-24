@@ -101,6 +101,10 @@ cpp_test(wfp4_moe_layers_test
   SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/tests/wfp4_moe_layer_test.cpp
   DEPS ${layers_test_common_DEPS})
 
+cpp_test(humming_search_cache_test
+  SRCS ${PROJECT_SOURCE_DIR}/csrc/layers/tests/humming_search_cache_test.cpp
+  DEPS ${layers_test_common_DEPS})
+
 # topk_layers_test and grouped_topk_layer_test are CUDA-only: they include nvtx / cuda_runtime.h
 # and use cudaStream APIs + CUDA-only GroupedTopkLayer, so they only build under WITH_CUDA.
 if(WITH_CUDA)
