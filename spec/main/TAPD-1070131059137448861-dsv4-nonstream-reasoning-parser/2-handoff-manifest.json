@@ -1,0 +1,12 @@
+{
+  "spec_dir": "spec/main/TAPD-1070131059137448861-dsv4-nonstream-reasoning-parser/",
+  "produced_by_commit": "231ee7760e8fcde9a15a69cb7790afd2be269284",
+  "produced_at": "2026-08-24T17:34:27+08:00",
+  "unit_test_targets": [
+    "python/tests/test_xgrammar_request_converter.py"
+  ],
+  "integration_test_requested": true,
+  "retry_count": 0,
+  "max_retries": 3,
+  "prior_failure_summary": null
+}

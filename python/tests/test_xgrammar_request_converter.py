@@ -12,6 +12,7 @@ from openaiapi.openai_protocol import (
     StructuredOutputsParams,
 )
 from openaiapi.openai_adapter import OpenAIConfig
+from openaiapi.reasoning import ReasoningParserManager
 from openaiapi.request_converter import RequestConverter
 from openaiapi.serving_chat import KsanaOpenAIServingChat
 from openaiapi.tool_parsers import ToolParserManager
@@ -514,6 +515,56 @@ def make_eos_test_serving(
         decode=lambda _token_ids, skip_special_tokens: decoded_text)
     serving._uses_model_structural_tag = lambda _request: uses_structural_tag
     return serving, parser_cls
+
+
+@pytest.mark.asyncio
+async def test_deepseek_v4_non_streaming_response_splits_reasoning_content(
+        monkeypatch):
+    parser_cls = ReasoningParserManager.get_reasoning_parser("deepseek_v4")
+    monkeypatch.setattr(parser_cls, "think_start_token_id", 1)
+    monkeypatch.setattr(parser_cls, "think_end_token_id", 2)
+
+    serving = KsanaOpenAIServingChat.__new__(KsanaOpenAIServingChat)
+    serving.tool_parser = None
+    serving.reasoning_parser = parser_cls
+    serving.tool_call_id_type = "random"
+    serving.response_role = "assistant"
+    serving.config = SimpleNamespace(
+        enable_auto_tool_choice=False,
+        reasoning_parser="deepseek_v4",
+    )
+    serving.tokenizer = SimpleNamespace(
+        decode=lambda _token_ids, skip_special_tokens:
+            "reasoning text</think>final answer"
+    )
+    serving._uses_model_structural_tag = lambda _request: False
+
+    status = SimpleNamespace(OK=lambda: True)
+    output = SimpleNamespace(output_tokens=[[1]], logprobs=None)
+    timing = SimpleNamespace(
+        preprocess_time_ms=0,
+        waiting_time_ms=0,
+        encoder_time_ms=0,
+        encoder_send_time_ms=0,
+        encoder_queue_time_ms=0,
+        encoder_encode_time_ms=0,
+        encoder_recv_time_ms=0,
+    )
+    request = make_request(chat_template_kwargs={"thinking": True})
+
+    response = await serving._chat_completion_full_generator(
+        [(status, output, timing)],
+        request_id="request-id",
+        model_name="test-model",
+        request=request,
+        prompt_tokens_per_request=[0],
+    )
+
+    message = response.choices[0].message
+    assert message.reasoning_content == "reasoning text"
+    assert message.content == "final answer"
+    assert "</think>" not in message.content
+    assert response.choices[0].finish_reason == "stop"
 
 
 @pytest.mark.asyncio

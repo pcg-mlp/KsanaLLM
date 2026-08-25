@@ -1128,7 +1128,7 @@ class KsanaOpenAIServingChat(KsanaOpenAIServing):
                         reasoning_parser = self.reasoning_parser()
                         reasoning_parser._in_reasoning = (reasoning_parser._in_reasoning or
                                                           get_enable_thinking_from_request(request,
-                                                                reasoning_parser._in_reasoning))
+                                                                self.config.reasoning_parser))
                     except RuntimeError as e:
                         logger.exception("Error in reasoning parser creation.")
                         continue
