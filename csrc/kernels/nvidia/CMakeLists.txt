@@ -58,6 +58,13 @@ if(HAS_SM90 OR HAS_SM90A)
     cc_test(kda_kernel_wrapper_test SRCS ${KDA_KERNEL_WRAPPER_TEST_SRCS} DEPS
         llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
 endif()
+# GDN cubins are generated per-SM at runtime; L40/H20 (SM89/90) run the test,
+# A10 CI (sm86) is not a target platform — the canary skips without artifacts.
+if(HAS_SM89 OR HAS_SM90 OR HAS_SM90A)
+    set(GDN_KERNEL_LAUNCH_TEST_SRCS gdn_kernel_launch_test.cpp)
+    cc_test(gdn_kernel_launch_test SRCS ${GDN_KERNEL_LAUNCH_TEST_SRCS} DEPS
+        llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+endif()
 
 if(ENABLE_DEEPSEEK_DEEPGEMM_FLAG)
     file(GLOB_RECURSE DEEPSEEK_DEEPGEMM_WRAPPER_TEST_SRCS deepseek_deepgemm_wrapper_test.cpp)

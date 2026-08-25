@@ -8,6 +8,7 @@
 #include <iostream>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -123,6 +124,42 @@ TritonWrapper::TritonWrapper() {
   kernel_key_map_["chunk_gla_fwd_kernel_o"] = {"H", "BK", "BV"};
   kernel_key_map_["fused_recurrent_kda_packed_decode_kernel"] = {"H", "BK", "BV", "LB", "SSM"};
   kernel_key_map_["fused_sigmoid_gating_delta_rule_update_kernel"] = {"H", "MODE", "NP2", "BK", "BV", "LB", "SSM"};
+
+  // GDN kernel 集合。chunk_h / recompute_w_u 与 KDA 重名，以 gdn_ 前缀隔离
+  // （文件名与 cubin 符号均带前缀）。
+  kernel_key_map_["rmsnorm_gated_kernel"] = {"N", "BN", "R", "W", "S", "HB", "HZ", "NBG", "RMS",
+                                             "ACT", "compute_type"};
+  // SL 进键序：NP2 同为 4 时靠 SL 区分 SL3 与 MTP 的 SL4 变体。
+  kernel_key_map_["gdn_causal_conv1d_update_kernel"] = {"D", "KW", "BN", "NP2", "SL", "HB", "SILU", "VL",
+                                                        "APC", "SPEC", "NULL", "W", "S", "compute_type"};
+  kernel_key_map_["fused_post_conv_kernel"] = {"H", "HV", "K", "V", "BK", "BV", "BT", "L2", "GEXP", "W",
+                                               "S", "compute_type"};
+  // 主 kernel NSEQ=0，prior/pool 由 boundary kernel 串行修正；键序与
+  // cubin_gen/fused_conv_post_c1.py 的 kernel_name 模板对齐。
+  kernel_key_map_["fused_conv_post_c1_kernel"] = {
+      "H", "HV", "K", "V", "BT", "L2", "GEXP", "NSEQ", "W", "S", "compute_type"};
+  kernel_key_map_["fused_conv_post_c1_boundary_kernel"] = {
+      "H", "HV", "K", "V", "BT", "L2", "W", "S", "compute_type"};
+  kernel_key_map_["chunk_local_cumsum_scalar_kernel"] = {"B", "H", "BT", "REV", "VL", "HF", "W", "S",
+                                                         "compute_type"};
+  kernel_key_map_["chunk_scaled_dot_kkt_fwd_kernel"] = {"H", "Hg", "K", "BT", "BK", "VL", "G", "W", "S",
+                                                        "compute_type"};
+  // H0OFF 键：缺它会拼出旧 ABI cubin 的文件名，参数错位。
+  kernel_key_map_["gdn_chunk_gated_delta_rule_fwd_kernel_h_blockdim64"] = {
+      "H", "Hg", "K", "V", "BT", "BV", "G", "GK", "INIT", "STORE", "SAVE", "VL", "W", "S", "H0OFF",
+      "compute_type"};
+  kernel_key_map_["chunk_fwd_kernel_o"] = {"H", "Hg", "K", "V", "BT", "BK", "BV", "G", "VL", "W", "S",
+                                           "compute_type"};
+  kernel_key_map_["merge_16x16_to_64x64_inverse_kernel"] = {"H", "BT", "TMA", "VL", "DP", "W", "S",
+                                                            "compute_type"};
+  kernel_key_map_["gdn_recompute_w_u_fwd_kernel"] = {"H", "Hg", "K", "V", "BT", "BK", "BV", "VL", "W",
+                                                     "S", "compute_type"};
+  kernel_key_map_["fused_recurrent_gated_delta_rule_packed_decode_kernel"] = {
+      "SMQ", "SA", "SB", "SISQ", "H", "HV", "K", "V", "BK", "BV", "SPT", "L2N", "W", "S", "compute_type"};
+  kernel_key_map_["fused_recurrent_gated_delta_rule_fwd_kernel"] = {
+      "H", "HV", "K", "V", "BK", "BV", "SISQ", "SIT", "UIS", "INP", "IBH", "L2N", "VAR", "CB", "SPEC",
+      "KDA", "W", "S", "compute_type"};
+
   kernel_key_map_["moe_fused_mul_sum_kernel"] = {"is_ep", "top_k", "size", "BLOCK_M", "BLOCK_K"};
 }
 
