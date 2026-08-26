@@ -116,7 +116,7 @@ TEST_F(KdaAttentionLayerTest, PrefillLaunches) {
   Tensor conv_state = ZeroTensor(DataType::TYPE_BF16, {1, 3, kQkvDim});
   Tensor ssm_state = ZeroTensor(DataType::TYPE_FP32, {1, kNumHeads, kHeadDim, kHeadDim});
   Tensor state_indices = UploadTensor<int32_t>(DataType::TYPE_INT32, {1}, {0});
-  Tensor cu_seqlens = UploadTensor<int32_t>(DataType::TYPE_INT32, {2}, {0, 1});
+  Tensor cu_seqlens = UploadTensor<uint64_t>(DataType::TYPE_UINT64, {2}, {0, 1});
   Tensor chunk_indices = UploadTensor<int32_t>(DataType::TYPE_INT32, {1, 2}, {0, 0});
   Tensor chunk_offsets = UploadTensor<int32_t>(DataType::TYPE_INT32, {2}, {0, 1});
   Tensor has_initial_state = UploadTensor<uint8_t>(DataType::TYPE_BOOL, {1}, {0});

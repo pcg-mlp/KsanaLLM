@@ -26,7 +26,7 @@ class CacheLayoutFactory {
     if (model_config.use_linear_attn) {
       KLLM_CHECK_WITH_INFO(!model_config.use_dsv4_attn && !model_config.use_dsa,
                            "linear-attention hybrid model with dsv4/dsa attention is not supported");
-      return std::make_shared<MambaModelCacheLayout>();
+      return std::make_shared<MambaModelCacheLayout>(model_config);
     }
     if (model_config.use_mla) {
       return std::make_shared<MlaModelCacheLayout>();

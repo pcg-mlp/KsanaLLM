@@ -15,9 +15,10 @@
 namespace ksana_llm {
 
 // KDA dtype contract: activations are __nv_bfloat16; gate parameters (A_log,
-// dt_bias), the causal-conv filter and RMSNorm statistics stay in float; every
-// index/metadata tensor is int32_t. Boolean masks are one byte per element,
-// matching torch.bool. The recurrent state is the one exception: it is typed at
+// dt_bias), the causal-conv filter and RMSNorm statistics stay in float;
+// index/metadata tensors are int32_t, except cu_seqlens which is uint64_t.
+// Boolean masks are one byte per element, matching torch.bool.
+// The recurrent state is the one exception: it is typed at
 // runtime by the state tensor's DataType, so its buffers are passed as void*.
 // FP32 is the delta-rule reference; BF16 halves the state pool. Each storage
 // dtype is a separate AOT artifact selected by the SSM specialization key.
@@ -112,7 +113,7 @@ struct KdaCausalConv1dParams {
   __nv_bfloat16* conv_state{nullptr};
   const int32_t* state_indices{nullptr};
   const bool* has_initial_state{nullptr};
-  const int32_t* cu_seqlens{nullptr};
+  const uint64_t* cu_seqlens{nullptr};
   __nv_bfloat16* output{nullptr};
 
   // Number of cache slots backing conv_state, i.e. its leading dimension.
@@ -191,7 +192,7 @@ struct KdaChunkParams {
   // artifacts, so an unset optional is not the same thing as a bound of zero.
   std::optional<float> gate_lower_bound{std::nullopt};
 
-  const int32_t* cu_seqlens{nullptr};
+  const uint64_t* cu_seqlens{nullptr};
   const int32_t* chunk_indices{nullptr};
   const int32_t* chunk_offsets{nullptr};
   // Recurrent state pool, typed by ``ssm_dtype``.
@@ -260,7 +261,7 @@ struct KdaRecurrentUpdateParams {
   void* state{nullptr};
   DataType ssm_dtype{DataType::TYPE_FP32};
   const int32_t* state_indices{nullptr};
-  const int32_t* cu_seqlens{nullptr};
+  const uint64_t* cu_seqlens{nullptr};
 
   // Verify-only per-step state checkpoints and Eagle tree parent links.
   void* intermediate_states{nullptr};
@@ -306,8 +307,7 @@ struct KdaGatedRmsNormParams {
 // ``num_chunks`` sizes the chunked-state scratch (layout.h) consumed by
 // InvokeChunkKda. Recurrent decode omits it: that path never reads the slice,
 // so the default of 0 leaves it empty.
-KdaWorkspaceLayout BuildKdaWorkspaceLayout(void* base, size_t num_tokens, int num_heads,
-                                           size_t num_chunks = 0);
+KdaWorkspaceLayout BuildKdaWorkspaceLayout(void* base, size_t num_tokens, int num_heads, size_t num_chunks = 0);
 
 // Size in bytes of the contiguous scratch buffer backing KdaWorkspaceLayout.
 // The returned size covers the whole causal-conv -> KDA core -> gated RMSNorm

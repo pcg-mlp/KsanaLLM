@@ -130,9 +130,6 @@ void CompressorSharedAttentionMeta::Init(const ModelConfig& model_config, const 
       "slot_pool_capacity={} (= max_batch_size={} * max_pp_batch_num={})",
       c4_layer_num_on_node, c4_slot_num, c128_layer_num_on_node, c128_slot_num, slot_pool_capacity, max_batch_size,
       max_pp_batch_num);
-
-  // Slot management has migrated to CompressorSlotResource / InflightResourceManager.
-  // See models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h.
 }
 
 void MqaSharedAttentionMeta::Init(const ModelConfig& model_config, const RuntimeConfig& runtime_config,

@@ -219,7 +219,7 @@ def _make_prefill_tensors(num_heads: int, num_tokens: int = 128) -> dict:
     beta = torch.sigmoid(
         torch.randn(1, num_tokens, num_heads, device=device, dtype=torch.float32)
     )
-    cu_seqlens = torch.tensor([0, num_tokens], device=device, dtype=torch.int32)
+    cu_seqlens = torch.tensor([0, num_tokens], device=device, dtype=torch.int64)
     chunk_indices = torch.tensor([[0, 0], [0, 1]], device=device, dtype=torch.int32)
     chunk_offsets = torch.tensor([0, 2], device=device, dtype=torch.int32)
     state_indices = torch.zeros(1, device=device, dtype=torch.int32)
@@ -1001,7 +1001,7 @@ def _generate_sigmoid_recurrent(
         total_tokens + 1,
         tokens_per_sequence,
         device=device,
-        dtype=torch.int32,
+        dtype=torch.int64,
     )
 
     if is_verify:
@@ -1199,7 +1199,7 @@ def _generate_causal_conv_fwd(output_dir: str, num_heads: int) -> None:
         [False, True], device=device, dtype=torch.bool
     )
     query_start_loc = torch.tensor(
-        [0, max_seq_len, num_tokens], device=device, dtype=torch.int32
+        [0, max_seq_len, num_tokens], device=device, dtype=torch.int64
     )
     out = torch.empty(num_tokens, channels, device=device, dtype=dtype)
 

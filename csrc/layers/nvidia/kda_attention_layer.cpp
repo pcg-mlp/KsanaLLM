@@ -67,7 +67,7 @@ KdaQkvViews RunPrefillConv(const KdaPrefillInputs& inputs, const KdaShape& shape
     conv.conv_state = conv_state + component * shape.token_head_dim;
     conv.state_indices = common.state_indices->GetPtr<int32_t>();
     conv.has_initial_state = inputs.has_initial_state->GetPtr<bool>();
-    conv.cu_seqlens = inputs.cu_seqlens->GetPtr<int32_t>();
+    conv.cu_seqlens = inputs.cu_seqlens->GetPtr<uint64_t>();
     conv.output = conv_qkv + component * shape.num_tokens * shape.token_head_dim;
     conv.num_cache_lines = shape.num_conv_state_slots;
     conv.num_sequences = shape.num_sequences;
@@ -116,7 +116,7 @@ void RunPrefillCore(const KdaPrefillInputs& inputs, const KdaShape& shape, const
   chunk.a_log = common.a_log->GetPtr<float>();
   chunk.dt_bias = common.dt_bias->GetPtr<float>();
   chunk.gate_lower_bound = gate_lower_bound;
-  chunk.cu_seqlens = inputs.cu_seqlens->GetPtr<int32_t>();
+  chunk.cu_seqlens = inputs.cu_seqlens->GetPtr<uint64_t>();
   chunk.chunk_indices = inputs.chunk_indices->GetPtr<int32_t>();
   chunk.chunk_offsets = inputs.chunk_offsets->GetPtr<int32_t>();
   chunk.state = common.ssm_state->GetPtr<void>();

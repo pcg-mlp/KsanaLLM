@@ -6,17 +6,18 @@
 
 #include "device/device_types.h"
 #include "device/device_utils.h"
+#include "executor/inflight_resource.h"
+#include "models/deepseek_v4/attention_meta/deepseek_v4_compressor_slot_resource.h"
 #include "profiler/profile_event.h"
 #include "runtime/profile_metrics.h"
 #include "utils/memory_utils.h"
 
 namespace ksana_llm {
 
-KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreationContext& creation_context,
+KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, LayerCreationContext& creation_context,
                                        ModelCreationConfig& model_creation_config, MlaBuffers& mla_buffers,
                                        TensorBuffer* moe_buffer)
-    : is_moe_(is_moe),
-      is_block_write_layer_(
+    : is_block_write_layer_(
           layer_idx %
               static_cast<int>(model_creation_config.attn_config.model_config.attn_res_config.attn_res_block_size) ==
           0),
@@ -27,6 +28,7 @@ KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreation
       moe_buffer_(moe_buffer) {
   MoeScaleNormMode moe_scale_norm_mode = MoeScaleNormMode::RE_NORM;
 
+  const auto& model_config = model_creation_config.attn_config.model_config;
   const std::string layer_prefix = fmt::format("model.layers.{}", layer_idx);
 
   attn_res_ = std::make_unique<AttnRes>(layer_prefix + ".self_attention_res", creation_context,
@@ -36,23 +38,23 @@ KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreation
 
   add_ = std::make_unique<Add>(creation_context);
 
-  if (is_moe) {
+  // The first `first_k_dense_replace` layers are dense; the rest are MoE.
+  if (layer_idx >= static_cast<int>(model_config.moe_config.first_k_dense_replace)) {
+    LinearComputeBackend linear_backend = model_config.quant_config.backend;
     expert_gate_ = std::make_shared<Linear>(layer_prefix + ".mlp.gate.weight", creation_context,
-                                            model_creation_config.attn_config.model_config.quant_config.backend);
+                                            model_config.quant_config.backend);
 
-    LinearComputeBackend linear_backend = model_creation_config.attn_config.model_config.quant_config.backend;
     routed_expert_down_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.routed_expert_down_proj.weight",
                                                         creation_context, linear_backend, /*skip_quant=*/true);
     routed_expert_up_proj_ = std::make_shared<Linear>(layer_prefix + ".mlp.routed_expert_up_proj.weight",
                                                       creation_context, linear_backend, /*skip_quant=*/true);
 
-    if (model_creation_config.attn_config.model_config.moe_config.latent_moe_use_norm) {
-      routed_expert_norm_ =
-          std::make_shared<Layernorm>(layer_prefix + ".mlp.routed_expert_norm.weight",
-                                      model_creation_config.attn_config.model_config.layernorm_eps, creation_context);
+    if (model_config.moe_config.latent_moe_use_norm) {
+      routed_expert_norm_ = std::make_shared<Layernorm>(layer_prefix + ".mlp.routed_expert_norm.weight",
+                                                        model_config.layernorm_eps, creation_context);
     }
 
-    if (model_creation_config.attn_config.model_config.moe_config.use_e_score_correction_bias) {
+    if (model_config.moe_config.use_e_score_correction_bias) {
       moe_ = std::make_shared<MoE>(
           layer_idx, layer_prefix + ".mlp.experts.up_gate_proj.weight", layer_prefix + ".mlp.experts.down_proj.weight",
           layer_prefix + ".mlp.gate.e_score_correction_bias", creation_context, moe_scale_norm_mode);
@@ -68,8 +70,11 @@ KimiK3DecoderLayer::KimiK3DecoderLayer(int layer_idx, bool is_moe, LayerCreation
     mlp_ = std::make_unique<TwoLayeredFFN>(layer_idx, creation_context, model_creation_config);
   }
 
-  mla_ = std::make_unique<MultiHeadLatentAttention>(layer_idx, /*is_neox*/ false, creation_context,
-                                                    model_creation_config, mla_buffers_);
+  if (model_config.kimi_linear_config.IsKdaLayer(layer_idx)) {
+  } else {
+    mla_ = std::make_unique<MultiHeadLatentAttention>(layer_idx, /*is_neox*/ false, creation_context,
+                                                      model_creation_config, mla_buffers_);
+  }
 
   tp_comm_ = std::make_shared<TpCommunicator>();
 }
@@ -92,7 +97,8 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
   }
 
   MODEL_PERF_OP_BEGIN(forwarding_context.current_forward_metrics, attn_t);
-  mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward, forwarding_context);
+  STATUS_CHECK_RETURN(
+      CommonAttn(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context));
   STATUS_CHECK_RETURN(
       tp_comm_->AllReduce(reduce_buffer_tensors, hidden_buffer_tensors_0, is_multi_token_forward, forwarding_context));
   MODEL_PERF_OP_END(forwarding_context.current_forward_metrics, ForwardProfileOp::kAttn, attn_t);
@@ -117,12 +123,22 @@ Status KimiK3DecoderLayer::Forward(std::vector<Tensor>& prefix_buffer, std::vect
   return Status();
 }
 
+Status KimiK3DecoderLayer::CommonAttn(std::vector<Tensor>& hidden_buffer_tensors_0,
+                                      std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
+                                      ForwardingContext& forwarding_context) {
+  if (mla_) {
+    return mla_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, tp_comm_, is_multi_token_forward,
+                         forwarding_context);
+  }
+  return Status();
+}
+
 Status KimiK3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_0,
                                      std::vector<Tensor>& reduce_buffer_tensors, const bool is_multi_token_forward,
                                      ForwardingContext& forwarding_context) {
-  if (!is_moe_) {
-    mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
-    return Status();
+  if (mlp_) {
+    PROFILE_EVENT_SCOPE(CommonMlp, "CommonMlp", forwarding_context.GetCurrentRank());
+    return mlp_->Forward(hidden_buffer_tensors_0, reduce_buffer_tensors, is_multi_token_forward, forwarding_context);
   }
 
   CREATE_BUFFER_SCOPE(moe_buffer_tensors, moe_buffer_);
@@ -186,13 +202,18 @@ Status KimiK3DecoderLayer::CommonMlp(std::vector<Tensor>& hidden_buffer_tensors_
 KimiK3Model::KimiK3Model(const ModelConfig& model_config, const RuntimeConfig& runtime_config, const int rank,
                          std::shared_ptr<Context> context, std::shared_ptr<BaseWeight> base_weight,
                          std::shared_ptr<BaseModelCacheLayout> block_cache_layout)
-    : CommonModel(model_config, runtime_config, rank, context),
-      first_k_dense_replace_(model_config.moe_config.first_k_dense_replace) {
+    : CommonModel(model_config, runtime_config, rank, context) {
   ModelRunConfig model_run_config;
   model_run_config.position_encoding =
       model_config.mla_config.mla_use_nope ? PositionEncoding::NO_ROPE : PositionEncoding::ROPE;
 
   CommonModel::InitRunConfig(model_run_config, base_weight, block_cache_layout);
+}
+
+void KimiK3Model::RegisterInflightResources(InflightResourceManager& mgr) {
+  auto slot_res = std::make_shared<CompressorSlotResource>();
+  slot_res->Init(runtime_config_);
+  mgr.RegisterResource("mamba_slot", std::move(slot_res));
 }
 
 Status KimiK3Model::CreateLayers(LayerCreationContext& creation_context, ModelCreationConfig& model_creation_config) {
@@ -205,9 +226,8 @@ Status KimiK3Model::CreateLayers(LayerCreationContext& creation_context, ModelCr
   moe_buffer_ = CommonModel::GetBufferManager()->CreateBufferTensor("moe_buffer_", {moe_buffer_size}, weight_type);
 
   for (int layer_idx = pipeline_config_.lower_layer_idx; layer_idx <= pipeline_config_.upper_layer_idx; ++layer_idx) {
-    const bool is_moe = layer_idx >= first_k_dense_replace_;
-    layers_[layer_idx] = std::make_shared<KimiK3DecoderLayer>(layer_idx, is_moe, creation_context,
-                                                              model_creation_config, mla_buffers_, moe_buffer_);
+    layers_[layer_idx] = std::make_shared<KimiK3DecoderLayer>(layer_idx, creation_context, model_creation_config,
+                                                              mla_buffers_, moe_buffer_);
   }
   if (context_->global->IsSamplingNode()) {
     output_attn_res_ = std::make_unique<AttnRes>("model.output_attn_res", creation_context);

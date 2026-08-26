@@ -6,8 +6,7 @@
 
 namespace ksana_llm {
 
-std::unique_ptr<SharedAttentionMeta> DeepSeekV3AttentionMetaCreator::CreateSharedAttentionMeta() {
-  auto meta = std::make_unique<DeepSeekV3SharedAttentionMeta>();
+void DeepSeekV3AttentionMetaCreator::InitDeepSeekV3SharedMeta(DeepSeekV3SharedAttentionMeta* meta) {
   InitStandardSharedAttentionMeta(*meta);
 
   const ModelConfig& model_config = config_.model_config;
@@ -28,7 +27,11 @@ std::unique_ptr<SharedAttentionMeta> DeepSeekV3AttentionMetaCreator::CreateShare
     meta->dp_flexible_offset_uint64_tensor =
         Tensor(MemoryLocation::LOCATION_DEVICE, TYPE_UINT64, {runtime_config.max_batch_size + 1});
   }
+}
 
+std::unique_ptr<SharedAttentionMeta> DeepSeekV3AttentionMetaCreator::CreateSharedAttentionMeta() {
+  auto meta = std::make_unique<DeepSeekV3SharedAttentionMeta>();
+  InitDeepSeekV3SharedMeta(meta.get());
   return meta;
 }
 

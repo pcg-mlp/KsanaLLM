@@ -1290,10 +1290,8 @@ void ScheduleConfigParser::InitializeKVCacheConfigs(const ModelConfig &model_con
 
   // Store Mamba state block size and backend capacity if the "mamba-state" layout is registered.
   if (block_cache_layout->IsBlockCacheTypeExist("mamba-state")) {
-    auto mamba_layout =
-        std::dynamic_pointer_cast<MambaBlockCacheLayout>(block_cache_layout->GetBlockCacheLayout("mamba-state"));
-    KLLM_CHECK_WITH_INFO(mamba_layout != nullptr, "mamba-state must use MambaBlockCacheLayout");
-    block_manager_config_.mamba_device_allocator_config.block_size = mamba_layout->GetBlockCacheSize();
+    block_manager_config_.mamba_device_allocator_config.block_size =
+        block_cache_layout->GetBlockCacheLayout("mamba-state")->GetBlockCacheSize();
     block_manager_config_.mamba_device_allocator_config.device = MemoryDevice::MEMORY_DEVICE;
   }
 }

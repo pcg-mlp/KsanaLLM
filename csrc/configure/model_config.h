@@ -319,42 +319,18 @@ struct DsparkConfig {
 };
 
 // Kimi-K3 Kimi Linear (KDA) hybrid attention config.
-// Kimi Linear interleaves KDA linear-attention layers with a few full (MLA)
-// attention layers. `full_attn_layers` lists the layer ids using full MLA
-// attention; `kda_layers` lists the layer ids using KDA linear attention.
 struct KimiLinearAttnConfig {
-  std::vector<uint32_t> full_attn_layers;
-  std::vector<uint32_t> kda_layers;
-  uint32_t num_heads = 0;
   uint32_t head_dim = 0;
   uint32_t short_conv_kernel_size = 0;
   float gate_lower_bound = 0.0f;
-  bool use_full_rank_gate = false;
+  bool use_full_rank_gate = true;
 
-  // config.json kda_layers/full_attn_layers are 1-based (doc 1.2).
+  // config.json kda_layers/full_attn_layers are 1-based.
   // layer_idx is 0-based; convert via (layer_idx + 1) for the lookup.
-  bool IsKdaLayer(int layer_idx) const {
-    std::unordered_set<int> kda_1based(kda_layers.begin(), kda_layers.end());
-    return kda_1based.count(layer_idx + 1) > 0;
-  }
-};
+  std::unordered_set<uint32_t> kda_layers;
 
-// Kimi-K3 vision tower config (multimodal).
-struct KimiK3VisionConfig {
-  uint32_t patch_size = 0;
-  uint32_t mm_hidden_size = 0;
-  uint32_t vt_hidden_size = 0;
-  uint32_t vt_intermediate_size = 0;
-  uint32_t vt_num_attention_heads = 0;
-  uint32_t vt_num_hidden_layers = 0;
-  uint32_t text_hidden_size = 0;
-  uint32_t qkv_hidden_size = 0;
-  std::string mm_projector_type;
-  std::string merge_type;
-  std::vector<uint32_t> merge_kernel_size;
-  std::string activation_func;
-  std::string norm_type;
-  float projector_ln_eps = 1e-5f;
+  // Check whether the given 0-based layer index uses linear (KDA) attention.
+  bool IsKdaLayer(int layer_idx) const { return kda_layers.count(static_cast<uint32_t>(layer_idx) + 1) > 0; }
 };
 
 // The model informations.
@@ -419,9 +395,6 @@ struct ModelConfig {
 
   // Determines if the model is a visual llm model.
   bool is_visual = false;
-
-  // GDN+full-attn hybrid. GDN uses per-request slot pool; not prefix-cache-compatible (SplitFuse OK).
-  bool use_linear_attn = false;
 
   // 统计 [lower_layer_idx, upper_layer_idx] 区间内 layer_types 为 'L' 的层数
   // （长度一致性由各模型 attributes 归一化保证，num_layer 被 override 截尾时
@@ -513,14 +486,10 @@ struct ModelConfig {
   // for deepseek_v4
   uint32_t num_hash_layers = 0;
 
-  // for kimi_k3 (Kimi Linear hybrid KDA/MLA + MoE, multimodal)
-  // Kimi Linear (KDA) hybrid attention.
-  bool use_kimi_linear = false;
+  // GDN/KDA+full-attn hybrid.
+  bool use_linear_attn = false;
+  // For Kimi Linear hybrid KDA/MLA.
   KimiLinearAttnConfig kimi_linear_config;
-  // Vision tower (multimodal).
-  bool has_vision = false;
-  KimiK3VisionConfig kimi_k3_vision_config;
-  uint32_t media_placeholder_token_id = 0;
 };
 
 }  // namespace ksana_llm

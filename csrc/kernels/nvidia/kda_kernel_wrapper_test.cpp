@@ -113,13 +113,13 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaSmallGridLaunches) {
   DeviceBuffer beta(kTokenHeads * sizeof(float));
   DeviceBuffer a_log(kNumHeads * sizeof(float));
   DeviceBuffer dt_bias(kTokenHeadDim * sizeof(float));
-  DeviceBuffer cu_seqlens(2 * sizeof(int32_t));
+  DeviceBuffer cu_seqlens(2 * sizeof(uint64_t));
   DeviceBuffer chunk_indices(kNumChunks * 2 * sizeof(int32_t));
   DeviceBuffer chunk_offsets(2 * sizeof(int32_t));
   DeviceBuffer state_indices(sizeof(int32_t));
   DeviceBuffer state(kStateElements * kSsmBytes);
   DeviceBuffer output(kTokenVectorElements * kBf16Bytes);
-  cu_seqlens.Upload<int32_t>({0, kNumTokens});
+  cu_seqlens.Upload<uint64_t>({0, kNumTokens});
   chunk_indices.Upload<int32_t>({0, 0, 0, 1});
   chunk_offsets.Upload<int32_t>({0, kNumChunks});
   state_indices.Upload<int32_t>({0});
@@ -134,7 +134,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaSmallGridLaunches) {
   params.beta = beta.As<float>();
   params.a_log = a_log.As<float>();
   params.dt_bias = dt_bias.As<float>();
-  params.cu_seqlens = cu_seqlens.As<int32_t>();
+  params.cu_seqlens = cu_seqlens.As<uint64_t>();
   params.chunk_indices = chunk_indices.As<int32_t>();
   params.chunk_offsets = chunk_offsets.As<int32_t>();
   params.state = state.data();
@@ -161,14 +161,14 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaLargeGridLaunches) {
   DeviceBuffer beta(token_heads * sizeof(float));
   DeviceBuffer a_log(kNumHeads * sizeof(float));
   DeviceBuffer dt_bias(kTokenHeadDim * sizeof(float));
-  DeviceBuffer cu_seqlens((kSequences + 1) * sizeof(int32_t));
+  DeviceBuffer cu_seqlens((kSequences + 1) * sizeof(uint64_t));
   DeviceBuffer chunk_indices(kSequences * 2 * sizeof(int32_t));
   DeviceBuffer chunk_offsets((kSequences + 1) * sizeof(int32_t));
   DeviceBuffer state_indices(kSequences * sizeof(int32_t));
   DeviceBuffer state(static_cast<size_t>(kSequences) * kStateElements * kSsmBytes);
   DeviceBuffer output(token_vector_elements * kBf16Bytes);
 
-  std::vector<int32_t> cu(kSequences + 1);
+  std::vector<uint64_t> cu(kSequences + 1);
   std::vector<int32_t> chunks(kSequences * 2);
   std::vector<int32_t> offsets(kSequences + 1);
   std::vector<int32_t> indices(kSequences);
@@ -196,7 +196,7 @@ TEST_F(KdaKernelWrapperTest, ChunkKdaLargeGridLaunches) {
   params.beta = beta.As<float>();
   params.a_log = a_log.As<float>();
   params.dt_bias = dt_bias.As<float>();
-  params.cu_seqlens = cu_seqlens.As<int32_t>();
+  params.cu_seqlens = cu_seqlens.As<uint64_t>();
   params.chunk_indices = chunk_indices.As<int32_t>();
   params.chunk_offsets = chunk_offsets.As<int32_t>();
   params.state = state.data();
@@ -250,12 +250,12 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeAndVerifyLaunch) {
   DeviceBuffer output(kTokens * kTokenHeadDim * kBf16Bytes);
   DeviceBuffer state(kStateElements * kSsmBytes);
   DeviceBuffer state_indices(sizeof(int32_t));
-  DeviceBuffer cu_seqlens(2 * sizeof(int32_t));
+  DeviceBuffer cu_seqlens(2 * sizeof(uint64_t));
   DeviceBuffer intermediate_indices(sizeof(int32_t));
   DeviceBuffer intermediate(static_cast<size_t>(kTokens) * kStateElements * kSsmBytes);
   DeviceBuffer parents(kTokens * sizeof(int32_t));
   state_indices.Upload<int32_t>({0});
-  cu_seqlens.Upload<int32_t>({0, kTokens});
+  cu_seqlens.Upload<uint64_t>({0, kTokens});
   intermediate_indices.Upload<int32_t>({0});
 
   auto launch = [&](KdaForwardMode mode, void* intermediate_states, const int32_t* intermediate_state_indices,
@@ -272,7 +272,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeAndVerifyLaunch) {
     params.output = output.As<__nv_bfloat16>();
     params.state = state.data();
     params.state_indices = state_indices.As<int32_t>();
-    params.cu_seqlens = cu_seqlens.As<int32_t>();
+    params.cu_seqlens = cu_seqlens.As<uint64_t>();
     params.intermediate_states = intermediate_states;
     params.intermediate_state_indices = intermediate_state_indices;
     params.retrieve_parent_token = retrieve_parent_token;
@@ -316,9 +316,9 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeBf16StateLaunches) {
   DeviceBuffer output(kTokens * kTokenHeadDim * kBf16Bytes);
   DeviceBuffer state(kStateElements * kBf16Bytes);
   DeviceBuffer state_indices(sizeof(int32_t));
-  DeviceBuffer cu_seqlens(2 * sizeof(int32_t));
+  DeviceBuffer cu_seqlens(2 * sizeof(uint64_t));
   state_indices.Upload<int32_t>({0});
-  cu_seqlens.Upload<int32_t>({0, kTokens});
+  cu_seqlens.Upload<uint64_t>({0, kTokens});
 
   KdaRecurrentUpdateParams params;
   params.mode = KdaForwardMode::kDecode;
@@ -333,7 +333,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeBf16StateLaunches) {
   params.state = state.data();
   params.ssm_dtype = DataType::TYPE_BF16;
   params.state_indices = state_indices.As<int32_t>();
-  params.cu_seqlens = cu_seqlens.As<int32_t>();
+  params.cu_seqlens = cu_seqlens.As<uint64_t>();
   params.qkv_token_stride = static_cast<int>(kTokenHeadDim);
   params.num_tokens = kTokens;
   params.num_sequences = 1;
@@ -350,12 +350,12 @@ TEST_F(KdaKernelWrapperTest, CausalConvAndGatedNormLaunch) {
   DeviceBuffer conv_state(9 * kTokenHeadDim * kBf16Bytes);
   DeviceBuffer indices(sizeof(int32_t));
   DeviceBuffer has_initial(sizeof(uint8_t));
-  DeviceBuffer cu_seqlens(2 * sizeof(int32_t));
+  DeviceBuffer cu_seqlens(2 * sizeof(uint64_t));
   DeviceBuffer output(kTokens * kQkvDim * kBf16Bytes);
   DeviceBuffer cache_seqlens(sizeof(int32_t));
   indices.Upload<int32_t>({0});
   has_initial.Upload<uint8_t>({0});
-  cu_seqlens.Upload<int32_t>({0, kTokens});
+  cu_seqlens.Upload<uint64_t>({0, kTokens});
   cache_seqlens.Upload<int32_t>({0});
 
   KdaCausalConv1dParams prefill_conv;
@@ -364,15 +364,14 @@ TEST_F(KdaKernelWrapperTest, CausalConvAndGatedNormLaunch) {
   prefill_conv.conv_state = conv_state.As<__nv_bfloat16>();
   prefill_conv.state_indices = indices.As<int32_t>();
   prefill_conv.has_initial_state = has_initial.As<bool>();
-  prefill_conv.cu_seqlens = cu_seqlens.As<int32_t>();
+  prefill_conv.cu_seqlens = cu_seqlens.As<uint64_t>();
   prefill_conv.output = output.As<__nv_bfloat16>();
   prefill_conv.num_cache_lines = 1;
   prefill_conv.num_sequences = 1;
   prefill_conv.max_seq_len = kTokens;
   prefill_conv.num_channels = static_cast<int>(kTokenHeadDim);
   prefill_conv.x_strides = {0, 1, static_cast<int>(kTokenHeadDim)};
-  prefill_conv.state_strides = {kKdaConvStateLen * static_cast<int>(kTokenHeadDim), 1,
-                                static_cast<int>(kTokenHeadDim)};
+  prefill_conv.state_strides = {kKdaConvStateLen * static_cast<int>(kTokenHeadDim), 1, static_cast<int>(kTokenHeadDim)};
   prefill_conv.output_strides = {0, 1, static_cast<int>(kTokenHeadDim)};
   ExpectLaunchOk([&] { InvokeCausalConv1dFn(prefill_conv, stream_); });
 

@@ -42,7 +42,6 @@ TEST(KimiK3ConfigTest, IsKdaLayer_BasicKdaLayer) {
 TEST(KimiK3ConfigTest, IsKdaLayer_MlaLayer) {
   KimiLinearAttnConfig config;
   config.kda_layers = {2, 3, 5};
-  config.full_attn_layers = {1, 4, 6};
   // KDA layers (0-based idx → 1-based: 1→2, 2→3, 4→5 are in kda_layers).
   EXPECT_TRUE(config.IsKdaLayer(1));  // 1+1=2 ∈ {2,3,5}
   EXPECT_TRUE(config.IsKdaLayer(2));  // 2+1=3 ∈ {2,3,5}
@@ -53,9 +52,9 @@ TEST(KimiK3ConfigTest, IsKdaLayer_MlaLayer) {
   EXPECT_FALSE(config.IsKdaLayer(5));  // 5+1=6 ∉ {2,3,5}
 }
 
-TEST(KimiK3ConfigTest, IsKdaLayer_EmptyKdaLayers) {
+TEST(KimiK3ConfigTest, IsKdaLayer_EmptyLayers) {
   KimiLinearAttnConfig config;
-  // No KDA layers at all → all layers are MLA.
+  EXPECT_TRUE(config.kda_layers.empty());
   EXPECT_FALSE(config.IsKdaLayer(0));
   EXPECT_FALSE(config.IsKdaLayer(100));
 }
@@ -74,6 +73,7 @@ TEST(KimiK3ConfigTest, PrepareKimiK3Attributes_FullConfig) {
   nlohmann::json config_json = R"({
     "hidden_size": 7168,
     "num_hidden_layers": 93,
+    "num_attention_heads": 96,
     "vocab_size": 200000,
     "rms_norm_eps": 1e-6,
     "max_position_embeddings": 262144,
@@ -101,7 +101,6 @@ TEST(KimiK3ConfigTest, PrepareKimiK3Attributes_FullConfig) {
     "routed_expert_hidden_size": 3584,
     "latent_moe_use_norm": true,
     "linear_attn_config": {
-      "full_attn_layers": [1, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 68, 72, 76, 80, 84, 88],
       "kda_layers": [2, 3, 5, 7, 9, 10, 11, 13, 14, 15],
       "num_heads": 96,
       "head_dim": 128,
@@ -159,12 +158,10 @@ TEST(KimiK3ConfigTest, PrepareKimiK3Attributes_FullConfig) {
   EXPECT_TRUE(model_config.moe_config.latent_moe_use_norm);
 
   // Kimi Linear (KDA) config.
-  EXPECT_TRUE(model_config.use_kimi_linear);
-  EXPECT_EQ(model_config.kimi_linear_config.full_attn_layers.size(), 24u);
+  EXPECT_TRUE(model_config.use_linear_attn);
   EXPECT_EQ(model_config.kimi_linear_config.kda_layers.size(), 10u);
-  EXPECT_EQ(model_config.kimi_linear_config.num_heads, 96u);
-  EXPECT_EQ(model_config.kimi_linear_config.head_dim, 128u);
   EXPECT_EQ(model_config.kimi_linear_config.short_conv_kernel_size, 4u);
+  EXPECT_EQ(model_config.kimi_linear_config.head_dim, 128u);
   EXPECT_FLOAT_EQ(model_config.kimi_linear_config.gate_lower_bound, -5.0f);
   EXPECT_TRUE(model_config.kimi_linear_config.use_full_rank_gate);
 
@@ -189,7 +186,7 @@ TEST(KimiK3ConfigTest, PrepareKimiK3Attributes_Defaults) {
   EXPECT_EQ(model_config.mla_config.q_lora_rank, 0u);  // q_lora_rank not present
   EXPECT_EQ(model_config.mla_config.kv_lora_rank, 512u);
   EXPECT_EQ(model_config.moe_config.num_experts, 896u);
-  EXPECT_FALSE(model_config.use_kimi_linear);  // No linear_attn_config
+  EXPECT_FALSE(model_config.use_linear_attn);  // No linear_attn_config
   EXPECT_EQ(model_config.attn_res_config.attn_res_block_size, 0u);
 }
 
@@ -240,73 +237,13 @@ TEST(KimiK3ConfigTest, PrepareKimiK3Attributes_MoeNotNoauxTc) {
   EXPECT_FALSE(model_config.moe_config.use_e_score_correction_bias);
 }
 
-// --- PrepareKimiK3VisionAttributes ---
-
-TEST(KimiK3ConfigTest, PrepareKimiK3VisionAttributes_FullConfig) {
-  nlohmann::json vision_json = R"({
-    "patch_size": 14,
-    "mm_hidden_size": 1024,
-    "vt_hidden_size": 2048,
-    "vt_intermediate_size": 8192,
-    "vt_num_attention_heads": 16,
-    "vt_num_hidden_layers": 32,
-    "text_hidden_size": 7168,
-    "qkv_hidden_size": 3072,
-    "mm_projector_type": "patchmergerv2",
-    "merge_type": "sd2_tpool",
-    "merge_kernel_size": [3, 3],
-    "activation_func": "gelu",
-    "norm_type": "rmsnorm",
-    "projector_ln_eps": 1e-6
-  })"_json;
-
-  ModelConfig model_config;
-  PrepareKimiK3VisionAttributes(vision_json, model_config);
-
-  const auto& v = model_config.kimi_k3_vision_config;
-  EXPECT_EQ(v.patch_size, 14u);
-  EXPECT_EQ(v.mm_hidden_size, 1024u);
-  EXPECT_EQ(v.vt_hidden_size, 2048u);
-  EXPECT_EQ(v.vt_intermediate_size, 8192u);
-  EXPECT_EQ(v.vt_num_attention_heads, 16u);
-  EXPECT_EQ(v.vt_num_hidden_layers, 32u);
-  EXPECT_EQ(v.text_hidden_size, 7168u);
-  EXPECT_EQ(v.qkv_hidden_size, 3072u);
-  EXPECT_EQ(v.mm_projector_type, "patchmergerv2");
-  EXPECT_EQ(v.merge_type, "sd2_tpool");
-  ASSERT_EQ(v.merge_kernel_size.size(), 2u);
-  EXPECT_EQ(v.merge_kernel_size[0], 3u);
-  EXPECT_EQ(v.merge_kernel_size[1], 3u);
-  EXPECT_EQ(v.activation_func, "gelu");
-  EXPECT_EQ(v.norm_type, "rmsnorm");
-  EXPECT_FLOAT_EQ(v.projector_ln_eps, 1e-6f);
-}
-
-TEST(KimiK3ConfigTest, PrepareKimiK3VisionAttributes_Defaults) {
-  nlohmann::json vision_json = "{}"_json;
-  ModelConfig model_config;
-  PrepareKimiK3VisionAttributes(vision_json, model_config);
-
-  const auto& v = model_config.kimi_k3_vision_config;
-  EXPECT_EQ(v.patch_size, 14u);
-  EXPECT_EQ(v.mm_hidden_size, 1024u);
-  EXPECT_EQ(v.vt_hidden_size, 1024u);
-  EXPECT_EQ(v.mm_projector_type, "patchmergerv2");
-  EXPECT_EQ(v.merge_type, "sd2_tpool");
-  EXPECT_EQ(v.activation_func, "gelu_pytorch_tanh");
-  EXPECT_EQ(v.norm_type, "rmsnorm");
-  EXPECT_FLOAT_EQ(v.projector_ln_eps, 1e-5f);
-}
-
 // --- KimiK3Config struct defaults ---
 
 TEST(KimiK3ConfigTest, StructDefaults) {
   KimiK3Config config;
-  EXPECT_FALSE(config.use_kimi_linear);
+  EXPECT_TRUE(config.kimi_linear_config.kda_layers.empty());
   EXPECT_FLOAT_EQ(config.activation_situ_beta, 0.0f);
   EXPECT_FLOAT_EQ(config.activation_situ_linear_beta, 0.0f);
-  EXPECT_FALSE(config.has_vision);
-  EXPECT_EQ(config.media_placeholder_token_id, 0u);
 }
 
 // --- Weight name classification tests ---
@@ -428,12 +365,9 @@ TEST(KimiK3WeightNameTest, MoeExpertNames_Routing) {
 
 TEST(KimiK3WeightNameTest, FilterWeightNames_SkipList) {
   // These should be filtered by FilterWeightNames.
-  std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "vision_tower.", "mm_projector.",
-                                        "rotary_emb.inv_freq"};
+  std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "rotary_emb.inv_freq"};
 
   EXPECT_TRUE(CheckWeightNameMatched("model.layers.0.self_attn.rotary_emb.inv_freq", skip_list, false));
-  EXPECT_TRUE(CheckWeightNameMatched("vision_tower.vision_tower.blocks.0.weight", skip_list, false));
-  EXPECT_TRUE(CheckWeightNameMatched("mm_projector.linear1.weight", skip_list, false));
   EXPECT_TRUE(CheckWeightNameMatched("model.layers.0.rotary_emb.inv_freq", skip_list, false));
 
   // These should NOT be filtered.
@@ -710,11 +644,7 @@ class KimiK3WeightLoaderIntegrationTest : public testing::Test {
     config_->mla_config.v_head_dim = 32;
     config_->mla_config.mla_use_nope = true;
     config_->mla_config.mla_use_output_gate = true;
-    config_->use_kimi_linear = true;
     config_->kimi_linear_config.kda_layers = {2, 3};
-    config_->kimi_linear_config.full_attn_layers = {1};
-    config_->kimi_linear_config.num_heads = 2;
-    config_->kimi_linear_config.head_dim = 64;
     config_->is_moe = true;
     config_->moe_config.num_experts = 2;
     config_->moe_config.moe_inter_size = 64;
@@ -772,13 +702,11 @@ TEST_F(KimiK3WeightLoaderIntegrationTest, ConstructWeightLoader) {
 
 // --- FilterWeightNames ---
 
-TEST_F(KimiK3WeightLoaderIntegrationTest, FilterWeightNames_SkipsVisionAndRotary) {
+TEST_F(KimiK3WeightLoaderIntegrationTest, FilterWeightNames_SkipsRotary) {
   auto loader = MakeLoader();
   std::vector<std::string> names = {
       "model.layers.0.self_attn.q_a_proj.weight",
       "model.layers.0.self_attn.rotary_emb.inv_freq",
-      "vision_tower.blocks.0.weight",
-      "mm_projector.linear1.weight",
       "model.embed_tokens.weight",
       "lm_head.weight",
       "model.layers.0.input_layernorm.weight",
@@ -786,8 +714,6 @@ TEST_F(KimiK3WeightLoaderIntegrationTest, FilterWeightNames_SkipsVisionAndRotary
   EXPECT_TRUE(loader->FilterWeightNames(names).OK());
   std::unordered_set<std::string> remaining(names.begin(), names.end());
   EXPECT_EQ(remaining.count("model.layers.0.self_attn.rotary_emb.inv_freq"), 0u);
-  EXPECT_EQ(remaining.count("vision_tower.blocks.0.weight"), 0u);
-  EXPECT_EQ(remaining.count("mm_projector.linear1.weight"), 0u);
   EXPECT_EQ(remaining.count("model.layers.0.self_attn.q_a_proj.weight"), 1u);
   EXPECT_EQ(remaining.count("model.embed_tokens.weight"), 1u);
   EXPECT_EQ(remaining.count("lm_head.weight"), 1u);

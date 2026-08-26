@@ -34,7 +34,10 @@ class DeepSeekV3AttentionMetaCreator : public AttentionMetaCreator {
 
   // Override to reset indexer shared tensor cursors before each batch.
   MetaArrays BuildAttentionMetas(const std::vector<ForwardRequest>& forward_reqs, uint32_t attn_dp_group_id,
-                                  SharedAttentionMeta& shared_meta) override;
+                                 SharedAttentionMeta& shared_meta) override;
+
+ protected:
+  void InitDeepSeekV3SharedMeta(DeepSeekV3SharedAttentionMeta* meta);
 };
 
 }  // namespace ksana_llm

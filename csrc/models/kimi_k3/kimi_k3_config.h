@@ -14,30 +14,6 @@
 
 namespace ksana_llm {
 
-// Parse Kimi-K3 vision tower config (from top-level "vision_config").
-inline void PrepareKimiK3VisionAttributes(const nlohmann::json& vision_json, ModelConfig& model_config) {
-  auto& v = model_config.kimi_k3_vision_config;
-  v.patch_size = vision_json.value("patch_size", 14);
-  v.mm_hidden_size = vision_json.value("mm_hidden_size", 1024);
-  v.vt_hidden_size = vision_json.value("vt_hidden_size", 1024);
-  v.vt_intermediate_size = vision_json.value("vt_intermediate_size", 4096);
-  v.vt_num_attention_heads = vision_json.value("vt_num_attention_heads", 12);
-  v.vt_num_hidden_layers = vision_json.value("vt_num_hidden_layers", 27);
-  v.text_hidden_size = vision_json.value("text_hidden_size", 7168);
-  v.qkv_hidden_size = vision_json.value("qkv_hidden_size", 1536);
-  v.mm_projector_type = vision_json.value("mm_projector_type", "patchmergerv2");
-  v.merge_type = vision_json.value("merge_type", "sd2_tpool");
-  if (vision_json.contains("merge_kernel_size")) {
-    v.merge_kernel_size = vision_json["merge_kernel_size"].get<std::vector<uint32_t>>();
-  }
-  v.activation_func = vision_json.value("activation_func", "gelu_pytorch_tanh");
-  v.norm_type = vision_json.value("norm_type", "rmsnorm");
-  v.projector_ln_eps = vision_json.value("projector_ln_eps", 1e-5f);
-  KLLM_LOG_INFO << fmt::format(
-      "Kimi-K3 vision: vt_hidden_size: {}, vt_num_hidden_layers: {}, patch_size: {}, mm_projector_type: {}",
-      v.vt_hidden_size, v.vt_num_hidden_layers, v.patch_size, v.mm_projector_type);
-}
-
 // Parse Kimi-K3 LLM backbone attributes (from "text_config", model_type "kimi_linear").
 // NOTE: `config_json` here must already be the text_config sub-object.
 inline void PrepareKimiK3Attributes(const nlohmann::json& config_json, ModelConfig& model_config) {
@@ -92,30 +68,32 @@ inline void PrepareKimiK3Attributes(const nlohmann::json& config_json, ModelConf
 
   // 5. Kimi Linear (KDA) hybrid attention config.
   if (config_json.contains("linear_attn_config")) {
-    const auto& la = config_json["linear_attn_config"];
-    model_config.use_kimi_linear = true;
-    if (la.contains("full_attn_layers")) {
-      model_config.kimi_linear_config.full_attn_layers = la["full_attn_layers"].get<std::vector<uint32_t>>();
+    const auto& linear_attn_json = config_json["linear_attn_config"];
+    auto& kimi_linear_config = model_config.kimi_linear_config;
+    kimi_linear_config.head_dim = linear_attn_json.value("head_dim", model_config.mla_config.v_head_dim);
+    kimi_linear_config.short_conv_kernel_size = linear_attn_json.value("short_conv_kernel_size", 4u);
+    kimi_linear_config.use_full_rank_gate = linear_attn_json.value("use_full_rank_gate", true);
+    if (linear_attn_json.contains("gate_lower_bound") && !linear_attn_json["gate_lower_bound"].is_null()) {
+      kimi_linear_config.gate_lower_bound = linear_attn_json["gate_lower_bound"].get<float>();
     }
-    if (la.contains("kda_layers")) {
-      model_config.kimi_linear_config.kda_layers = la["kda_layers"].get<std::vector<uint32_t>>();
+
+    // Layers using KDA; the remaining ones use full (MLA) attention.
+    if (linear_attn_json.contains("kda_layers") && linear_attn_json["kda_layers"].is_array()) {
+      for (const auto& layer_idx : linear_attn_json["kda_layers"]) {
+        kimi_linear_config.kda_layers.insert(layer_idx.get<uint32_t>());
+      }
+      if (!kimi_linear_config.kda_layers.empty()) {
+        model_config.use_linear_attn = true;
+      }
     }
-    model_config.kimi_linear_config.num_heads = la.value("num_heads", 96);
-    model_config.kimi_linear_config.head_dim = la.value("head_dim", 128);
-    model_config.kimi_linear_config.short_conv_kernel_size = la.value("short_conv_kernel_size", 4);
-    model_config.kimi_linear_config.gate_lower_bound = la.value("gate_lower_bound", -5.0f);
-    model_config.kimi_linear_config.use_full_rank_gate = la.value("use_full_rank_gate", true);
+
+    KLLM_CHECK_WITH_INFO(kimi_linear_config.head_dim == model_config.mla_config.v_head_dim,
+                         "linear_attn_config.head_dim must equal v_head_dim");
+    KLLM_CHECK_WITH_INFO(linear_attn_json.value("num_heads", model_config.head_num) == model_config.head_num,
+                         "linear_attn_config.num_heads must equal num_attention_heads");
   }
   // For attn_res config
   model_config.attn_res_config.attn_res_block_size = config_json.value("attn_res_block_size", 0u);
-
-  KLLM_LOG_INFO << fmt::format(
-      "Using kimi_k3 model, num_experts: {}, num_shared_experts: {}, experts_topk: {}, moe_inter_size: {}, "
-      "use_kimi_linear: {}, full_attn_layers: {}, kda_layers: {}, activation: {}",
-      model_config.moe_config.num_experts, model_config.moe_config.num_shared_experts,
-      model_config.moe_config.experts_topk, model_config.moe_config.moe_inter_size, model_config.use_kimi_linear,
-      model_config.kimi_linear_config.full_attn_layers.size(), model_config.kimi_linear_config.kda_layers.size(),
-      model_config.activation_function);
 }
 
 // Executor-side config struct for Kimi-K3. Reuses DeepSeekV3Config for the MLA/MoE
@@ -124,17 +102,11 @@ struct KimiK3Config : public DeepSeekV3Config {
   virtual ~KimiK3Config() {}
 
   // Kimi Linear (KDA) hybrid attention.
-  bool use_kimi_linear = false;
   KimiLinearAttnConfig kimi_linear_config;
 
   // "situ" activation parameters.
   float activation_situ_beta = 0.0f;
   float activation_situ_linear_beta = 0.0f;
-
-  // Vision tower (multimodal).
-  bool has_vision = false;
-  KimiK3VisionConfig kimi_k3_vision_config;
-  uint32_t media_placeholder_token_id = 0;
 
   AttnResConfig attn_res_config;
 };

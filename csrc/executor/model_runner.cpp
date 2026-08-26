@@ -157,8 +157,7 @@ void ModelRunner::GetHiddenShape(const std::shared_ptr<ScheduleOutput>& schedule
   if (attn_res_block_size > 0) {
     PipelineConfig pipeline_config;
     Singleton<Environment>::GetInstance()->GetPipelineConfig(pipeline_config);
-    per_token_width = static_cast<size_t>(DivRoundUp(pipeline_config.upper_layer_idx + 1, attn_res_block_size)) *
-                      model_config.hidden_units;
+    per_token_width *= static_cast<size_t>(DivRoundUp(pipeline_config.upper_layer_idx + 1, attn_res_block_size));
   }
   shape = {total_tokens, per_token_width};
 }

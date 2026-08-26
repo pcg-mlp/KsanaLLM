@@ -28,16 +28,13 @@ namespace ksana_llm {
 //   - MXFP4 (compressed-tensors) quantized routed experts (weight + weight_scale).
 //   - Attention-residual projections (self_attention_res_proj / mlp_res_proj,
 //     output dim == 1, fully replicated).
-//
-// NOTE: the multimodal vision tower (vision_tower.* / mm_projector.*) is filtered
-// out for now and handled in a later multimodal stage.
 class KimiK3WeightLoader : public DeepSeekV3WeightLoader {
  public:
   KimiK3WeightLoader(std::shared_ptr<BaseModelConfig> model_config, std::shared_ptr<Environment> env,
                      std::shared_ptr<Context> context);
   virtual ~KimiK3WeightLoader() override;
 
-  // Do some filter on model weight names (skip vision/mm_projector/rotary + distributed layers).
+  // Do some filter on model weight names (skip rotary + distributed layers).
   virtual Status FilterWeightNames(std::vector<std::string>& weight_names) override;
 
   // Process weights independently (does NOT call V3 parent's ProcessModelWeights).

@@ -1,0 +1,71 @@
+skill_version: "0.4.1"
+status: draft
+complexity: XL
+work_type: feature
+subdomain: models
+cross_subdomains: [cache_manager]
+
+source:
+  type: tapd
+  id: "1070131059136538942"
+  url: "https://tapd.woa.com/tapd_fe/70131059/story/detail/1070131059136538942"
+  workspace_id: "70131059"
+  fetch_status: degraded
+  upload_status: n/a
+
+tapd_sync:
+  last_synced: null
+  action: null
+  entry_type: stories
+  entry_id: "1070131059136538942"
+  workspace_id: "70131059"
+  fields: []
+  artifact: null
+  skipped: user
+
+execution_env:
+  coding:
+    agent: "opencode-glm-5.2"
+    last_active: "2026-08-26T11:05:00+08:00"
+  container:
+    agent: "n/a"
+    last_run: null
+
+models:
+  review: opus
+
+handoff:
+  pending: false
+  manifest: 2-handoff-manifest.json
+  produced_at: null
+  produced_by_commit: null
+  consumed_at: null
+  consumed_by_commit: null
+
+verify_attempts: 0
+max_retries: 3
+
+artifacts:
+  clarification:      {produced_at: "2026-08-26T10:31:57+08:00", stale: false, revision: 1, produced_by_env: coding}
+  context-snapshot:    {produced_at: "2026-08-26T10:31:57+08:00", stale: false, revision: 1, produced_by_env: coding, updated_by_stages: [clarify]}
+  change-plan:         {produced_at: null, stale: false, revision: 0, produced_by_env: n/a}
+  coding-snapshot:      {produced_at: null, stale: false, revision: 0, produced_by_env: n/a}
+  verify-report:
+    compile:     {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    unit:        {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: n/a}
+    integration: {produced_at: null, stale: false, revision: 0, produced_by_env: n/a, result: not_run}
+  reviews:
+    - {produced_at: "2026-08-26T10:45:00+08:00", stale: false, revision: 1, filename: "20260826-1045-go_only.md", mode: go_only, model: "glm-5.2-external"}
+
+knowledge_base_feedback:
+  status: not_started
+  proposal_count: 0
+  applied_at: null
+
+status_history:
+  - {status: draft, at: "2026-08-26T10:31:57+08:00", by: /ai-clarify, env: coding, reason: "reverse-doc from 50261617b (KDA cache layout + attention meta)"}
+
+skipped_phases: []
+paused_from: null
+blocked_reason: null
+blocked_at: null

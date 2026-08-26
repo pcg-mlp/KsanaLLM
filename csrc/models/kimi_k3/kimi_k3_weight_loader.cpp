@@ -25,10 +25,7 @@ KimiK3WeightLoader::KimiK3WeightLoader(std::shared_ptr<BaseModelConfig> model_co
 KimiK3WeightLoader::~KimiK3WeightLoader() {}
 
 Status KimiK3WeightLoader::FilterWeightNames(std::vector<std::string>& weight_names) {
-  // For now, skip the multimodal vision tower and rope inv_freq. The vision tower will be
-  // handled in a later multimodal stage.
-  const std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "vision_tower.", "mm_projector.",
-                                              "rotary_emb.inv_freq"};
+  const std::vector<std::string> skip_list = {"self_attn.rotary_emb.inv_freq", "rotary_emb.inv_freq"};
 
   const int lower_layer_idx = pipeline_config_.lower_layer_idx;
   const int upper_layer_idx = pipeline_config_.upper_layer_idx;
@@ -268,7 +265,7 @@ bool KimiK3WeightLoader::ProcessKdaWeight(const std::string& file_weight_name, c
                                           int dev_rank, std::unordered_map<std::string, Tensor>& device_model_weights) {
   size_t attn_tp_size = context_->global->GetAttentionTensorParallelSize();
   size_t attn_dev_rank = dev_rank % attn_tp_size;
-  size_t kda_num_heads = kimi_k3_config_->kimi_linear_config.num_heads;
+  size_t kda_num_heads = kimi_k3_config_->head_num;
 
   // q/k/v/g_proj: fuse into fused_qkvg_proj.weight (4 segments, column split by attn_tp).
   // b_proj / f_b_proj: column split individually (not fused per design — too small to skew GEMM).
@@ -477,8 +474,6 @@ Status KimiK3WeightLoader::ProcessModelWeights(const std::unordered_map<std::str
 
   size_t moe_inter_size_per_rank =
       DivRoundUp(kimi_k3_config_->moe_config.moe_inter_size, kimi_k3_config_->moe_tensor_para_size);
-  // Kimi-K3 routed experts run in latent space: expert "hidden" == routed_expert_hidden_size.
-  size_t expert_hidden = kimi_k3_config_->moe_config.routed_expert_hidden_size;
 
   for (auto& [file_weight_name, host_weight_tensor] : host_model_weights) {
     KLLM_LOG_INFO << fmt::format("Dev_rank: {}, processing weight: {}, shape: {}, dtype: {}", dev_rank,
