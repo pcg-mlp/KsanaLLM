@@ -9,8 +9,7 @@ file(GLOB_RECURSE MHC_ALL_FILES
   autotuner.py
 )
 
-set(MHC_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/mhc_md5_sum)
-set(MHC_MD5_FILE ${MHC_MD5_SUM_DIR}/.mhc.md5sums)
+ksana_triton_kernel_md5_file(mhc MHC_MD5_FILE)
 
 # TileLang needs libnvrtc symbols visible globally, otherwise kernel generation
 # aborts with "libnvrtc symbols not found globally". Prefer an explicit
@@ -57,30 +56,25 @@ if(EXISTS ${MHC_MD5_FILE})
 endif()
 
 if(MHC_NEED_REGENERATE)
-  message(STATUS "Start generate mhc tilelang kernel")
-
+  message(STATUS "Queue generate mhc tilelang kernel")
+  calculate_files_md5("${MHC_ALL_FILES}" NEW_MD5)
   if(MHC_LD_PRELOAD)
     message(STATUS "MHC compile with LD_PRELOAD=${MHC_LD_PRELOAD}")
-    execute_process(
-      COMMAND ${CMAKE_COMMAND} -E env "LD_PRELOAD=${MHC_LD_PRELOAD}"
-              ${MHC_PYTHON_EXECUTABLE} mhc_compile.py ${TRITON_KERNEL_PATH}
+    ksana_enqueue_triton_gen(
+      NAME mhc
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      RESULT_VARIABLE MHC_RESULT_VARIABLE OUTPUT_VARIABLE MHC_RESULT_OUTPUT)
+      MD5_FILE ${MHC_MD5_FILE}
+      MD5_VALUE ${NEW_MD5}
+      ENV "LD_PRELOAD=${MHC_LD_PRELOAD}"
+      COMMAND ${MHC_PYTHON_EXECUTABLE} mhc_compile.py ${TRITON_KERNEL_PATH})
   else()
-    execute_process(
-      COMMAND ${MHC_PYTHON_EXECUTABLE} mhc_compile.py ${TRITON_KERNEL_PATH}
+    ksana_enqueue_triton_gen(
+      NAME mhc
       WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      RESULT_VARIABLE MHC_RESULT_VARIABLE OUTPUT_VARIABLE MHC_RESULT_OUTPUT)
+      MD5_FILE ${MHC_MD5_FILE}
+      MD5_VALUE ${NEW_MD5}
+      COMMAND ${MHC_PYTHON_EXECUTABLE} mhc_compile.py ${TRITON_KERNEL_PATH})
   endif()
-
-  if(MHC_RESULT_VARIABLE AND NOT MHC_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "${MHC_PYTHON_EXECUTABLE} mhc_compile.py ${TRITON_KERNEL_PATH} with error:\n${MHC_RESULT_OUTPUT}")
-  endif()
-
-  calculate_files_md5("${MHC_ALL_FILES}" NEW_MD5)
-  file(WRITE ${MHC_MD5_FILE} ${NEW_MD5})
-
-  message(STATUS "Success generate mhc tilelang kernel")
 endif()
 endif()
 

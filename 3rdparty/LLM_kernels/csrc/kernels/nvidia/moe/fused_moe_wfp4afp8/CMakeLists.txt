@@ -8,8 +8,7 @@ if (HAS_SM90 OR HAS_SM90A)
     fused_moe_wfp4afp8.py
   )
 
-  set(FUSED_MOE_WFP4AFP8_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/fused_moe_wfp4afp8_md5_sum)
-  set(FUSED_MOE_WFP4AFP8_MD5_FILE ${FUSED_MOE_WFP4AFP8_MD5_SUM_DIR}/.fused_moe_wfp4afp8.md5sums)
+  ksana_triton_kernel_md5_file(fused_moe_wfp4afp8 FUSED_MOE_WFP4AFP8_MD5_FILE)
 
   set(FUSED_MOE_WFP4AFP8_NEED_REGENERATE TRUE)
 
@@ -34,20 +33,15 @@ if (HAS_SM90 OR HAS_SM90A)
   endif()
 
   if(FUSED_MOE_WFP4AFP8_NEED_REGENERATE)
-    message(STATUS "Start generate fused_moe_wfp4afp8 triton kernel")
-
-    execute_process(COMMAND bash fused_moe_wfp4afp8_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-      RESULT_VARIABLE FUSED_MOE_WFP4AFP8_RESULT_VARIABLE OUTPUT_VARIABLE FUSED_MOE_WFP4AFP8_RESULT_OUTPUT)
-
-    if(FUSED_MOE_WFP4AFP8_RESULT_VARIABLE AND NOT FUSED_MOE_WFP4AFP8_RESULT_VARIABLE EQUAL 0)
-      message(FATAL_ERROR "bash fused_moe_wfp4afp8_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH} with error:\n${FUSED_MOE_WFP4AFP8_RESULT_OUTPUT}")
-    endif()
-
+    message(STATUS "Queue generate fused_moe_wfp4afp8 triton kernel")
     calculate_files_md5("${FUSED_MOE_WFP4AFP8_ALL_FILES}" NEW_MD5)
-    file(WRITE ${FUSED_MOE_WFP4AFP8_MD5_FILE} ${NEW_MD5})
-
-    message(STATUS "Success generate fused_moe_wfp4afp8 triton kernel")
+    ksana_enqueue_triton_gen(
+      NAME fused_moe_wfp4afp8
+      WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+      MD5_FILE ${FUSED_MOE_WFP4AFP8_MD5_FILE}
+      MD5_VALUE ${NEW_MD5}
+      MULTI_GPU
+      COMMAND bash fused_moe_wfp4afp8_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH})
   endif()
 
 endif()

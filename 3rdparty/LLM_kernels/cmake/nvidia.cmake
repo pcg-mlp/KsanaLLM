@@ -47,7 +47,12 @@ endforeach()
 message(STATUS "SM_LIST: ${SM_LIST}")
 message(STATUS "HAS_SM80=${HAS_SM80} HAS_SM86=${HAS_SM86} HAS_SM89=${HAS_SM89} HAS_SM90=${HAS_SM90} HAS_SM90A=${HAS_SM90A}")
 
-execute_process(COMMAND mkdir -p ${CMAKE_BINARY_DIR}/triton_kernel_files)
+if(TRITON_KERNEL_PATH)
+  file(MAKE_DIRECTORY "${TRITON_KERNEL_PATH}")
+else()
+  get_filename_component(_ksana_triton_kernel_path "${CMAKE_BINARY_DIR}/../triton_kernel_files" ABSOLUTE)
+  file(MAKE_DIRECTORY "${_ksana_triton_kernel_path}")
+endif()
 
 # fetch 3rdparty
 if(GIT_FOUND)

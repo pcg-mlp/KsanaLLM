@@ -5,8 +5,7 @@ file(GLOB_RECURSE TRITON_MOE_FUSED_MUL_SUM_ALL_FILES
   generate_triton_moe_fused_mul_sum.py
 )
 
-set(TRITON_MOE_FUSED_MUL_SUM_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/triton_moe_fused_mul_sum_md5_sum)
-set(TRITON_MOE_FUSED_MUL_SUM_MD5_FILE ${TRITON_MOE_FUSED_MUL_SUM_MD5_SUM_DIR}/.triton_moe_fused_mul_sum.md5sums)
+ksana_triton_kernel_md5_file(triton_moe_fused_mul_sum TRITON_MOE_FUSED_MUL_SUM_MD5_FILE)
 
 set(TRITON_MOE_FUSED_MUL_SUM_NEED_REGENERATE TRUE)
 
@@ -27,19 +26,12 @@ if(EXISTS ${TRITON_MOE_FUSED_MUL_SUM_MD5_FILE})
 endif()
 
 if(TRITON_MOE_FUSED_MUL_SUM_NEED_REGENERATE)
-  message(STATUS "Start generate triton_moe_fused_mul_sum triton kernel")
-
-  execute_process(COMMAND python triton_moe_fused_mul_sum_creator.py ${TRITON_KERNEL_PATH}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RESULT_VARIABLE TRITON_MOE_FUSED_MUL_SUM_RESULT_VARIABLE
-    OUTPUT_VARIABLE TRITON_MOE_FUSED_MUL_SUM_RESULT_OUTPUT)
-
-  if(TRITON_MOE_FUSED_MUL_SUM_RESULT_VARIABLE AND NOT TRITON_MOE_FUSED_MUL_SUM_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "python triton_moe_fused_mul_sum_creator.py ${TRITON_KERNEL_PATH} with error:\n${TRITON_MOE_FUSED_MUL_SUM_RESULT_OUTPUT}")
-  endif()
-
+  message(STATUS "Queue generate triton_moe_fused_mul_sum triton kernel")
   calculate_files_md5("${TRITON_MOE_FUSED_MUL_SUM_ALL_FILES}" NEW_MD5)
-  file(WRITE ${TRITON_MOE_FUSED_MUL_SUM_MD5_FILE} ${NEW_MD5})
-
-  message(STATUS "Success generate triton_moe_fused_mul_sum triton kernel")
+  ksana_enqueue_triton_gen(
+    NAME triton_moe_fused_mul_sum
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    MD5_FILE ${TRITON_MOE_FUSED_MUL_SUM_MD5_FILE}
+    MD5_VALUE ${NEW_MD5}
+    COMMAND python triton_moe_fused_mul_sum_creator.py ${TRITON_KERNEL_PATH})
 endif()

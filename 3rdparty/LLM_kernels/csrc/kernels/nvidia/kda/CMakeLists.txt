@@ -11,8 +11,7 @@ file(GLOB_RECURSE KDA_ALL_FILES
 )
 list(FILTER KDA_ALL_FILES EXCLUDE REGEX "_test\\.py$")
 
-set(KDA_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/kda_md5_sum)
-set(KDA_MD5_FILE ${KDA_MD5_SUM_DIR}/.kda.md5sums)
+ksana_triton_kernel_md5_file(kda KDA_MD5_FILE)
 
 set(KDA_NEED_REGENERATE TRUE)
 
@@ -42,20 +41,13 @@ if(EXISTS ${KDA_MD5_FILE})
 endif()
 
 if(KDA_NEED_REGENERATE)
-  message(STATUS "Start generate KDA triton kernels")
-
-  execute_process(COMMAND bash kda_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RESULT_VARIABLE KDA_RESULT_VARIABLE
-    OUTPUT_VARIABLE KDA_RESULT_OUTPUT)
-
-  if(KDA_RESULT_VARIABLE AND NOT KDA_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "bash kda_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH} with error:\n${KDA_RESULT_OUTPUT}")
-  endif()
-
+  message(STATUS "Queue generate KDA triton kernels")
   calculate_files_md5("${KDA_ALL_FILES}" NEW_MD5)
-  file(WRITE ${KDA_MD5_FILE} "${NEW_MD5}-${KDA_SSM_DTYPE}")
-
-  message(STATUS "Success generate KDA triton kernels")
+  ksana_enqueue_triton_gen(
+    NAME kda
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    MD5_FILE ${KDA_MD5_FILE}
+    MD5_VALUE "${NEW_MD5}-${KDA_SSM_DTYPE}"
+    COMMAND bash kda_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH})
 endif()
 endif()

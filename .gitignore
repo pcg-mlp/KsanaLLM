@@ -3,6 +3,7 @@ build_release
 debug
 testing
 deps
+/triton_kernel_files/
 
 .roo
 .cursor

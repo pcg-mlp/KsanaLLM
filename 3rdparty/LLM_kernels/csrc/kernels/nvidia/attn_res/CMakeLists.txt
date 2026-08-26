@@ -8,8 +8,7 @@ file(GLOB_RECURSE ATTN_RES_ALL_FILES
   attn_res_kernel.py
 )
 
-set(ATTN_RES_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/attn_res_md5_sum)
-set(ATTN_RES_MD5_FILE ${ATTN_RES_MD5_SUM_DIR}/.attn_res.md5sums)
+ksana_triton_kernel_md5_file(attn_res ATTN_RES_MD5_FILE)
 
 set(ATTN_RES_NEED_REGENERATE TRUE)
 
@@ -30,20 +29,13 @@ if(EXISTS ${ATTN_RES_MD5_FILE})
 endif()
 
 if(ATTN_RES_NEED_REGENERATE)
-  message(STATUS "Start generate attn_res triton kernel")
-
-  execute_process(COMMAND bash attn_res_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RESULT_VARIABLE ATTN_RES_RESULT_VARIABLE
-    OUTPUT_VARIABLE ATTN_RES_RESULT_OUTPUT)
-
-  if(ATTN_RES_RESULT_VARIABLE AND NOT ATTN_RES_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "bash attn_res_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH} with error:\n${ATTN_RES_RESULT_OUTPUT}")
-  endif()
-
+  message(STATUS "Queue generate attn_res triton kernel")
   calculate_files_md5("${ATTN_RES_ALL_FILES}" NEW_MD5)
-  file(WRITE ${ATTN_RES_MD5_FILE} ${NEW_MD5})
-
-  message(STATUS "Success generate attn_res triton kernel")
+  ksana_enqueue_triton_gen(
+    NAME attn_res
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    MD5_FILE ${ATTN_RES_MD5_FILE}
+    MD5_VALUE ${NEW_MD5}
+    COMMAND bash attn_res_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH})
 endif()
 endif()

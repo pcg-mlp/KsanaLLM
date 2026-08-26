@@ -353,6 +353,27 @@ class BuildExt(build_ext_orig):
         if src_dir.exists():
             shutil.copytree(src_dir, dst_dir, dirs_exist_ok=True)
 
+    @staticmethod
+    def _cmake_recorded_triton_kernel_dir(build_temp):
+        """Resolve cubin tree from cmake's build-dir record, not from env."""
+        build_temp = pathlib.Path(build_temp)
+        recorded = build_temp / "triton_kernel_path.txt"
+        if recorded.is_file():
+            path = recorded.read_text(encoding="utf-8").strip()
+            if path:
+                return path
+        cache = build_temp / "CMakeCache.txt"
+        if cache.is_file():
+            for line in cache.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("TRITON_KERNEL_PATH:") and "=" in line:
+                    path = line.split("=", 1)[1].strip()
+                    if path:
+                        return path
+        raise FileNotFoundError(
+            "cmake did not record TRITON_KERNEL_PATH under "
+            f"{build_temp} (expected triton_kernel_path.txt or CMakeCache.txt). "
+            "Configure cmake before packaging.")
+
     def copy_python_files_and_dirs(self, extdir, build_temp, cwd, implemented_endpoints, endpoint_status):
         """
         Copy the required Python files and directories into the package.
@@ -440,14 +461,16 @@ class BuildExt(build_ext_orig):
         dst_dir = extdir.parent / "ksana_llm"
         copy_file(str(src_file), str(dst_dir))
 
-        # Copy triton cubin kernels
-        if 'KSANA_TRITON_KERNEL_PATH' in os.environ:
-            triton_kernel_dir = os.environ['KSANA_TRITON_KERNEL_PATH'] + "/triton_kernel_files"
-        else:
-            home_dir = os.path.expanduser("~")
-            triton_kernel_dir = f"{home_dir}/.cache/KsanaLLM/triton_kernel_files"
+        # Copy triton cubin kernels from the path cmake recorded under build_temp
+        # (CMAKE_BINARY_DIR). Packaging may not have KSANA_TRITON_KERNEL_PATH.
+        triton_kernel_dir = self._cmake_recorded_triton_kernel_dir(build_temp)
         dst_dir = extdir.parent / "ksana_llm" / "triton_kernel_files"
-        shutil.copytree(triton_kernel_dir, dst_dir, dirs_exist_ok=True)
+        # Per-job md5_sum/ ships with the wheel as later integrity metadata.
+        # Creator logs are still build-time only.
+        shutil.copytree(triton_kernel_dir,
+                        dst_dir,
+                        dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(".creator_logs", "*.log"))
 
 
 # Setup configuration for the ksana_llm package
@@ -472,6 +495,8 @@ setup(
             'yaml_env_override.py',
             'utilize/**/*',
             'triton_kernel_files/**/*',
+            # Stamp files are dotfiles under <NAME>/md5_sum/; **/* does not match them.
+            'triton_kernel_files/**/md5_sum/.*',
             'rpc_config/**/*',
             'triton_backend/**/*',
         ],

@@ -23,7 +23,7 @@ fi
 #       4) 退化到单 GPU 0（与旧行为兼容）
 #   - 强制串行：PARALLEL_GPUS="0" bash creator.sh ...
 #
-# 子任务日志：${OUTPUT_DIR}/.creator_logs/<kname>.log
+# 子任务日志：${KSANA_TRITON_GEN_LOG_DIR:-$TMPDIR}/wfp4afp8_creator/<kname>.log
 # 24 个候选组合并发分配到 GPU 池上跑，N 卡近似 N 倍提速。
 # ============================================================================
 
@@ -64,8 +64,15 @@ echo "[wfp4afp8_creator] GPU pool: ${GPU_POOL[*]} (parallelism=${NUM_GPUS})"
 unset CUDA_VISIBLE_DEVICES
 
 # -------- 子任务日志目录 --------
-LOG_DIR="${OUTPUT_DIR}/.creator_logs"
+# 不能落在 OUTPUT_DIR：那是运行期 kernel 缓存目录，会被 setup.py 打进 wheel，
+# 也会被 md5 产物清单收录。cmake 调度器通过 KSANA_TRITON_GEN_LOG_DIR 指定构建日志目录。
+if [[ -n "${KSANA_TRITON_GEN_LOG_DIR:-}" ]]; then
+  LOG_DIR="${KSANA_TRITON_GEN_LOG_DIR}/wfp4afp8_creator"
+else
+  LOG_DIR="${TMPDIR:-/tmp}/wfp4afp8_creator_logs"
+fi
 mkdir -p "$LOG_DIR"
+echo "[wfp4afp8_creator] Per-task logs: ${LOG_DIR}"
 
 # -------- 候选枚举 --------
 # MXFP4 group_size 固定为 32（OCP MX 标准），不再作为外层维度

@@ -83,7 +83,7 @@ class KdaKernelWrapperTest : public testing::Test {
       GTEST_SKIP() << "KDA AOT cubins target SM90; skipping on compute capability " << major;
     }
     const std::string dir = Singleton<TritonWrapper>::GetInstance()->GetKernelsDir();
-    const std::string canary = dir + "/l2norm_fwd_kernel_D_128_BT_16";
+    const std::string canary = dir + "/kda/l2norm_fwd_kernel_D_128_BT_16";
     if (!std::filesystem::exists(canary + ".json") || !std::filesystem::exists(canary + ".cubin")) {
       GTEST_SKIP() << "KDA AOT artifacts not found under " << dir;
     }
@@ -300,7 +300,7 @@ TEST_F(KdaKernelWrapperTest, RecurrentDecodeAndVerifyLaunch) {
 TEST_F(KdaKernelWrapperTest, RecurrentDecodeBf16StateLaunches) {
   const std::string dir = Singleton<TritonWrapper>::GetInstance()->GetKernelsDir();
   const std::string canary =
-      dir + "/fused_sigmoid_gating_delta_rule_update_kernel_H_12_MODE_decode_NP2_1_BK_128_BV_32_LB_0_SSM_bf16";
+      dir + "/kda/fused_sigmoid_gating_delta_rule_update_kernel_H_12_MODE_decode_NP2_1_BK_128_BV_32_LB_0_SSM_bf16";
   if (!std::filesystem::exists(canary + ".json") || !std::filesystem::exists(canary + ".cubin")) {
     GTEST_SKIP() << "BF16 recurrent-state artifacts were not generated";
   }

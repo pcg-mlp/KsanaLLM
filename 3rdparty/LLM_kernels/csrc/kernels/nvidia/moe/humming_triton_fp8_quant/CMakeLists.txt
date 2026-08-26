@@ -6,8 +6,7 @@ file(GLOB_RECURSE TRITON_FP8_QUANT_ALL_FILES
   generate_triton_silu_mul_quant.py
 )
 
-set(TRITON_FP8_QUANT_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/triton_fp8_quant_md5_sum)
-set(TRITON_FP8_QUANT_MD5_FILE ${TRITON_FP8_QUANT_MD5_SUM_DIR}/.triton_fp8_quant.md5sums)
+ksana_triton_kernel_md5_file(triton_fp8_quant TRITON_FP8_QUANT_MD5_FILE)
 
 set(TRITON_FP8_QUANT_NEED_REGENERATE TRUE)
 
@@ -28,19 +27,12 @@ if(EXISTS ${TRITON_FP8_QUANT_MD5_FILE})
 endif()
 
 if(TRITON_FP8_QUANT_NEED_REGENERATE)
-  message(STATUS "Start generate triton_fp8_quant triton kernel")
-
-  execute_process(COMMAND python triton_fp8_quant_creator.py ${TRITON_KERNEL_PATH}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RESULT_VARIABLE TRITON_FP8_QUANT_RESULT_VARIABLE
-    OUTPUT_VARIABLE TRITON_FP8_QUANT_RESULT_OUTPUT)
-
-  if(TRITON_FP8_QUANT_RESULT_VARIABLE AND NOT TRITON_FP8_QUANT_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "python triton_fp8_quant_creator.py ${TRITON_KERNEL_PATH} with error:\n${TRITON_FP8_QUANT_RESULT_OUTPUT}")
-  endif()
-
+  message(STATUS "Queue generate triton_fp8_quant triton kernel")
   calculate_files_md5("${TRITON_FP8_QUANT_ALL_FILES}" NEW_MD5)
-  file(WRITE ${TRITON_FP8_QUANT_MD5_FILE} ${NEW_MD5})
-
-  message(STATUS "Success generate triton_fp8_quant triton kernel")
+  ksana_enqueue_triton_gen(
+    NAME triton_fp8_quant
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    MD5_FILE ${TRITON_FP8_QUANT_MD5_FILE}
+    MD5_VALUE ${NEW_MD5}
+    COMMAND python triton_fp8_quant_creator.py ${TRITON_KERNEL_PATH})
 endif()

@@ -162,21 +162,26 @@ set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(THIRD_PARTY_PATH ${CMAKE_BINARY_DIR}/third_party)
 
-# Set TritonKernel Path
+# Set TritonKernel Path. Same selection as TritonWrapper::InitKernelsDir:
+#   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (if env is non-empty)
+#   2. ${CMAKE_BINARY_DIR}/../triton_kernel_files        (otherwise)
+# Never write $HOME/.cache. FORCE so a leftover CACHE from a previous layout
+# cannot keep generating into the wrong tree.
 set(TRITON_KERNEL_DIRNAME "triton_kernel_files")
-if(DEFINED ENV{KSANA_TRITON_KERNEL_PATH})
-  set(TRITON_KERNEL_PATH "$ENV{KSANA_TRITON_KERNEL_PATH}/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
-  message(STATUS "Using KSANA_TRITON_KERNEL_PATH from environment: ${TRITON_KERNEL_PATH}")
+if(DEFINED ENV{KSANA_TRITON_KERNEL_PATH} AND NOT "$ENV{KSANA_TRITON_KERNEL_PATH}" STREQUAL "")
+  get_filename_component(_ksana_triton_kernel_path
+    "$ENV{KSANA_TRITON_KERNEL_PATH}/${TRITON_KERNEL_DIRNAME}" ABSOLUTE)
 else()
-  if(DEFINED ENV{HOME})
-    set(TRITON_KERNEL_PATH "$ENV{HOME}/.cache/KsanaLLM/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
-  else()
-    set(TRITON_KERNEL_PATH "${CMAKE_BINARY_DIR}/${TRITON_KERNEL_DIRNAME}" CACHE PATH "Path to TritonKernel files")
-    message(WARNING "Cannot get HOME environment variable, using build directory: ${TRITON_KERNEL_PATH}")
-  endif()
+  get_filename_component(_ksana_triton_kernel_path
+    "${CMAKE_BINARY_DIR}/../${TRITON_KERNEL_DIRNAME}" ABSOLUTE)
 endif()
+set(TRITON_KERNEL_PATH "${_ksana_triton_kernel_path}" CACHE PATH "Path to TritonKernel files" FORCE)
 message(STATUS "Setting TRITON_KERNEL_PATH: ${TRITON_KERNEL_PATH}")
 execute_process(COMMAND ${CMAKE_COMMAND} -E make_directory ${TRITON_KERNEL_PATH})
+# setup.py packaging may not have KSANA_TRITON_KERNEL_PATH; it copies from this record.
+file(WRITE "${CMAKE_BINARY_DIR}/triton_kernel_path.txt" "${TRITON_KERNEL_PATH}\n")
+# Bake cmake TRITON_KERNEL_PATH (absolute) into C++ as the runtime default.
+add_compile_definitions("TRITON_KERNEL_PATH=\"${TRITON_KERNEL_PATH}\"")
 
 find_package(Git REQUIRED)
 

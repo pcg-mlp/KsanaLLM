@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <unordered_set>
@@ -168,30 +169,66 @@ void TritonWrapper::InitKernelsDir() {
   // directory (never a union across directories) so that all kernels come from
   // the same build, avoiding an inconsistent mix.
   //
-  // Priority:
-  //   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (explicit override; for an
-  //      installed wheel python __init__ defaults this to the bundled kernel dir,
-  //      so this level also covers "prefer the python install dir")
-  //   2. ${HOME}/.cache/KsanaLLM/triton_kernel_files      (dev / freshly generated)
-  //   3. ./triton_kernel_files                            (relative fallback)
+  // Same tree as cmake TRITON_KERNEL_PATH, cwd-independent:
+  //   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (runtime env)
+  //   2. TRITON_KERNEL_PATH                                (absolute path baked by cmake)
   const char* env_path = std::getenv("KSANA_TRITON_KERNEL_PATH");
-  if (env_path != nullptr) {
+  if (env_path != nullptr && env_path[0] != '\0') {
     kernels_dir_ = fmt::format("{}/triton_kernel_files", env_path);
     KLLM_LOG_INFO << "Using triton kernel dir from KSANA_TRITON_KERNEL_PATH: " << kernels_dir_;
     return;
   }
 
-  const char* home_dir = std::getenv("HOME");
-  if (home_dir != nullptr) {
-    kernels_dir_ = std::string(home_dir) + "/.cache/KsanaLLM/triton_kernel_files";
-    KLLM_LOG_INFO << "Using triton kernel dir from HOME cache: " << kernels_dir_;
-  } else {
-    kernels_dir_ = "./triton_kernel_files";
-    KLLM_LOG_WARNING << "Cannot get HOME environment variable, using relative path: " << kernels_dir_;
-  }
+#ifndef TRITON_KERNEL_PATH
+#error "TRITON_KERNEL_PATH must be compiled in from cmake (absolute default kernel dir)"
+#endif
+  kernels_dir_ = TRITON_KERNEL_PATH;
+  KLLM_LOG_INFO << "KSANA_TRITON_KERNEL_PATH is not set; using compiled TRITON_KERNEL_PATH: "
+                << kernels_dir_;
 }
 
 void TritonWrapper::SetKernelsDir(const std::string& kernels_dir) { kernels_dir_ = kernels_dir; }
+
+std::string TritonWrapper::ResolveKernelArtifact(const std::string& stem, const std::string& ext) const {
+  const std::string filename = stem + ext;
+  std::vector<std::string> hits;
+  std::error_code ec;
+  if (fs::is_directory(kernels_dir_, ec)) {
+    for (const auto& entry : fs::directory_iterator(kernels_dir_, ec)) {
+      if (ec) {
+        break;
+      }
+      if (!entry.is_directory()) {
+        continue;
+      }
+      const std::string dir_name = entry.path().filename().string();
+      if (dir_name == "md5_sum" || (!dir_name.empty() && dir_name.front() == '.')) {
+        continue;
+      }
+      const fs::path candidate = entry.path() / filename;
+      if (fs::is_regular_file(candidate)) {
+        hits.push_back(candidate.string());
+      }
+    }
+  }
+
+  if (hits.size() == 1) {
+    return hits.front();
+  }
+  if (hits.empty()) {
+    KLLM_THROW(fmt::format(
+        "Failed to find triton kernel artifact {} under job subdirectories of {}. "
+        "The kernel was not pre-generated in the selected kernel directory; "
+        "please re-run the kernel creator / re-configure cmake.",
+        filename, kernels_dir_));
+  }
+  std::string listed = hits.front();
+  for (size_t i = 1; i < hits.size(); ++i) {
+    listed.append(", ").append(hits[i]);
+  }
+  KLLM_THROW(fmt::format("Ambiguous triton kernel artifact {}: found in multiple job subdirectories: {}", filename,
+                         listed));
+}
 
 std::optional<std::string> TritonWrapper::ConstructKernelName(const std::string& kernel_base_name,
                                                               const std::unordered_map<std::string, std::string>& map) {
@@ -269,7 +306,7 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
     // in InitKernelsDir by priority). We deliberately do NOT search across
     // directories per-file: mixing kernels built at different times / versions
     // could yield an inconsistent set and subtle correctness bugs.
-    std::string config_path = fmt::format("{}/{}.json", kernels_dir_, *kernel_name);
+    std::string config_path = ResolveKernelArtifact(*kernel_name, ".json");
     auto triton_kernel = LoadTritonKernelJsonFile(config_path, kernel_base_name);
     if (!triton_kernel) {
       // 之前这里只 log error 然后 return，会让上层 wrapper 静默跳过 kernel 发射 ——
@@ -283,7 +320,7 @@ void TritonWrapper::InvokeTritonKernel(const std::string& kernel_base_name, void
                       config_path));
     }
 
-    std::string cubin_path = fmt::format("{}/{}.cubin", kernels_dir_, *kernel_name);
+    std::string cubin_path = ResolveKernelArtifact(*kernel_name, ".cubin");
     CUresult result = LoadTritonKernelFromFile(cubin_path, *triton_kernel);
     if (result != CUDA_SUCCESS) {
       KLLM_THROW(

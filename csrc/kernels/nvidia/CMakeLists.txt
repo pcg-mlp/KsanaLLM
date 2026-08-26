@@ -8,6 +8,13 @@ add_library(llm_kernels_nvidia_kernel_triton STATIC ${TRITON_SRCS})
 target_link_libraries(llm_kernels_nvidia_kernel_triton PUBLIC utils ${TORCH_LIBRARIES} -lcuda -lcudart ksana_llm_libs
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_moe_utils
     ${CUDA_LIBRARIES})
+# Bake cmake's absolute TRITON_KERNEL_PATH so InitKernelsDir does not depend on cwd
+# (ctest WORKING_DIRECTORY is CMAKE_CURRENT_BINARY_DIR, not CMAKE_BINARY_DIR).
+if(NOT TRITON_KERNEL_PATH)
+  message(FATAL_ERROR "TRITON_KERNEL_PATH is empty; cannot compile default kernel dir into TritonWrapper")
+endif()
+target_compile_definitions(llm_kernels_nvidia_kernel_triton PUBLIC
+  "TRITON_KERNEL_PATH=\"${TRITON_KERNEL_PATH}\"")
 
 # file(GLOB_RECURSE KERNEL_WRAPPER_TEST_SRCS kernel_wrapper_test.cpp)
 # cc_test(kernel_wrapper_test SRCS ${KERNEL_WRAPPER_TEST_SRCS} DEPS
@@ -52,6 +59,10 @@ cc_test(fused_moe_tuned_config_test SRCS ${FUSED_MOE_TUNED_CONFIG_TEST_SRCS} DEP
 set(TRITON_WRAPPER_TEST_SRCS triton_wrapper_test.cpp)
 cc_test(triton_wrapper_test SRCS ${TRITON_WRAPPER_TEST_SRCS} DEPS
     llm_kernels_nvidia_utils llm_kernels_nvidia_kernel_triton LINKS ${TORCH_LIBRARIES})
+if(TARGET triton_wrapper_test)
+  target_compile_definitions(triton_wrapper_test PRIVATE
+    "TRITON_KERNEL_PATH=\"${TRITON_KERNEL_PATH}\"")
+endif()
 
 if(HAS_SM90 OR HAS_SM90A)
     set(KDA_KERNEL_WRAPPER_TEST_SRCS kda_kernel_wrapper_test.cpp)

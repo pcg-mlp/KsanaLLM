@@ -5,8 +5,7 @@ file(GLOB_RECURSE FUSED_MOE_KERNEL_GPTQ_AWQ_ALL_FILES
   fused_moe_kernel_gptq_awq.py
 )
 
-set(FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_SUM_DIR ${CMAKE_CURRENT_BINARY_DIR}/fused_moe_kernel_gptq_awq_md5_sum)
-set(FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_FILE ${FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_SUM_DIR}/.fused_moe_kernel_gptq_awq.md5sums)
+ksana_triton_kernel_md5_file(fused_moe_kernel_gptq_awq FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_FILE)
 
 set(FUSED_MOE_KERNEL_GPTQ_AWQ_NEED_REGENERATE TRUE)
 
@@ -31,18 +30,12 @@ if(EXISTS ${FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_FILE})
 endif()
 
 if(FUSED_MOE_KERNEL_GPTQ_AWQ_NEED_REGENERATE)
-  message(STATUS "Start generate fused_moe_kernel_gptq_awq triton kernel")
-
-  execute_process(COMMAND bash fused_moe_kernel_gptq_awq_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    RESULT_VARIABLE FUSED_MOE_KERNEL_GPTQ_AWQ_RESULT_VARIABLE OUTPUT_VARIABLE FUSED_MOE_KERNEL_GPTQ_AWQ_RESULT_OUTPUT)
-
-  if(FUSED_MOE_KERNEL_GPTQ_AWQ_RESULT_VARIABLE AND NOT FUSED_MOE_KERNEL_GPTQ_AWQ_RESULT_VARIABLE EQUAL 0)
-    message(FATAL_ERROR "bash fused_moe_kernel_gptq_awq_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH} with error:\n${FUSED_MOE_KERNEL_GPTQ_AWQ_RESULT_OUTPUT}")
-  endif()
-
+  message(STATUS "Queue generate fused_moe_kernel_gptq_awq triton kernel")
   calculate_files_md5("${FUSED_MOE_KERNEL_GPTQ_AWQ_ALL_FILES}" NEW_MD5)
-  file(WRITE ${FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_FILE} ${NEW_MD5})
-  
-  message(STATUS "Success generate fused_moe_kernel_gptq_awq triton kernel")
+  ksana_enqueue_triton_gen(
+    NAME fused_moe_kernel_gptq_awq
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    MD5_FILE ${FUSED_MOE_KERNEL_GPTQ_AWQ_MD5_FILE}
+    MD5_VALUE ${NEW_MD5}
+    COMMAND bash fused_moe_kernel_gptq_awq_creator.sh ${CMAKE_CURRENT_SOURCE_DIR} ${TRITON_KERNEL_PATH})
 endif()

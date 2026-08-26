@@ -82,7 +82,7 @@ class KdaAttentionLayerTest : public LayerTest {
 
     const std::string kernels_dir = Singleton<TritonWrapper>::GetInstance()->GetKernelsDir();
     const std::string canary = kernels_dir +
-                               "/fused_recurrent_kda_packed_decode_kernel_H_12_BK_128_BV_32_LB_0_SSM_fp32";
+                               "/kda/fused_recurrent_kda_packed_decode_kernel_H_12_BK_128_BV_32_LB_0_SSM_fp32";
     if (!std::filesystem::exists(canary + ".json") || !std::filesystem::exists(canary + ".cubin")) {
       GTEST_SKIP() << "KDA AOT artifacts not found under " << kernels_dir;
     }

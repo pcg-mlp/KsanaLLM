@@ -1,5 +1,8 @@
 # Copyright 2025 Tencent Inc.  All rights reserved.
 
+include(${CMAKE_CURRENT_LIST_DIR}/../../../cmake/triton_gen_parallel.cmake)
+ksana_triton_gen_init()
+
 add_subdirectory(gemm_wrapper)
 add_subdirectory(embedding)
 add_subdirectory(expand)
@@ -44,3 +47,7 @@ add_subdirectory(attention_meta)
 add_subdirectory(dspark)
 add_subdirectory(attn_res)
 add_subdirectory(kda)
+
+# Configure-time Triton/TileLang gens were queued in the subdirs above.
+# MULTI_GPU jobs occupy the whole pool; single-GPU jobs pack on leftover cards.
+ksana_triton_gen_run()

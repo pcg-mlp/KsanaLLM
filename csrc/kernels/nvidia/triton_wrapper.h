@@ -40,6 +40,10 @@ class TritonWrapper {
 
   void SetKernelsDir(const std::string& kernels_dir);
 
+  // Resolve {stem}{ext} under a job subdirectory of kernels_dir_ (not the root).
+  // Throws if zero or more than one match is found.
+  std::string ResolveKernelArtifact(const std::string& stem, const std::string& ext) const;
+
   // Default allow_pdl=true follows the global PDL switch. AOT artifacts without
   // the grid-dependency wait/trigger protocol must pass allow_pdl=false.
   // Callers that override block dims must also pass allow_pdl explicitly so the

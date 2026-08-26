@@ -41,17 +41,10 @@ import torch
 sys.path.append(os.path.abspath("./lib"))
 
 # Point the native triton kernel loader at the wheel-bundled kernels.
-# The C++ TritonWrapper picks a SINGLE directory (never a union) by priority:
-#   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (explicit override)
-#   2. the python install dir (this package), via the default set below
-#   3. ${HOME}/.cache/KsanaLLM/triton_kernel_files      (dev / freshly generated)
-# setup.py copies the kernels into ksana_llm/triton_kernel_files inside the
-# package. We only default KSANA_TRITON_KERNEL_PATH to the package dir when that
-# bundled dir actually exists, so:
-#   - an explicit user override always wins (setdefault leaves it untouched);
-#   - an installed wheel uses its own complete, self-consistent kernel set;
-#   - when the package has no bundled kernels (e.g. source/editable dev tree),
-#     the var stays unset and C++ falls through to ${HOME}/.cache.
+# CMake and TritonWrapper pick a SINGLE directory (never a union) by priority:
+#   1. ${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files  (explicit)
+#   2. cmake-baked TRITON_KERNEL_PATH (absolute; independent of cwd)
+# Wheel setdefault points (1) at the packaged tree.
 # Must run before libtorch_serving is imported / TritonWrapper is constructed.
 _pkg_kernel_dir = os.path.dirname(os.path.abspath(__file__))
 if os.path.isdir(os.path.join(_pkg_kernel_dir, "triton_kernel_files")):

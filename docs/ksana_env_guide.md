@@ -32,7 +32,7 @@ This document lists all environment variables consumed by the KsanaLLM project (
 
 | Environment Variable | Description | Default Value |
 | --- | --- | --- |
-| `KSANA_TRITON_KERNEL_PATH` | Path for pre-built Triton kernel files | `$HOME/.cache/KsanaLLM` |
+| `KSANA_TRITON_KERNEL_PATH` | Parent of `triton_kernel_files`. If set, cmake writes and runtime loads `${KSANA_TRITON_KERNEL_PATH}/triton_kernel_files`. If unset, cmake writes `${CMAKE_BINARY_DIR}/../triton_kernel_files` and runtime uses that **absolute** path compiled into the binary (not cwd-relative `../triton_kernel_files`) | unset |
 | `KSANA_IPC_NAME` | Shared-memory IPC channel name | Derives from engine PID |
 | `KSANA_EXECUTOR_ID` | Executor rank id (set by serving_server) | rank_id |
 | `KSANA_HTTP_PORT` | Marks that plugin runs under HTTP server; controls preprocess path | None |
