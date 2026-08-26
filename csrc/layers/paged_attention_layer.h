@@ -22,6 +22,14 @@ struct PagedAttentionInputs {
   const Tensor* key_layernorm_weight;
   const Tensor* layer_kv_cache_ptr;
   const Tensor* block_table;
+  // Per-bucket overrides, set by PagedAttention::Forward only when `page_metas` holds more than one
+  // q_seq_len bucket (MTP verify mixed with fresh decodes). The tensors above are already
+  // per-bucket views; these describe which slice of the shared query/output buffers this bucket
+  // occupies. Left at their defaults the layer reads the whole decode region out of forward_shape,
+  // which is byte-identical to the single-bucket behaviour.
+  int bucket_batch_size = -1;
+  int bucket_token_num = -1;
+  int bucket_offset_tokens = 0;  // tokens of preceding buckets, relative to the decode region
 #elif defined(ENABLE_ACL)
   const Tensor* qkv_tensor;
   const Tensor* rotary_embedding_pos;

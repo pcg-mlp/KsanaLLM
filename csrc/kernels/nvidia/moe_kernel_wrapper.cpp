@@ -273,12 +273,25 @@ void InvokeMoeCutlassGemm(void const* input_activations, void* gating_output, vo
     KLLM_THROW(fmt::format("topk_method_ {} with scoring_func_ {} is not supported", topk_method_, scoring_func_));
   }
 
+  // Sigmoid routing needs the aux-loss-free bias, top-k renormalization and the routed scaling
+  // factor. Only the sigmoid path consumes them; the softmax path keeps using `NT` as before.
+  const float* e_score_bias = nullptr;
+  bool renormalize_topk = false;
+  float routed_scaling = 1.0f;
+  if (custom_routing_function == llm_kernels::nvidia::RoutingFunctionType::FAST_TOPK_SIGMOID_SCORE) {
+    e_score_bias =
+        use_e_score_correction_bias_ ? static_cast<const float*>(e_score_correction_bias) : nullptr;
+    renormalize_topk = norm_topk_prob_;
+    routed_scaling = routed_scaling_factor_;
+  }
+
   auto moe_gemm = llm_kernels::nvidia::MoeGemmWrapper<T, WT, OT>();
   moe_gemm.Gemm(input_activations, gating_tensor.data_ptr(), fc1_expert_weights, fc2_expert_weights, num_rows,
                 hidden_size, inter_size, num_experts, topk, workspace_sizes, workspace_ptr, final_output,
                 token_topk_final_scales, expanded_source_row_to_expanded_dest_row, expert_for_source_row, tp_size, rank,
                 use_lora, best_config_index, tactics, NT, stream, is_fp8, scale1, scale2, scale3,
-                custom_routing_function, apply_weight, activation_type);
+                custom_routing_function, apply_weight, activation_type, e_score_bias, renormalize_topk,
+                routed_scaling);
 }
 
 #define INVOKE_MOE_CUTLASS_GEMM(T, WT, OT, NT)                                                                         \

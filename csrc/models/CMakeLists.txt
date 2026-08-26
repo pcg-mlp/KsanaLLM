@@ -24,6 +24,7 @@ file(GLOB_RECURSE models_SRCS
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v4/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/kimi_k3/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/glm4_moe/*.cpp
+  ${PROJECT_SOURCE_DIR}/csrc/models/hy_v3/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_turbo/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/arc_hunyuan_video/*.cpp
   ${PROJECT_SOURCE_DIR}/csrc/models/deepseek_v4/*.cpp)
@@ -69,6 +70,7 @@ if(WITH_STANDALONE_TEST)
     cpp_test(qwen_embedding_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen/qwen_embedding_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     cpp_test(hunyuan_turbo_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/hunyuan_turbo/hunyuan_turbo_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     cpp_test(chatglm_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/chatglm/chatglm_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
+    cpp_test(hy_v3_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/hy_v3/hy_v3_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
     if(DEFINED SM AND "${SM}" STREQUAL "90a")
       cpp_test(mixtral_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/mixtral/mixtral_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})
       cpp_test(qwen_test SRCS ${PROJECT_SOURCE_DIR}/csrc/models/qwen/qwen_test.cpp ${MODEL_TEST_MAIN} DEPS ${MODELS_TEST_DEPS} LIBS ${MODELS_TEST_LIBS})

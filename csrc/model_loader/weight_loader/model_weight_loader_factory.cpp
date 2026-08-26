@@ -16,6 +16,7 @@
 #include "models/deepseek_v4/deepseek_v4_weight_loader.h"
 #include "models/glm4_moe/glm4_moe_weight_loader.h"
 #include "models/gpt_moe/gpt_moe_weight_loader.h"
+#include "models/hy_v3/hy_v3_weight_loader.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_weight_loader.h"
 #include "models/internlm2/new_internlm2_weight_loader.h"
 #include "models/internlmxcomposer2/new_internlmxcomposer2_weight_loader.h"
@@ -80,6 +81,10 @@ Status ModelWeightLoaderFactory::CreateModelWeightLoader(ModelArchitecture model
     }
     case ModelArchitecture::ARCH_GLM4_MOE: {
       model_weight_loader = std::make_shared<Glm4MoeWeightLoader>(model_config, env, context);
+      break;
+    }
+    case ModelArchitecture::ARCH_HY_V3: {
+      model_weight_loader = std::make_shared<HyV3WeightLoader>(model_config, env, context);
       break;
     }
     case ModelArchitecture::ARCH_MINICPM: {

@@ -36,10 +36,16 @@ class MoeGemmWrapper {
             MOEExpertScaleNormalizationMode moe_norm_mode, cudaStream_t stream, bool is_fp8 = false,
             void const* scale1_void = nullptr, void const* scale2_void = nullptr, void const* scale3_void = nullptr,
             RoutingFunctionType custom_routing_function = RoutingFunctionType::GREEDY_TOPK_SOFTMAX_SCORE,
-            bool apply_weight = false, ActivationType activation_type = ActivationType::Swiglu);
+            bool apply_weight = false, ActivationType activation_type = ActivationType::Swiglu,
+            // Sigmoid routing extras: bias affects expert SELECTION only; renormalize+scaling
+            // are applied to the selected (unbiased) weights.
+            const float* e_score_correction_bias = nullptr, bool renormalize_topk = false,
+            float routed_scaling_factor = 1.0f);
 };
 
 void topkSigmoidKernelLauncher(const float* input, float* output, int* indices, int* source_row, int num_rows,
-                               int num_experts, int topk, cudaStream_t stream = 0);
+                               int num_experts, int topk, cudaStream_t stream = 0,
+                               const float* e_score_correction_bias = nullptr, bool renormalize = false,
+                               float routed_scaling_factor = 1.0f);
 }  // namespace nvidia
 }  // namespace llm_kernels

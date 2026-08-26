@@ -247,4 +247,69 @@ inline void PrepareGlm4MoeAttributes(const nlohmann::json &config_json, ModelCon
       model_config.moe_config.num_shared_experts, model_config.moe_config.norm_topk_prob,
       model_config.moe_config.routed_scaling_factor, model_config.use_qk_norm, model_config.enable_add_qkv_bias);
 }
+
+// HunYuan V3 (hy_v3): Qwen3-MoE attention (GQA + pre-RoPE QK-Norm, no QKV bias, full rotary)
+// combined with DeepSeek-V3 style MoE gating (sigmoid + expert bias) and a single shared expert.
+inline void PrepareHyV3Attributes(const nlohmann::json &config_json, ModelConfig &model_config) {
+  PrepareCommonModelAttributes(config_json, model_config);
+
+  // hy_v3 checkpoints are bfloat16 but config.json declares no torch_dtype, so the generic parser
+  // defaults weight_data_type (and hence inter_data_type) to float16 and mismatches the weights at
+  // MatMul. Force BF16 unless the config states a dtype explicitly.
+  if (!config_json.contains("torch_dtype") && !config_json.contains("dtype")) {
+    model_config.weight_data_type = DataType::TYPE_BF16;
+  }
+
+  // rope_theta lives inside a nested "rope_parameters" object; there is no top-level key.
+  // RoPE covers the full head_dim (no partial rotary factor), so PrepareCommonModelAttributes'
+  // rotary_embedding == size_per_head is already correct.
+  if (config_json.contains("rope_parameters")) {
+    model_config.rope_theta = config_json["rope_parameters"].value("rope_theta", model_config.rope_theta);
+  }
+
+  model_config.is_moe = true;
+  model_config.moe_config.num_experts = config_json.value("num_experts", 192);
+  model_config.moe_config.experts_topk = config_json.value("num_experts_per_tok", 8);
+  model_config.moe_config.moe_inter_size =
+      config_json.value("moe_intermediate_size", config_json.value("expert_hidden_dim", 1536));
+  model_config.moe_config.first_k_dense_replace = config_json.value("first_k_dense_replace", 1);
+
+  // Grouped top-k degenerates to plain top-k for hy_v3 (a single group).
+  model_config.moe_config.num_expert_group = config_json.value("n_group", 1);
+  model_config.moe_config.expert_groups_topk = config_json.value("topk_group", 1);
+
+  // Sigmoid routing with aux-loss-free expert bias correction (DeepSeek-V3 / GLM4-MoE gating).
+  model_config.moe_config.scoring_func = config_json.value("moe_router_use_sigmoid", true) ? "sigmoid" : "softmax";
+  model_config.moe_config.norm_topk_prob = config_json.value("route_norm", true);
+  model_config.moe_config.routed_scaling_factor = config_json.value("router_scaling_factor", 1.0f);
+  model_config.moe_config.use_e_score_correction_bias = config_json.value("moe_router_enable_expert_bias", true);
+  model_config.moe_config.use_vllm_moe = true;
+  model_config.moe_config.apply_weight = false;
+  // Fp8MoeLayer::InvokeMoeCutlassGemm only wires (greedy, softmax) and (fast, sigmoid); hy_v3 is
+  // sigmoid, so "fast" is the only valid pairing. BF16 goes through GroupedTopkLayer either way.
+  model_config.moe_config.topk_method = "fast";
+
+  // One merged shared expert, summed with the routed output.
+  model_config.moe_config.num_shared_experts = config_json.value("num_shared_experts", 1);
+  if (model_config.moe_config.num_shared_experts > 0) {
+    model_config.has_shared_experts = true;
+    model_config.moe_config.shared_expert_inter_size =
+        model_config.moe_config.num_shared_experts * model_config.moe_config.moe_inter_size;
+  }
+
+  model_config.use_qk_norm = false;                          // hy_v3 does not use post-RoPE QK Norm
+  model_config.enable_qk_pre_norm_before_rotary_pos = true;  // it applies QK Norm before RoPE
+  model_config.enable_add_qkv_bias = config_json.value("attention_bias", false);
+  model_config.load_bias = false;  // hy_v3 has no bias on QKV projections
+
+  KLLM_LOG_INFO << fmt::format(
+      "hy_v3 config: num_experts={}, experts_topk={}, moe_inter_size={}, first_k_dense_replace={}, "
+      "num_shared_experts={}, scoring_func={}, norm_topk_prob={}, routed_scaling_factor={}, rope_theta={}, "
+      "num_nextn_predict_layers={}",
+      model_config.moe_config.num_experts, model_config.moe_config.experts_topk, model_config.moe_config.moe_inter_size,
+      model_config.moe_config.first_k_dense_replace, model_config.moe_config.num_shared_experts,
+      model_config.moe_config.scoring_func, model_config.moe_config.norm_topk_prob,
+      model_config.moe_config.routed_scaling_factor, model_config.rope_theta,
+      model_config.num_nextn_predict_layers);
+}
 }  // namespace ksana_llm

@@ -41,6 +41,8 @@ enum class ModelArchitecture {
   ARCH_HUNYUAN_TURBO,
   // GLM4-MoE
   ARCH_GLM4_MOE,
+  // HunYuan V3
+  ARCH_HY_V3,
   // DeepSeek V4
   ARCH_DEEPSEEK_V4,
   // Kimi K3

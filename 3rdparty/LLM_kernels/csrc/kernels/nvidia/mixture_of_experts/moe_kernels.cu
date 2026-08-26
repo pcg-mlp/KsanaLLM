@@ -501,12 +501,23 @@ void topkGatingSoftmaxKernelLauncher(float const* input, bool const* finished, f
 
 // ========================== Topk Sigmoid things ====================================
 // custom routing function for llama4
-__global__ void topkSigmoidKernel(const float* input,  // [num_rows, num_experts]
-                                  float* output,       // [num_rows, topk]
+__global__ void topkSigmoidKernel(const float* input,  // [num_rows, num_experts] raw router logits
+                                  float* output,       // [num_rows, topk] routing weights
                                   int* indices,        // [num_rows, topk]
                                   int* source_row,     // [num_rows, topk]
-                                  int num_rows, int num_experts, int topk) {
-  // Each thread handles one row
+                                  int num_rows, int num_experts, int topk,
+                                  const float* e_score_correction_bias,  // [num_experts] or nullptr
+                                  bool renormalize, float routed_scaling_factor) {
+  // Sigmoid routing with optional aux-loss-free bias correction, matching the reference
+  // (HF/vLLM) semantics:
+  //   s      = sigmoid(logits)                       for ALL experts
+  //   select = topk(s + e_score_correction_bias)     bias affects SELECTION ONLY
+  //   w      = s[select]                             weights use the UNBIASED scores
+  //   if renormalize: w /= sum(w)
+  //   w     *= routed_scaling_factor
+  // With bias==nullptr, renormalize==false and routed_scaling_factor==1.0 this reduces
+  // exactly to the previous behaviour (sigmoid is monotonic, so ranking by s is identical
+  // to ranking by the raw logits).
   int row = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (row < num_rows) {
@@ -516,39 +527,57 @@ __global__ void topkSigmoidKernel(const float* input,  // [num_rows, num_experts
     int* indices_out = indices + row * topk;
     int* source_row_out = source_row ? (source_row + row * topk) : nullptr;
 
-    // Initialize arrays to track top-k elements
-    float topk_values[32];  // Assuming max topk is 32, adjust if needed
+    // Arrays to track top-k elements. topk_selection holds the (possibly biased) selection score
+    // used for ordering; topk_weight holds the unbiased sigmoid score used as the weight.
+    float topk_selection[32];  // Assuming max topk is 32, adjust if needed
+    float topk_weight[32];
     int topk_indices[32];
 
     // Initialize with minimum possible values
     for (int i = 0; i < topk; i++) {
-      topk_values[i] = -INFINITY;
+      topk_selection[i] = -INFINITY;
+      topk_weight[i] = 0.0f;
       topk_indices[i] = -1;
     }
 
     // Find top-k elements in this row
     for (int j = 0; j < num_experts; j++) {
-      float val = input_row[j];
+      // Apply sigmoid up-front so the bias is added in probability space, as the reference does.
+      float score = 1.0f / (1.0f + expf(-input_row[j]));
+      float selection = e_score_correction_bias ? (score + e_score_correction_bias[j]) : score;
 
       // Check if this value belongs in our top-k
       for (int k = 0; k < topk; k++) {
-        if (val > topk_values[k]) {
+        if (selection > topk_selection[k]) {
           // Shift values to make room for the new value
           for (int m = topk - 1; m > k; m--) {
-            topk_values[m] = topk_values[m - 1];
+            topk_selection[m] = topk_selection[m - 1];
+            topk_weight[m] = topk_weight[m - 1];
             topk_indices[m] = topk_indices[m - 1];
           }
-          topk_values[k] = val;
+          topk_selection[k] = selection;
+          topk_weight[k] = score;
           topk_indices[k] = j;
           break;
         }
       }
     }
 
-    // Write results and apply sigmoid
+    // Renormalize the selected (unbiased) scores, then apply the routed scaling factor.
+    float scale = routed_scaling_factor;
+    if (renormalize) {
+      float weight_sum = 0.0f;
+      for (int k = 0; k < topk; k++) {
+        weight_sum += topk_weight[k];
+      }
+      if (weight_sum > 0.0f) {
+        scale = routed_scaling_factor / weight_sum;
+      }
+    }
+
+    // Write results
     for (int k = 0; k < topk; k++) {
-      // Apply sigmoid: 1.0 / (1.0 + exp(-x))
-      output_row[k] = 1.0f / (1.0f + expf(-topk_values[k]));
+      output_row[k] = topk_weight[k] * scale;
       indices_out[k] = topk_indices[k];
       if (source_row) {
         source_row_out[k] = k * num_rows + row;
@@ -558,14 +587,17 @@ __global__ void topkSigmoidKernel(const float* input,  // [num_rows, num_experts
 }
 
 void topkSigmoidKernelLauncher(const float* input, float* output, int* indices, int* source_row, int num_rows,
-                               int num_experts, int topk, cudaStream_t stream = 0) {
+                               int num_experts, int topk, cudaStream_t stream,
+                               const float* e_score_correction_bias, bool renormalize,
+                               float routed_scaling_factor) {
   // Calculate grid dimensions
   int block_size = 256;
   int grid_size = (num_rows + block_size - 1) / block_size;
 
   // Launch kernel
   topkSigmoidKernel<<<grid_size, block_size, 0, stream>>>(input, output, indices, source_row, num_rows, num_experts,
-                                                          topk);
+                                                          topk, e_score_correction_bias, renormalize,
+                                                          routed_scaling_factor);
 }
 
 // ========================== CUB Sorting things ====================================
@@ -1664,7 +1696,8 @@ void CutlassMoeFCRunner<T, WeightType, OutputType, ScaleBiasType, Enable>::runMo
     bool const* finished, int64_t const active_rows, void* token_topk_final_scales_void,
     int* expanded_source_row_to_expanded_dest_row, int* expert_for_source_row, MOEParallelismConfig parallelism_config,
     MOEExpertScaleNormalizationMode normalization_mode, bool use_lora, LoraParams& lora_params, cudaStream_t stream,
-    RoutingFunctionType custom_routing_function, bool apply_weight) {
+    RoutingFunctionType custom_routing_function, bool apply_weight, const float* e_score_correction_bias,
+    bool renormalize_topk, float routed_scaling_factor) {
   custom_routing_function_ = custom_routing_function;
   static constexpr bool int_scales_required =
       std::is_same<WeightType, uint8_t>::value || std::is_same<WeightType, cutlass::uint4b_t>::value;
@@ -1762,7 +1795,8 @@ void CutlassMoeFCRunner<T, WeightType, OutputType, ScaleBiasType, Enable>::runMo
   int const end_expert = start_expert + num_experts_per_node;
   if (custom_routing_function_ == RoutingFunctionType::FAST_TOPK_SIGMOID_SCORE) {
     topkSigmoidKernelLauncher(gating_output, token_topk_unpermuted_scales, expert_for_source_row, source_rows_,
-                              num_rows, num_experts, k, stream);
+                              num_rows, num_experts, k, stream, e_score_correction_bias, renormalize_topk,
+                              routed_scaling_factor);
   } else {
     topkGatingSoftmaxKernelLauncher(gating_output, finished, token_topk_unpermuted_scales, softmax_out_,
                                     expert_for_source_row, source_rows_, num_rows, num_experts, k, start_expert,

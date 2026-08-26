@@ -601,6 +601,8 @@ Status EnvModelConfigParser::ParseModelConfig(const std::string &model_dir, cons
       model_config.has_vision = has_vision;
     } else if (model_config.type == "glm4_moe") {
       PrepareGlm4MoeAttributes(config_json, model_config);
+    } else if (model_config.type == "hy_v3") {
+      PrepareHyV3Attributes(config_json, model_config);
     } else if (model_config.type == "minicpm") {
       PrepareBgeRerankerMinicpmAttributes(config_json, model_config);
     } else if (model_config.type == "qwen3_vl") {

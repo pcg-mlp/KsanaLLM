@@ -68,16 +68,22 @@ Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::ve
   const Tensor& rotary_embedding_mask = *inputs.rotary_embedding_mask;
   const Tensor& workspace = *inputs.workspace;
   const Tensor& qkv_workspace = *inputs.qkv_workspace;
-  int layer_block_num = inputs.forward_shape->shape[5];
+  const bool multi_bucket = inputs.bucket_batch_size >= 0;
+  // In multi-bucket mode `kv_list` is a per-bucket view whose shape[1] is this bucket's block count
+  // times 2, so the per-layer stride comes from it; forward_shape[5] is the sum over all buckets.
+  int layer_block_num = multi_bucket ? static_cast<int>(inputs.kv_list->shape[1] / 2)
+                                     : static_cast<int>(inputs.forward_shape->shape[5]);
   int max_tokens = inputs.forward_shape->shape[4];
-  int batch_size = inputs.forward_shape->shape[3];
+  int batch_size = multi_bucket ? inputs.bucket_batch_size : static_cast<int>(inputs.forward_shape->shape[3]);
   // Read the real total decode tokens from forward_shape[12] (dp_decode_tokens).
-  // For multi-token decode (e.g., MTP validation), total_tokens > batch_size.
-  // Falls back to batch_size for backward compatibility when shape[12] is not present.
-  int total_tokens = (inputs.forward_shape->shape.size() > 12 && inputs.forward_shape->shape[12] > 0)
-                         ? static_cast<int>(inputs.forward_shape->shape[12])
-                         : batch_size;
-  size_t context_tokens = query.shape[0] - total_tokens;
+  // For multi-token decode (e.g., MTP validation), decode_tokens > decode request count.
+  // Falls back to the request count for backward compatibility when shape[12] is not present.
+  int decode_tokens = (inputs.forward_shape->shape.size() > 12 && inputs.forward_shape->shape[12] > 0)
+                          ? static_cast<int>(inputs.forward_shape->shape[12])
+                          : static_cast<int>(inputs.forward_shape->shape[3]);
+  int total_tokens = multi_bucket ? inputs.bucket_token_num : decode_tokens;
+  // Start of this bucket's slice: past the prefill region, then past the preceding buckets.
+  size_t skipped_tokens = query.shape[0] - decode_tokens + inputs.bucket_offset_tokens;
 
   void** const k_list_base = kv_list.GetPtr<void*>();
   void** const k_list = k_list_base + static_cast<size_t>(this->layer_index_ * layer_block_num * 2);
@@ -103,8 +109,8 @@ Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::ve
     max_blocks_per_seq = inputs.block_table->shape[1];
   }
 
-  auto skipped_context_out_ptr = out.GetPtr<void>() + context_tokens * (out.GetTotalBytes() / out.shape[0]);
-  auto skipped_context_query_ptr = query.GetPtr<void>() + context_tokens * (query.GetTotalBytes() / query.shape[0]);
+  auto skipped_context_out_ptr = out.GetPtr<void>() + skipped_tokens * (out.GetTotalBytes() / out.shape[0]);
+  auto skipped_context_query_ptr = query.GetPtr<void>() + skipped_tokens * (query.GetTotalBytes() / query.shape[0]);
 
   if (use_flashinfer_for_decode_ && !flashinfer_prefill_helper_) {
     if constexpr (std::is_same<SCALAR_T, float>::value) {
@@ -120,6 +126,10 @@ Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::ve
     }
   }
 
+  // FlashInfer reuses its Plan across layers when told this is the first layer on the node. Each
+  // bucket has its own num_seqs / kv_indices, so multi-bucket dispatch must re-plan every call.
+  // Other backends ignore the flag.
+  const bool is_first_layer_on_node = (this->layer_index_ == 0) || multi_bucket;
   InvokePagedAttention<SCALAR_T, CACHE_T, KV_DTYPE>(
       skipped_context_out_ptr, skipped_context_query_ptr, k_list, v_list, context_lens.GetPtr<void>(), max_tokens,
       this->context_->device->GetPrimaryComputeStream().Get(), cache_offset.GetPtr<void>(), batch_size,
@@ -132,7 +142,7 @@ Status PagedAttentionLayer::ForwardT(const PagedAttentionInputs& inputs, std::ve
       shared_device_workspace_ != nullptr ? shared_device_workspace_->GetPtr<void>() : nullptr,
       shared_pinned_host_workspace_, k_cache_ptr, v_cache_ptr, block_table_ptr, kv_cache_block_num, max_blocks_per_seq,
       this->enable_qk_pre_norm_before_rotary_pos_, this->no_rope_, this->attn_temperature_tuning_, this->attn_scale_,
-      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, this->layer_index_ == 0,
+      this->floor_scale_, this->enable_blocked_multi_token_forwarding_kv_, is_first_layer_on_node,
       use_flashinfer_for_decode_, use_hpc_attention_, flashinfer_prefill_helper_.get());
 
   return Status();

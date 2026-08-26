@@ -54,9 +54,11 @@ Status MoeLayer::InitT(const std::vector<std::any>& parameters, const RuntimeCon
     // per-tensor path MoeLayer has — the Triton fallback below has no such kernel — so the dtype
     // only switches when hpc is on; otherwise these parameters build an Fp8MoeLayer (cutlass),
     // which drives its own Forward and leaves both members at the activation dtype, as before.
+    // use_vllm_moe is what puts the model on this fused-MoE branch; the [gate, up] up_gate_proj
+    // packing the hpc kernel needs is emitted by Fp8E4m3Method::process_experts_proj, keyed off
+    // moe_backend_config.use_hpc_moe (cutlass gets [up, gate]).
     KLLM_CHECK_WITH_INFO(params_.use_vllm_moe,
-                         "MoeLayer: hpc-ops per-tensor FP8 MoE requires use_vllm_moe=true, which is what puts "
-                         "up_gate_proj in the [gate, up] layout the hpc kernel expects.");
+                         "MoeLayer: hpc-ops per-tensor FP8 MoE requires use_vllm_moe=true.");
     weight_dtype_ = DataType::TYPE_FP8_E4M3;
     compute_dtype_ = DataType::TYPE_FP8_E4M3;
   } else if (params_.int_weight_dtype == DataType::TYPE_UINT4x2 || params_.int_weight_dtype == DataType::TYPE_INT4x2) {

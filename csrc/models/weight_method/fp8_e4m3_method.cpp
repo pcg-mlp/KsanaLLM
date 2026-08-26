@@ -6,8 +6,10 @@
 
 #include <torch/torch.h>
 
+#include "configure/environment.h"
 #include "models/base/utils.h"
 #include "utils/ret_code.h"
+#include "utils/singleton.h"
 
 #ifdef ENABLE_CUDA
 #  include "kernels/nvidia/kernel_wrapper.h"
@@ -414,6 +416,14 @@ Status Fp8E4m3Method::process_mlp_down_proj(std::unordered_map<std::string, Tens
 Status Fp8E4m3Method::process_experts_proj(std::unordered_map<std::string, Tensor>& device_model_weights,
                                            const std::string& weight_prefix_name, int dev_rank, int num_experts) {
 #ifdef ENABLE_CUDA
+  // up_gate_proj packing must match whichever MoE backend consumes it: Fp8MoeLayer (cutlass)
+  // wants [up, gate], the hpc-ops fused MoE wants [gate, up]. MoeLayerFactory routes on
+  // moe_backend_config.use_hpc_moe (resolved before weights load), so we key packing on the
+  // same flag — otherwise hpc silently computes silu(up)*gate and outputs garbage.
+  RuntimeConfig runtime_config;
+  Singleton<Environment>::GetInstance()->GetRuntimeConfig(runtime_config);
+  const bool gate_first = runtime_config.moe_backend_config.use_hpc_moe;
+
   // process up_gate_proj.
   // Step 1: Create up_gate input_scale and weight_scale tensors.
   const std::string up_gate_input_scale_name = weight_prefix_name + "up_gate_proj.input_scale";
@@ -464,9 +474,9 @@ Status Fp8E4m3Method::process_experts_proj(std::unordered_map<std::string, Tenso
     RescaleFp8E4m3(up_weight.GetPtr<void>(), up_weight.GetPtr<void>(), up_weight.GetElementNumber(), up_weight_scale,
                    expert_weight_scale, common_weight_loader_->GetContext()->device->GetMemoryManageStream().Get());
 
-    // Collect weight names for merging (order: [up, gate] for each expert).
-    expert_up_gate_names.push_back(up_proj_name + "weight");
-    expert_up_gate_names.push_back(gate_proj_name + "weight");
+    // Collect weight names for merging, in the order the selected backend expects (see above).
+    expert_up_gate_names.push_back((gate_first ? gate_proj_name : up_proj_name) + "weight");
+    expert_up_gate_names.push_back((gate_first ? up_proj_name : gate_proj_name) + "weight");
 
     // Get max value of gate_proj and up_proj's input_scales for each layer.
     if (device_model_weights.find(gate_input_scale_name) != device_model_weights.end() &&

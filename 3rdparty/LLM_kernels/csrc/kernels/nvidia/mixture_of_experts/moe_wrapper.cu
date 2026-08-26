@@ -65,7 +65,8 @@ void MoeGemmWrapper<T, WT, OT>::Gemm(
     int* expert_for_source_row, int tp_size, int rank, bool use_lora, size_t best_config_index,
     std::vector<cutlass_extensions::CutlassGemmConfig>& tactics, MOEExpertScaleNormalizationMode moe_norm_mode,
     cudaStream_t stream, bool is_fp8, void const* scale1_void, void const* scale2_void, void const* scale3_void,
-    RoutingFunctionType custom_routing_function, bool apply_weight, ActivationType activation_type) {
+    RoutingFunctionType custom_routing_function, bool apply_weight, ActivationType activation_type,
+    const float* e_score_correction_bias, bool renormalize_topk, float routed_scaling_factor) {
   int64_t const num_not_finished = num_rows;
   llm_kernels::nvidia::MOEParallelismConfig parallelism_config(tp_size, rank, 1, 0);
   QuantParams quant_params{};
@@ -87,7 +88,7 @@ void MoeGemmWrapper<T, WT, OT>::Gemm(
                    num_experts, topk, workspace_ptr, final_output_void, nullptr, num_not_finished,
                    token_topk_final_scales_void, expanded_source_row_to_expanded_dest_row, expert_for_source_row,
                    parallelism_config, moe_norm_mode, use_lora, lora_params, stream, custom_routing_function,
-                   apply_weight);
+                   apply_weight, e_score_correction_bias, renormalize_topk, routed_scaling_factor);
 }
 
 template class MoeGemmWrapper<float, float, float>;

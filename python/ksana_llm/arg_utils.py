@@ -133,12 +133,19 @@ class EngineArgs:
                 model_dir, trust_remote_code=True
             ).to_dict()
         except ValueError as e:
-            if not "deepseek_v32" in str(e) and not "deepseek_v4" in str(e):
+            if "hy_v3" in str(e):
+                # transformers has no hy_v3 config class and the checkpoint ships no remote code.
+                # The C++ engine parses config.json itself; the Python front-end only needs the
+                # raw dict to pick the model type and set up the tokenizer.
+                with open(os.path.join(model_dir, "config.json"), encoding="utf-8") as f:
+                    model_config = json.load(f)
+            elif "deepseek_v32" in str(e) or "deepseek_v4" in str(e):
+                from .hf_transformers_model_config import DeepseekV3Config
+                model_config = DeepseekV3Config.from_pretrained(
+                    model_dir, trust_remote_code=True
+                ).to_dict()
+            else:
                 raise e
-            from .hf_transformers_model_config import DeepseekV3Config
-            model_config = DeepseekV3Config.from_pretrained(
-                model_dir, trust_remote_code=True
-            ).to_dict()
         # Parse the model config to determine the model type
         model_type = model_config["model_type"]
         if model_type == "qwen" and "visual" in model_config:

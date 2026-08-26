@@ -151,7 +151,8 @@ class CutlassMoeFCRunnerInterface {
                       MOEExpertScaleNormalizationMode normalization_mode, bool use_lora, LoraParams& lora_params,
                       cudaStream_t stream,
                       RoutingFunctionType custom_routing_function = RoutingFunctionType::GREEDY_TOPK_SOFTMAX_SCORE,
-                      bool apply_weight = false) = 0;
+                      bool apply_weight = false, const float* e_score_correction_bias = nullptr,
+                      bool renormalize_topk = false, float routed_scaling_factor = 1.0f) = 0;
 
   // Aliases for profiling the gemms
   virtual void gemm1(void const* const input, void* const output, void* const intermediate_result,
@@ -249,7 +250,8 @@ class CutlassMoeFCRunner : public CutlassMoeFCRunnerInterface {
               MOEExpertScaleNormalizationMode normalization_mode, bool use_lora, LoraParams& lora_params,
               cudaStream_t stream,
               RoutingFunctionType custom_routing_function = RoutingFunctionType::GREEDY_TOPK_SOFTMAX_SCORE,
-              bool apply_weight = false) override;
+              bool apply_weight = false, const float* e_score_correction_bias = nullptr,
+              bool renormalize_topk = false, float routed_scaling_factor = 1.0f) override;
 
   // We make these GEMM1 & GEMM2 static because they need to be stateless for the profiler to work
   static void gemm1(MoeGemmRunner<T, WeightType, OutputType, ScaleBiasType>& gemm_runner, T const* const input,

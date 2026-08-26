@@ -162,12 +162,12 @@ TEST_F(LayerTest, AttentionLayerTest) {
   flash_params.dst_flexible_token_idx = &dst_flexible_token_idx_tensor;
   flash_params.src_flexible_token_idx = &src_flexible_token_idx_tensor;
   flash_params.flexible_offset_uint64 = &prefix_offsets;
-  // Scalars formerly encoded in forward_shape.shape[2/3/6/7/8]:
-  flash_params.layer_block_num = 1;           // shape[2]
-  flash_params.single_token_request_num = 0;  // shape[3]
-  flash_params.max_forwarding_tokens = 2;     // shape[6]
-  flash_params.batch_size = 1;                // shape[7]
-  flash_params.max_tokens = 2;                // shape[8]
+  // Scalars formerly encoded in forward_shape.shape[2/6/7/8/12]:
+  flash_params.layer_block_num = 1;        // shape[2]
+  flash_params.decode_token_num = 0;       // shape[12] (pure-prefill batch)
+  flash_params.max_forwarding_tokens = 2;  // shape[6]
+  flash_params.batch_size = 1;             // shape[7]
+  flash_params.max_tokens = 2;             // shape[8]
   flash_params.query_layernorm_weight = &empty_q_norm_weight;
   flash_params.key_layernorm_weight = &empty_k_norm_weight;
   flash_params.use_cache = flag_tensor.GetPtr<bool>()[0];
@@ -400,7 +400,7 @@ TEST_F(LayerTest, HpcPagedAttentionLayerTest) {
     flash_params.src_flexible_token_idx = &empty_flex;
     flash_params.flexible_offset_uint64 = &prefix_offsets;
     flash_params.layer_block_num = 1;
-    flash_params.single_token_request_num = 0;
+    flash_params.decode_token_num = 0;
     flash_params.max_forwarding_tokens = total_tokens;
     flash_params.batch_size = batch;
     flash_params.max_tokens = max_tokens;

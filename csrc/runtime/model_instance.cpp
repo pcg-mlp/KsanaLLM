@@ -20,6 +20,7 @@
 #include "models/deepseek_v4/deepseek_v4_model.h"
 #include "models/glm4_moe/glm4_moe_model.h"
 #include "models/gpt_moe/gpt_moe_model.h"
+#include "models/hy_v3/hy_v3_model.h"
 #include "models/hunyuan_turbo/hunyuan_turbo_model.h"
 #include "models/internlm2/internlm2_model.h"
 #include "models/internlmxcomposer2/internlmxcomposer2_model.h"
@@ -112,6 +113,12 @@ void ModelInstance::Load() {
     model_config_.use_qk_norm = false;  // Disable post-RoPE QK Norm since we use pre-RoPE
     CreateModelInstance<Glm4MoeModel>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
                                       block_cache_layout_);
+  } else if (unified_model_type.find("hy_v3") != std::string::npos) {
+    type = "hy_v3";
+    model_config_.enable_qk_pre_norm_before_rotary_pos = true;
+    model_config_.use_qk_norm = false;  // Disable post-RoPE QK Norm since we use pre-RoPE
+    CreateModelInstance<HyV3Model>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,
+                                   block_cache_layout_);
   } else if (unified_model_type.find("deepseek_v4") != std::string::npos) {
     type = "deepseek_v4";
     CreateModelInstance<DeepSeekV4Model>(model_config_, runtime_config_, context_, model_instance_, weight_instance_,

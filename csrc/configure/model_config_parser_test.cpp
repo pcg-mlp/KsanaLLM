@@ -454,4 +454,94 @@ TEST_F(ApplyJsonModelOverrideTest, PartialOverrideOnlyAffectsSpecifiedFields) {
   EXPECT_EQ(model_config_.type, "llama");
 }
 
+// ---------------------------------------------------------------------------
+// hy_v3 (HYV3ForCausalLM): exercises PrepareHyV3Attributes end-to-end through
+// ParseModelConfig. Validates MoE config, nested rope_theta, BF16 dtype default,
+// and QK-Norm flags.
+// ---------------------------------------------------------------------------
+static nlohmann::json BuildHyV3Config() {
+  return {{"architectures", {"HYV3ForCausalLM"}},
+          {"model_type", "hy_v3"},
+          {"torch_dtype", "bfloat16"},
+          {"bos_token_id", 120000},
+          {"eos_token_id", 120025},
+          {"pad_token_id", 120002},
+          {"hidden_size", 4096},
+          {"intermediate_size", 13312},
+          {"head_dim", 128},
+          {"num_attention_heads", 64},
+          {"num_key_value_heads", 8},
+          {"num_hidden_layers", 80},
+          {"vocab_size", 120832},
+          {"rms_norm_eps", 1e-05},
+          {"max_position_embeddings", 262144},
+          {"qk_norm", true},
+          {"tie_word_embeddings", false},
+          {"num_experts", 192},
+          {"num_experts_per_tok", 8},
+          {"expert_hidden_dim", 1536},
+          {"moe_intermediate_size", 1536},
+          {"num_shared_experts", 1},
+          {"first_k_dense_replace", 1},
+          {"moe_router_use_sigmoid", true},
+          {"moe_router_enable_expert_bias", true},
+          {"route_norm", true},
+          {"router_scaling_factor", 2.826},
+          {"num_nextn_predict_layers", 1},
+          {"rope_parameters", {{"rope_theta", 11158840.0}, {"rope_type", "default"}}}};
+}
+
+TEST_F(ModelConfigParserTest, ParseHyV3MoeConfig) {
+  nlohmann::json cfg = BuildHyV3Config();
+  ModelConfig model_config;
+  Status status = RunParse(cfg, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+
+  EXPECT_EQ(model_config.type, "hy_v3");
+  EXPECT_TRUE(model_config.is_moe);
+  EXPECT_EQ(model_config.moe_config.num_experts, 192u);
+  EXPECT_EQ(model_config.moe_config.experts_topk, 8u);
+  EXPECT_EQ(model_config.moe_config.moe_inter_size, 1536u);
+  EXPECT_EQ(model_config.moe_config.first_k_dense_replace, 1u);
+  EXPECT_EQ(model_config.moe_config.scoring_func, "sigmoid");
+  EXPECT_TRUE(model_config.moe_config.norm_topk_prob);
+  EXPECT_FLOAT_EQ(model_config.moe_config.routed_scaling_factor, 2.826f);
+  EXPECT_TRUE(model_config.moe_config.use_e_score_correction_bias);
+  EXPECT_TRUE(model_config.has_shared_experts);
+  EXPECT_EQ(model_config.moe_config.num_shared_experts, 1u);
+  EXPECT_EQ(model_config.moe_config.shared_expert_inter_size, 1536u);
+
+  // rope_theta from nested rope_parameters
+  EXPECT_FLOAT_EQ(model_config.rope_theta, 11158840.0f);
+
+  // BF16 weight data type (torch_dtype present)
+  EXPECT_EQ(model_config.weight_data_type, DataType::TYPE_BF16);
+
+  // QK-Norm flags
+  EXPECT_TRUE(model_config.enable_qk_pre_norm_before_rotary_pos);
+  EXPECT_FALSE(model_config.enable_add_qkv_bias);
+}
+
+TEST_F(ModelConfigParserTest, ParseHyV3DefaultsBF16WhenNoDtype) {
+  nlohmann::json cfg = BuildHyV3Config();
+  cfg.erase("torch_dtype");
+  ModelConfig model_config;
+  Status status = RunParse(cfg, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+  EXPECT_EQ(model_config.weight_data_type, DataType::TYPE_BF16);
+}
+
+TEST_F(ModelConfigParserTest, ParseHyV3SoftmaxRouting) {
+  nlohmann::json cfg = BuildHyV3Config();
+  cfg["moe_router_use_sigmoid"] = false;
+  ModelConfig model_config;
+  Status status = RunParse(cfg, model_config);
+  ASSERT_TRUE(status.OK()) << status.GetMessage();
+  EXPECT_EQ(model_config.moe_config.scoring_func, "softmax");
+  // PrepareHyV3Attributes hardcodes topk_method="fast", which InvokeMoeCutlassGemm only pairs
+  // with sigmoid. Pinning it here documents that (fast, softmax) would throw on the per-tensor
+  // FP8 path, so flipping moe_router_use_sigmoid alone is not a supported FP8 deployment.
+  EXPECT_EQ(model_config.moe_config.topk_method, "fast");
+}
+
 }  // namespace ksana_llm

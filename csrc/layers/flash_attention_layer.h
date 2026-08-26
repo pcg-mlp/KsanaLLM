@@ -29,11 +29,16 @@ class FlashAttentionLayer : public AttentionLayer {
     const Tensor* src_flexible_token_idx;
     const Tensor* flexible_offset_uint64;
     // Scalars formerly encoded in forward_shape (input[14]):
-    int layer_block_num;           // shape[2]
-    int single_token_request_num;  // shape[3], used to compute total_tokens
-    int max_forwarding_tokens;     // shape[6]
-    int batch_size;                // shape[7]
-    int max_tokens;                // shape[8]
+    int layer_block_num;  // shape[2]
+    // Number of decode-stage TOKENS in this batch (shape[12], dp_decode_tokens). Used to carve the
+    // prefill region out of the shared qkv buffer: prefill_tokens = qkv->shape[0] - decode_token_num.
+    // This must be a token count, not a request count: with MTP verify each decode request carries
+    // 1 + draft_num tokens, so the request count (shape[3]) over-counts the prefill region in any
+    // mixed prefill+decode batch and AttenVarlen's per-token kernels then run past its end.
+    int decode_token_num;
+    int max_forwarding_tokens;  // shape[6]
+    int batch_size;             // shape[7]
+    int max_tokens;             // shape[8]
     const Tensor* query_layernorm_weight;
     const Tensor* key_layernorm_weight;
     bool use_cache;

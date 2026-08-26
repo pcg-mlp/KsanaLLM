@@ -87,12 +87,17 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
                                std::vector<Tensor>& hidden_buffer_tensors_1, std::vector<Tensor>& paged_buffer_tensors,
                                Tensor& kv_cache_buffer_tensor, const AttentionForwardContext& forward_context,
                                Tensor query_layernorm_weight, Tensor key_layernorm_weight) {
-  // normal page attention only has one input
-  // It must be placed at the end of `page_metas`, since they are sorted in descending order by token number
-  auto& input_meta = *model_input->page_metas.back();
-
 #ifdef ENABLE_CUDA
-  {
+  // `page_metas` holds one bucket per distinct q_seq_len (MTP verify mixes drafted decodes with
+  // fresh ones), and the paged decode kernels require a uniform q_seq_len per call, so each bucket
+  // is dispatched separately. Buckets are contiguous in the token layout and ordered by descending
+  // q_seq_len (ReorderInferRequests sorts the requests, AttentionMetaCreator::BuildAttentionMetas
+  // opens a new bucket whenever q_seq_len drops), so `bucket_offset_tokens` walks the decode region
+  // of the buffers in order. Same pattern as the MLA path (multihead_latent_attention.cpp).
+  size_t bucket_offset_tokens = 0;
+  const bool multi_bucket = model_input->page_metas.size() > 1;
+  for (auto& page_meta : model_input->page_metas) {
+    auto& input_meta = *page_meta;
     PagedAttentionInputs inputs;
     inputs.query = &hidden_buffer_tensors_0[0];
     inputs.context_lens = &input_meta.input_length;
@@ -107,10 +112,32 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
     inputs.key_layernorm_weight = &key_layernorm_weight;
     inputs.layer_kv_cache_ptr = &model_input->shared_attention_meta->GetStandard()->layer_kv_cache_ptr;
     inputs.block_table = &input_meta.block_table;
+    if (multi_bucket) {
+      // The buckets must exactly tile the decode region: ModelInput::ParseFromRequests sums
+      // dp_decode_tokens over the same kPage requests that BuildAttentionMetas distributes into
+      // page_metas, so the running offset can never pass it unless that pairing breaks.
+      KLLM_CHECK_WITH_INFO(
+          bucket_offset_tokens + input_meta.total_dp_input_ids_len <= model_input->dp_decode_tokens,
+          fmt::format("paged attention bucket overruns the decode region: offset={}, bucket={}, dp_decode_tokens={}",
+                      bucket_offset_tokens, input_meta.total_dp_input_ids_len, model_input->dp_decode_tokens));
+      inputs.bucket_batch_size = static_cast<int>(input_meta.dp_reqs.size());
+      inputs.bucket_token_num = static_cast<int>(input_meta.total_dp_input_ids_len);
+      inputs.bucket_offset_tokens = static_cast<int>(bucket_offset_tokens);
+    }
     STATUS_CHECK_RETURN(paged_attention_layer_->Forward(inputs, hidden_buffer_tensors_1));
+    bucket_offset_tokens += input_meta.total_dp_input_ids_len;
   }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #elif defined(ENABLE_ACL)
+  // The CUDA path above dispatches every q_seq_len bucket; ATB only consumes one. Taking
+  // `back()` alone would silently drop the other buckets' tokens, so refuse instead of
+  // returning a wrong result. Single-bucket decode (no MTP verify) is unaffected.
+  if (model_input->page_metas.size() > 1) {
+    return Status(RET_NOT_IMPLEMENTED, "multi-bucket paged attention is not supported on ACL");
+  }
+  // normal page attention only has one input
+  // It must be placed at the end of `page_metas`, since they are sorted in descending order by token number
+  auto& input_meta = *model_input->page_metas.back();
   {
     PagedAttentionInputs inputs;
     inputs.qkv_tensor = &hidden_buffer_tensors_0[0];
@@ -127,6 +154,12 @@ Status PagedAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   }
   std::swap(hidden_buffer_tensors_1, hidden_buffer_tensors_0);
 #elif defined(ENABLE_KUNLUN)
+  // Single bucket only, same as the ACL branch above: the XPU kernel consumes one q_seq_len.
+  if (model_input->page_metas.size() > 1) {
+    return Status(RET_NOT_IMPLEMENTED, "multi-bucket paged attention is not supported on Kunlun XPU");
+  }
+  // It must be placed at the end of `page_metas`, since they are sorted in descending order by token number
+  auto& input_meta = *model_input->page_metas.back();
   {
     // inference on Kunlun XPU — same tensor protocol as Ascend/ATB + optional QK-Norm weights
     KLLM_LOG_DEBUG << "PagedAttention::Forward (XPU) input_shape0=" << hidden_buffer_tensors_0[0].shape[0]

@@ -123,7 +123,10 @@ Status FlashAttention::Forward(std::vector<Tensor>& hidden_buffer_tensors_0, std
   params.src_flexible_token_idx = &std_meta->dp_src_flexible_token_idx_tensor;
   params.flexible_offset_uint64 = &std_meta->dp_flexible_offset_uint64_tensor;
   params.layer_block_num = static_cast<int>(fs.shape[2]);
-  params.single_token_request_num = static_cast<int>(fs.shape[3]);
+  // shape[12] (dp_decode_tokens) is the decode-stage token count; shape[3] is the decode request
+  // count. Under MTP each decode request carries more than one token, and shape[12] is also the
+  // dp-scoped value that matches qkv->shape[0].
+  params.decode_token_num = static_cast<int>(fs.shape[12]);
   params.max_forwarding_tokens = static_cast<int>(fs.shape[6]);
   params.batch_size = static_cast<int>(fs.shape[7]);
   params.max_tokens = static_cast<int>(fs.shape[8]);

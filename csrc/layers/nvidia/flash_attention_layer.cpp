@@ -26,7 +26,7 @@ Status FlashAttentionLayer::ForwardT(const CudaForwardParams& p, Tensor* output)
   int max_tokens = p.max_tokens;
   int batch_size = p.batch_size;
   int layer_block_num = p.layer_block_num;
-  int total_tokens = static_cast<int>(p.qkv->shape[0]) - p.single_token_request_num;
+  int total_tokens = static_cast<int>(p.qkv->shape[0]) - p.decode_token_num;
 
   void** k_list = p.kv_list->GetPtr<void*>() + this->layer_index_ * layer_block_num * 2;
   void** v_list = k_list + layer_block_num;

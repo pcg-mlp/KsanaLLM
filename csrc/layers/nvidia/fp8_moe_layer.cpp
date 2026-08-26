@@ -89,9 +89,15 @@ Status Fp8MoeLayer::ForwardT(const Tensor* hidden_states, const Tensor* gating_o
   } else {
     KLLM_THROW("Unsupported fp8 moe method, only support both weight_scale and input_scale are not null.");
   }
+  // NOTE: the aux-loss-free routing bias lives in `e_score_bias` (the MoE module passes
+  // `e_score_correction_bias_weight_` there); `eplb_map` is the expert-parallel map and is a
+  // different tensor entirely. Reading it here used to be harmless only because
+  // InvokeMoeCutlassGemm discarded the pointer without dereferencing it.
   void* e_score_correction_bias_weight_void = nullptr;
-  if (this->params_.use_e_score_correction_bias) {
-    e_score_correction_bias_weight_void = eplb_map->GetPtr<void>();
+  if (this->params_.use_e_score_correction_bias && e_score_bias != nullptr) {
+    KLLM_CHECK_WITH_INFO(e_score_bias->dtype == TYPE_FP32,
+                         fmt::format("e_score_correction_bias must be fp32, got {}", e_score_bias->dtype));
+    e_score_correction_bias_weight_void = e_score_bias->GetPtr<void>();
   }
   if (this->params_.moe_scale_norm_mode == MoeScaleNormMode::RE_NORM) {
     InvokeMoeCutlassGemm<WT, WT, T, llm_kernels::nvidia::MOEExpertScaleNormalizationMode::RENORMALIZE>(

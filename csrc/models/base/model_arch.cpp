@@ -39,6 +39,7 @@ static const std::unordered_map<std::string, ModelArchitecture> model_type_to_ar
     {"arc_hunyuan_video", ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO},
     {"hunyuan_turbo", ModelArchitecture::ARCH_HUNYUAN_TURBO},
     {"glm4_moe", ModelArchitecture::ARCH_GLM4_MOE},
+    {"hy_v3", ModelArchitecture::ARCH_HY_V3},
     {"deepseek_v4", ModelArchitecture::ARCH_DEEPSEEK_V4},
     {"kimi_k3", ModelArchitecture::ARCH_KIMI_K3}};
 
@@ -58,6 +59,7 @@ static const std::unordered_map<ModelArchitecture, std::string> arch_to_model_ty
     {ModelArchitecture::ARCH_ARC_HUNYUAN_VIDEO, "arc_hunyuan_video"},
     {ModelArchitecture::ARCH_HUNYUAN_TURBO, "hunyuan_turbo"},
     {ModelArchitecture::ARCH_GLM4_MOE, "glm4_moe"},
+    {ModelArchitecture::ARCH_HY_V3, "hy_v3"},
     {ModelArchitecture::ARCH_DEEPSEEK_V4, "deepseek_v4"},
     {ModelArchitecture::ARCH_KIMI_K3, "kimi_k3"}};
 
